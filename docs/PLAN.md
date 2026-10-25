@@ -97,7 +97,7 @@ Health360/
 |---|---|
 | Identity (U/H) | `profiles` (managed_by, birth_date, sex_for_calcs, height + height_unit + height_cm, `unit_prefs` jsonb, timezone, currency, activity_level, `physiology_prefs` jsonb: pinned sources, heart-rate-lowering medication flag) · `households` · `household_members` (role owner/adult/teen) · `household_invites` (S) · `sharing_grants` (owner, grantee/null=all, category, access) · `consents` (tos/privacy/ai_processing/photo_ai/health_data) |
 | Reference (G) | `nutrients` · `nutrient_dri` (sex, age band, rda/ai/ul) · `metric_definitions` (code, unit, category, valid range) · `exercises` (system rows + household custom; tracking_type, equipment, muscles[]) · `biomarkers` (loinc, unit conversions, retest_days) · `biomarker_ranges` (reference/optimal, citation) · `interaction_rules` · `activity_mets` (2024 Compendium code, activity, MET) · `substrate_curves` (population RER by % VO₂max and training status, citation) |
-| Nutrition | `foods`: global catalog rows are searched online and not synced; custom rows are H. Columns: source, barcode, macro columns per 100 g, `micros_100g`, verified · `food_portions` · `recipes`, `recipe_ingredients` (H) · `saved_meals` (U) · `food_log_entries` (U; nutrient **snapshot**, entry_method, is_estimate, cost_minor) · `nutrition_targets` (U; method formula/manual/adaptive) · `label_scans` (U; image_path, extracted, checks, food_id) |
+| Nutrition | `foods`: global catalog rows are searched online and not synced; custom rows are H. Columns: source, barcode, macro columns per 100 g, `micros_100g`, verified · `food_portions` · `recipes`, `recipe_ingredients` (H) · `saved_meals` (U) · `food_log_entries` (U; nutrient **snapshot**, entry_method, is_estimate, cost_minor) · `nutrition_targets` (U; method formula/manual/adaptive; protein basis body_weight/lean_mass, protein ratio + unit g/kg or g/lb + canonical g/kg) · `label_scans` (U; image_path, extracted, checks, food_id) |
 | Workouts | `training_locations` (H; equipment_tags, plate_inventory with a unit per plate, bar_weight + bar_unit) · `programs` · `workout_templates` · `template_exercises` (set_scheme, rest, progression) · `scheduled_workouts` · `workout_sessions` (avg_hr, max_hr, `zone_seconds` jsonb, `energy_estimate` jsonb snapshot: kcal range, fat/carb kcal and g, aerobic/anaerobic minutes, inputs and method version) · `session_exercises` · `set_logs` (set_type, reps, weight + weight_unit + weight_kg, rpe/rir, duration, distance + distance_unit + distance_m, e1rm_kg, is_pr) · `personal_records` (all U) |
 | Body | `measurements` (U; metric_code, value + unit + value_canonical, measured_at, group_id, source lab/field_test/device/manual, method: weight, body fat, circumferences, BP, HR, HRV, SpO₂, glucose, steps, plus RMR, VO₂max, max HR, LTHR, thresholds, FTP and the DEXA metrics) · `measurement_groups` (kind manual/dexa/rmr/metabolic_test/lactate_test/field_test, provider, device make, protocol, report_path) · `exercise_test_stages` (U; group_id, stage, HR, speed or power, VO₂, VCO₂, RER, lactate) · `zone_sets` (U; sport, metric hr/power/pace, basis custom/lab/lthr/hrr/max_hr, boundaries, effective_from) · `progress_photos` (U; pose, storage_path, thumb_path; never shared by default) · `checkins` (weekly adaptive TDEE) · `sleep_sessions` (P3) |
 | Goals and costs | `goals` (U/H; type, metric/exercise/biomarker, start/target, rate, plan) · `goal_milestones` · `goal_cost_estimates` (breakdown, assumptions) · `stores` · `products` (food/supplement/equipment) · `price_observations` (price_minor, package qty, observed_on, source) · `cost_items` (gym/equipment/supplements/food/coaching, recurrence) · `equipment` · `budgets` · `shopping_lists`, `shopping_list_items` (all H) |
@@ -170,6 +170,7 @@ Health360/
   | Temperature | °C / °F |
   | Blood glucose | mg/dL / mmol/L |
   | Lab values | US conventional / SI |
+  | Protein target ratio | g/kg / g/lb, of body weight or lean mass (defaults from the body-weight unit) |
 
   Household members each have their own preferences.
 - **Store what was typed.** Every quantity column is a trio: `value`, `unit`, and a canonical value (`*_kg`, `*_cm`, `*_m`, `*_g`, `*_ml`, `value_canonical`).
@@ -182,6 +183,7 @@ Health360/
   - 1 oz = 28.349523125 g
   - 1 US fl oz = 29.5735295625 ml
   - 1 kcal = 4.184 kJ
+  - 1 g/lb = 1 / 0.45359237 g/kg (from the lb factor), for protein targets
   - Per-analyte factors for glucose and lab values, kept in the `biomarkers.unit_conversions` table
 
   Canonical values are computed on write. A Postgres trigger recomputes them, so client and server can't drift.
@@ -257,7 +259,7 @@ You can enter values from lab tests, field tests or a device. Anything you haven
 
 **Where the values are used**
 - **Calorie targets:** TDEE = RMR × activity factor, with a measured RMR replacing the formula. Adaptive TDEE (Phase 2) takes over once there is enough weight and intake data.
-- **Protein:** once DEXA gives fat-free mass, protein can be set per kg of lean mass instead of body weight.
+- **Protein:** once DEXA gives fat-free mass, protein can be set per kg or per lb of lean mass instead of body weight.
 - **Body-composition trends:** each method is its own series (DEXA, smart scale, Navy method), because methods disagree by several percentage points and mixing them creates fake changes.
 - **Goals:** VO₂max, lean-mass and visceral-fat targets are goal types.
 - **Cardio:** zones, session energy and the fat/carb split (§2.9).
@@ -444,6 +446,7 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
 ## 5. Verification strategy
 1. **`packages/domain`:** Vitest plus fast-check property tests, including:
    - Every unit pair round-trips. A value entered in lb or in is shown exactly as typed.
+   - A protein ratio round-trips between g/kg and g/lb, and switching units doesn't change the daily gram target beyond rounding.
    - Switching units never creates a PR.
    - The plate calculator handles lb, kg and mixed plate sets.
    - e1RM rises steadily with weight and reps.

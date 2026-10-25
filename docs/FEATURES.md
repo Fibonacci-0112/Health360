@@ -10,7 +10,7 @@ Tags: **[MVP]** means Phase 1; **[P2]**, **[P3]** and **[P4]** are later phases.
 - **[MVP]** Goal wizard: you pick a target, then a date or a weekly rate. It checks whether the goal is realistic, warns above about 1% of body weight per week, and won't go below a calorie floor. It creates milestones that tick off automatically when your measurements or PRs reach them, and it links your nutrition targets.
 - **[MVP]** Targets, each of which you can override:
   - Calories: RMR × activity level. RMR is your measured value if you've entered one; otherwise Katch-McArdle when fat-free mass is known, otherwise Mifflin-St Jeor (§1.6).
-  - Protein in g/kg set by goal type, per kg of lean mass once DEXA gives it.
+  - Protein set by goal type, in g/kg or g/lb (defaults from your body-weight unit), of body weight or, once DEXA gives it, of lean mass.
   - Micronutrients from DRI/RDA/UL tables.
 - **[P2]** ★ Adaptive expenditure (MacroFactor):
   - TDEE is back-calculated from the smoothed weight trend and logged intake.
