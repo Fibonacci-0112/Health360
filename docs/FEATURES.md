@@ -102,8 +102,8 @@ Details and formulas are in [PLAN.md §2.8](PLAN.md).
   - Max HR: Tanaka (208 − 0.7 × age).
   - VO₂max: a non-exercise estimate from age, sex, waist, resting HR and activity (the HUNT study model).
   - LTHR: about 90% of max HR, low confidence.
-  - HR zones, best basis first: lab thresholds, LTHR (Friel), HR reserve (Karvonen, needs resting HR), % of max HR.
-- **[MVP]** The best value wins: a source you pinned, then lab, field test, device, and estimate last; the newest value within each. Old lab values still count but get a "retest?" flag: VO₂max, LTHR and DEXA after 12 months, and RMR after 12 months or a 5% change in body weight.
+  - HR zones, best basis first: lab thresholds, a measured LTHR (Friel), HR reserve (Karvonen, needs resting HR), % of max HR. The LTHR estimate is never used to set zones.
+- **[MVP]** The best value wins: a source you pinned, then lab, field test, a device or manual reading, and estimate last; the newest value within each. Old lab values still count but get a "retest?" flag: VO₂max, LTHR and DEXA after 12 months, and RMR after 12 months or a 5% change in body weight.
 - **[MVP]** Measured values flow into everything that uses them: calorie and protein targets, zones, exercise estimates, goals and AI prompts. Every derived number shows its inputs, for example "RMR 1,720 kcal (lab, Mar 2026) × 1.55".
 - **[P2]** Guided field tests, each behind a PAR-Q+ health screen: 30-minute LTHR test, 20-minute FTP test, Cooper 12-minute run, Rockport 1-mile walk. When a session records a higher max HR than the one in use, the app offers to adopt it.
 - **[P3]** Health Connect values (VO₂max, resting HR, HR samples), parsing of DEXA, RMR and metabolic-test PDFs, and retest flags turned into reminders.

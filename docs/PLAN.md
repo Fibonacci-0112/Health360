@@ -110,7 +110,7 @@ Health360/
   - H: read and write if I'm a member of the household.
 - **Storage:** private buckets `progress-photos`, `lab-reports` and `scans`. The first path segment is the profile id, files are read through short-lived signed URLs, and `scans` files expire after 30 days.
 - **Sync Streams:**
-  - `me`: U tables, last 24 months; older history is fetched on demand.
+  - `me`: U tables, last 24 months, plus the newest physiology value per metric and source tier at any age (§2.8); older history is fetched on demand.
   - `household`: H tables.
   - `reference`: G tables.
   - `shared_profile` (on demand): **must** check `sharing_grants`.
@@ -133,7 +133,7 @@ Health360/
   - Every result goes through a validator in `packages/domain`: label arithmetic, macro tolerances, budget, exercise IDs and equipment, sets per muscle.
   - If validation fails, the errors go back to the model for one repair round; after that the request fails and you get a manual fallback.
   - The AI never writes numbers that code can compute. For example, the weekly check-in only describes the computed TDEE.
-  - Prompts get each physiology value with its source (lab, field test, device or estimate, §2.8), so the model never presents an estimate as a measurement.
+  - Prompts get each physiology value with its source (lab, field test, device, manual or estimate, §2.8), so the model never presents an estimate as a measurement.
 - **Cost:**
   - Resize images on the device and cache the fixed prompt prefix.
   - Run weekly jobs through the **Batches API** (50% cheaper) on a pg_cron schedule.
@@ -246,13 +246,14 @@ You can enter values from lab tests, field tests or a device. Anything you haven
 | LTHR | Lab lactate test, or a 30-minute solo time trial (average HR of the last 20 minutes) | About 90% of max HR, marked low confidence |
 | LT1/LT2 or VT1/VT2 (HR, pace or power) | Lab lactate or gas-exchange test | LT2 is taken as LTHR. LT1 is not estimated |
 | FTP (W), threshold pace | 20-minute test (95% of average power), recent race | Not estimated; power and pace zones stay off |
-| HR zones (per sport) | Your own boundaries, or a lab report | Derived, best basis first: lab thresholds, LTHR (Friel), HR reserve (Karvonen), % of max HR |
+| HR zones (per sport) | Your own boundaries, or a lab report | Derived, best basis first: lab thresholds, a measured or test-derived LTHR (Friel), HR reserve (Karvonen), % of max HR. The LTHR estimate never sets zones |
 | Metabolic test: VO₂, VCO₂, RER, lactate per stage; FatMax and crossover point | Gas-exchange test with stages | The population curve (§2.9) |
 
 **How the app picks a value** (`packages/domain/physiology`)
 - A resolver returns, for each value, the number in use plus its source, method, date, confidence and the alternatives it passed over.
-- Order: a source you pinned, then lab, then field test, then device, then estimate. Within a tier, the newest value wins.
+- Order: a source you pinned, then lab, then field test, then a device or manual reading, then estimate. Within a tier, the newest value wins.
 - Old measured values still beat formulas (a year-old lab VO₂max is usually closer than an age formula), but they get a "retest?" flag. VO₂max, LTHR and DEXA are flagged after 12 months, and measured RMR after 12 months or a 5% change in body weight. In Phase 3 these flags become `retest_reminders`.
+- The 24-month sync window (§2.3) doesn't apply to resolver inputs. A trigger marks the newest `measurements` row per metric and source tier, and marked rows sync at any age with their `measurement_groups` and `exercise_test_stages` rows. So an old lab value still resolves offline on a newly set-up device.
 - Estimates are computed when needed and not stored, so they follow changes in age, weight and resting HR. Measured values are `measurements` rows with `source` and `method`. One DEXA scan or lab visit is one `measurement_groups` row, and its stage table goes in `exercise_test_stages`.
 - Entering or deleting a measured value updates everything that uses it from then on. Past session estimates (§2.9) are snapshots; they change only if you choose "recalculate history".
 - Every derived number has an info view that lists its inputs, for example "RMR 1,720 kcal (lab, Mar 2026) × activity 1.55".
@@ -454,7 +455,7 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
    - Adaptive TDEE converges on noisy synthetic data.
    - Goal cost equals the sum of its parts.
    - Each physiology estimator (Mifflin-St Jeor, Katch-McArdle, Tanaka, Nes, Cooper, Rockport, Keytel) matches values computed by hand from its paper.
-   - The resolver always prefers pinned, then lab, field test, device and estimate, and deleting a measured value falls back to the next one.
+   - The resolver always prefers pinned, then lab, field test, device or manual reading, and estimate, and deleting a measured value falls back to the next one. With only an estimated LTHR, zones come from HR reserve or % of max HR, never from Friel.
    - Zones are contiguous and ascending, and every bpm falls in exactly one zone.
    - Fat and carbohydrate add up to 100% of energy, the carbohydrate share never falls as intensity rises, and an RER of 1.0 or more gives all carbohydrate.
    - Editing zones or physiology values never changes a stored session estimate.
