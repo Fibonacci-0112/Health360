@@ -8,8 +8,9 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const dist = new URL('../dist/', import.meta.url).pathname;
+const dist = fileURLToPath(new URL('../dist/', import.meta.url));
 // Not needed at runtime: source maps, export metadata, the worker itself, and the encrypted-SQLite
 // builds (the app doesn't use SQLCipher yet).
 const SKIP = [/\.map$/, /^metadata\.json$/, /^sw\.js$/, /(^|\/)mc-wa-sqlite/];

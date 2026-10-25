@@ -127,14 +127,18 @@ export async function discardFailedUpload(db: CommonPowerSyncDatabase, id: strin
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
-/** Re-queues a quarantined write as a fresh local write (after the user has fixed what was wrong). */
-export async function retryFailedUpload(db: CommonPowerSyncDatabase, id: string): Promise<void> {
-  await db.writeTransaction(async (tx) => {
+/**
+ * Re-queues a quarantined write as a fresh local write (after the user has fixed what was wrong).
+ * Returns false, and keeps the entry, when an edit can't be replayed because its row no longer
+ * exists locally; discarding it is then the user's call.
+ */
+export async function retryFailedUpload(db: CommonPowerSyncDatabase, id: string): Promise<boolean> {
+  return db.writeTransaction(async (tx) => {
     const row = await tx.getOptional<{ table_name: string; row_id: string; op: string; data: string }>(
       'SELECT table_name, row_id, op, data FROM failed_uploads WHERE id = ?',
       [id],
     );
-    if (!row) return;
+    if (!row) return false;
     const data = JSON.parse(row.data) as Record<string, unknown>;
     const columns = Object.keys(data);
     if (!IDENTIFIER.test(row.table_name) || !columns.every((c) => IDENTIFIER.test(c))) {
@@ -148,12 +152,17 @@ export async function retryFailedUpload(db: CommonPowerSyncDatabase, id: string)
         `INSERT OR REPLACE INTO ${row.table_name} (${names.join(', ')}) VALUES (${names.map(() => '?').join(', ')})`,
         [row.row_id, ...columns.map((c) => data[c])],
       );
-    } else if (columns.length > 0) {
-      await tx.execute(
-        `UPDATE ${row.table_name} SET ${columns.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
-        [...columns.map((c) => data[c]), row.row_id],
-      );
+    } else {
+      const target = await tx.getOptional(`SELECT 1 FROM ${row.table_name} WHERE id = ?`, [row.row_id]);
+      if (!target) return false;
+      if (columns.length > 0) {
+        await tx.execute(
+          `UPDATE ${row.table_name} SET ${columns.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
+          [...columns.map((c) => data[c]), row.row_id],
+        );
+      }
     }
     await tx.execute('DELETE FROM failed_uploads WHERE id = ?', [id]);
+    return true;
   });
 }

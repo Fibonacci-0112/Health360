@@ -1,5 +1,6 @@
 import { discardFailedUpload, retryFailedUpload } from '@health360/local-db';
 import { usePowerSync, useQuery } from '@powersync/react';
+import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button } from '@/components/Button';
 import { SyncBadge } from '@/components/SyncBadge';
@@ -22,6 +23,14 @@ export default function Settings() {
   const { profile } = useMyProfile();
   const { data: failed } = useQuery<FailedUpload>('SELECT * FROM failed_uploads ORDER BY failed_at DESC');
   const prefs = parseUnitPrefs(profile?.unit_prefs);
+  const [retryNotice, setRetryNotice] = useState<string | null>(null);
+
+  const retry = async (id: string) => {
+    const replayed = await retryFailedUpload(db, id);
+    setRetryNotice(
+      replayed ? null : 'That edit can’t be retried because its entry was deleted. Discard it if you no longer need it.',
+    );
+  };
 
   return (
     <ScrollView contentContainerStyle={styles.body}>
@@ -45,6 +54,11 @@ export default function Settings() {
           <Text style={styles.muted}>
             These didn&apos;t sync and won&apos;t retry on their own. Retry once the cause is fixed, or discard them.
           </Text>
+          {retryNotice ? (
+            <Text style={styles.muted} aria-live="polite">
+              {retryNotice}
+            </Text>
+          ) : null}
           {failed.map((f) => (
             <View key={f.id} style={styles.failed}>
               <Text style={styles.text}>
@@ -52,7 +66,7 @@ export default function Settings() {
               </Text>
               <Text style={styles.muted}>{f.error_message}</Text>
               <View style={styles.row}>
-                <Button title="Retry" variant="secondary" onPress={() => retryFailedUpload(db, f.id)} />
+                <Button title="Retry" variant="secondary" onPress={() => retry(f.id)} />
                 <Button title="Discard" variant="danger" onPress={() => discardFailedUpload(db, f.id)} />
               </View>
             </View>

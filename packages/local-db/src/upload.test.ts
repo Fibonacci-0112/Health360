@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { UpdateType, type CommonPowerSyncDatabase } from '@powersync/common';
-import { isPermanentError, RemoteWriteError, toServerRow, uploadPending, type RemoteWriter } from './upload.ts';
+import {
+  isPermanentError,
+  RemoteWriteError,
+  retryFailedUpload,
+  toServerRow,
+  uploadPending,
+  type RemoteWriter,
+} from './upload.ts';
 import { AppSchema, UPLOADABLE_TABLES } from './schema.ts';
 
 describe('isPermanentError', () => {
@@ -87,5 +94,41 @@ describe('uploadPending', () => {
     expect(completed).toBe(true);
     // Written twice (once per attempt), but under the same id, so INSERT OR REPLACE keeps one row.
     expect(executed.map((p) => p[0])).toEqual(['crud-1', 'crud-1']);
+  });
+});
+
+describe('retryFailedUpload', () => {
+  /** A transaction over one quarantined entry, with `exists` deciding whether the target row is still there. */
+  function fakeDb(op: string, exists: boolean) {
+    const executed: string[] = [];
+    const tx = {
+      getOptional: async (sql: string) => {
+        if (sql.includes('FROM failed_uploads')) {
+          return { table_name: 'notes', row_id: 'n1', op, data: JSON.stringify({ body: 'edited offline' }) };
+        }
+        return exists ? { 1: 1 } : null;
+      },
+      execute: async (sql: string) => void executed.push(sql.trim().split(/\s+/).slice(0, 3).join(' ')),
+    };
+    const db = { writeTransaction: (fn: (t: typeof tx) => Promise<unknown>) => fn(tx) } as unknown as CommonPowerSyncDatabase;
+    return { db, executed };
+  }
+
+  it('replays an edit and removes the entry', async () => {
+    const { db, executed } = fakeDb(UpdateType.PATCH, true);
+    expect(await retryFailedUpload(db, 'crud-1')).toBe(true);
+    expect(executed).toEqual(['UPDATE notes SET', 'DELETE FROM failed_uploads']);
+  });
+
+  it('keeps the entry when the edited row no longer exists', async () => {
+    const { db, executed } = fakeDb(UpdateType.PATCH, false);
+    expect(await retryFailedUpload(db, 'crud-1')).toBe(false);
+    expect(executed).toEqual([]);
+  });
+
+  it('re-inserts a rejected insert even though its row is gone', async () => {
+    const { db, executed } = fakeDb(UpdateType.PUT, false);
+    expect(await retryFailedUpload(db, 'crud-1')).toBe(true);
+    expect(executed).toEqual(['INSERT OR REPLACE', 'DELETE FROM failed_uploads']);
   });
 });

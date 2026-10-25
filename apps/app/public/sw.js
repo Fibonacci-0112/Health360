@@ -30,8 +30,11 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(SHELL).then((cache) => cache.put('/', copy));
+          // Only a good response may replace the shell; a 404 or 503 page must never become it.
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(SHELL).then((cache) => cache.put('/', copy));
+          }
           return res;
         })
         .catch(() => caches.match('/')),
