@@ -52,7 +52,7 @@ Tags: **[MVP]** means Phase 1; **[P2]**, **[P3]** and **[P4]** are later phases.
   - Claude picks recipes from your household's own catalog.
   - A deterministic solver scales servings so calories land within ±5% and protein at most 10 g under target.
   - The plan is priced from your price book and checked against your budget, then turned into a shopping list.
-- **[P2]** Training-day fueling, off by default: the day's carb target can rise with the planned session's estimated carbohydrate use (§1.7).
+- **[P2]** Training-day fueling, off by default: the day's carb target can rise with the planned session's estimated carbohydrate use, within the same calorie target (§1.7).
 - **[P2]** ★ Meal-photo logging, always shown as a range with an estimate badge and never saved without confirmation. Independent 2026 testing found that photo apps underestimated calories by about 345 kcal per meal.
 - **[P3]** Fasting timer, caffeine and alcohol tracking, glucose (CGM) overlay.
 
@@ -97,11 +97,12 @@ Details and formulas are in [PLAN.md §2.8](PLAN.md).
   - **DEXA**: body-fat %, fat and lean mass (total, and by region: arms, legs, trunk), bone mineral content and density with T- and Z-scores, visceral fat (VAT), android/gynoid fat, and ALMI. The scanner make is recorded, because Hologic and GE Lunar results differ.
   - **VO₂max**, **max HR**, **resting HR**, **LTHR**, **lactate or ventilatory thresholds** (LT1/LT2, VT1/VT2), **FTP** and **threshold pace**.
   - **HR zones** for each sport, typed in or taken from a lab report.
-- **[MVP]** Anything you haven't entered is estimated, marked "estimated", with the formula named:
+- **[MVP]** Values with a published estimator are estimated when you haven't entered them, marked "estimated", with the formula named. BMD, visceral fat, FTP, threshold pace and LT1 stay empty until you enter them:
   - RMR: Katch-McArdle when fat-free mass is known (from DEXA or another body-fat reading), otherwise Mifflin-St Jeor.
   - Max HR: Tanaka (208 − 0.7 × age).
-  - VO₂max: a non-exercise estimate from age, sex, waist, resting HR and activity (the HUNT study model).
+  - VO₂max: a non-exercise estimate from age, sex, waist, resting HR and activity (the HUNT study model), or from age, sex, BMI or body fat, and activity when there's no resting HR (Jackson et al.).
   - LTHR: about 90% of max HR, low confidence.
+  - If you take medication that lowers heart rate, nothing is estimated from age-predicted max HR; the app uses your measured values, or RPE.
   - HR zones, best basis first: lab thresholds, a measured LTHR (Friel), HR reserve (Karvonen, needs resting HR), % of max HR. The LTHR estimate is never used to set zones.
 - **[MVP]** The best value wins: a source you pinned, then lab, field test, a device or manual reading, and estimate last; the newest value within each. Old lab values still count but get a "retest?" flag: VO₂max, LTHR and DEXA after 12 months, and RMR after 12 months or a 5% change in body weight.
 - **[MVP]** Measured values flow into everything that uses them: calorie and protein targets, zones, exercise estimates, goals and AI prompts. Every derived number shows its inputs, for example "RMR 1,720 kcal (lab, Mar 2026) × 1.55".
@@ -120,7 +121,7 @@ Details and formulas are in [PLAN.md §2.9](PLAN.md).
 - **[MVP]** Clear framing:
   - Fat loss comes from energy balance over days and weeks, not from which fuel a workout burned. Harder sessions burn a larger share of carbohydrate, but often more energy in total.
   - Exercise calories aren't added to the calorie target, because the activity level (and adaptive TDEE in P2) already covers training.
-- **[P2]** Training-day fueling, off by default: the day's carb target can rise with the planned session's estimated carbohydrate use, and AI meal plans follow it.
+- **[P2]** Training-day fueling, off by default: the day's carb target can rise with the planned session's estimated carbohydrate use. The calorie target stays the same and fat comes down to make room, down to a minimum; AI meal plans follow the adjusted macros.
 - **[P3]** A metabolic (gas-exchange) test replaces the population curve with your own: fat and carb burn per stage, FatMax (the intensity where fat burn peaks) and the crossover point, marked on your zones.
 - **[P3]** HR samples from Health Connect give exact time in zone. Training load (TRIMP), split into aerobic and anaerobic parts, feeds the strain and readiness scores.
 

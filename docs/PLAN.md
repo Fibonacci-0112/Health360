@@ -151,7 +151,7 @@ Health360/
   - Lab results show the lab's reference ranges first.
   - Estimates are labelled as estimates, with the formula named and a range. Fat burned in a session is never presented as body fat lost (§2.9).
   - DEXA bone density is shown as the report states it, with the report's own classification. The app adds no diagnosis.
-  - A PAR-Q+ screen comes before any maximal field test. If you take medication that lowers heart rate (such as beta blockers), age-based HR estimates are switched off and the app asks for measured values or uses RPE.
+  - A PAR-Q+ screen comes before any maximal field test. If you take medication that lowers heart rate (such as beta blockers), nothing is derived from age-predicted max HR: no estimated max HR, LTHR or HR-based zones. Measured max HR, LTHR and lab thresholds still work. Without them, zones and the aerobic/anaerobic and fat/carb splits come from RPE or aren't shown, and session energy uses METs instead of HR.
 
 ### 2.6 Units: metric and imperial
 - **Per-type preferences** in `profiles.unit_prefs`. Defaults come from your locale (US → imperial), and you can change each type:
@@ -232,7 +232,7 @@ Health360/
 The screens and logic are already shared, so this is mostly setup and testing.
 
 ### 2.8 Physiology profile: measured values first, estimates otherwise
-You can enter values from lab tests, field tests or a device. Anything you haven't entered is estimated, and the app always shows which one it is using.
+You can enter values from lab tests, field tests or a device. Anything you haven't entered is estimated where a published method exists (BMD, VAT, FTP, threshold pace, LT1 and per-stage test values are not), and the app always shows which one it is using.
 
 **What you can enter.** Each value has a date, a source (lab, field test, device or manual) and an optional report file, kept in the private `lab-reports` bucket.
 
@@ -240,14 +240,14 @@ You can enter values from lab tests, field tests or a device. Anything you haven
 |---|---|---|
 | RMR (kcal/day) | Indirect calorimetry (metabolic cart or handheld device) | Katch-McArdle (370 + 21.6 × fat-free mass in kg) when fat-free mass is known; otherwise Mifflin-St Jeor |
 | DEXA: body-fat %, fat and lean mass (total and by region), bone mineral content, BMD with T- and Z-scores, visceral fat (VAT), android/gynoid fat, ALMI | DEXA scan report; the scanner make is stored, because Hologic and GE Lunar results differ | Body fat and fat-free mass from a smart scale or the Navy method. BMD and VAT are not estimated |
-| VO₂max (ml/kg/min) | Lab treadmill or bike test | In order: a field test (Cooper 12-minute run, Rockport 1-mile walk), a device value, then a non-exercise estimate from age, sex, waist, resting HR and activity (Nes et al., 2011) |
+| VO₂max (ml/kg/min) | Lab treadmill or bike test | In order: a field test (Cooper 12-minute run, Rockport 1-mile walk), a device value, then a non-exercise estimate: from age, sex, waist, resting HR and activity (Nes et al., 2011), or, without a resting HR, from age, sex, BMI or body fat, and activity (Jackson et al., 1990) |
 | Max HR | Lab test, or the highest HR from a hard session | Tanaka: 208 − 0.7 × age (individuals vary by about ±10 bpm) |
 | Resting HR | Morning readings in vitals, or a device | Not estimated. Without it, zones use % of max HR instead of HR reserve |
-| LTHR | Lab lactate test, or a 30-minute solo time trial (average HR of the last 20 minutes) | About 90% of max HR, marked low confidence |
+| LTHR | Lab lactate test, or a 30-minute solo time trial (average HR of the last 20 minutes) | About 90% of max HR, marked low confidence. Off when max HR is only age-predicted and the medication flag is set (§2.5) |
 | LT1/LT2 or VT1/VT2 (HR, pace or power) | Lab lactate or gas-exchange test | LT2 is taken as LTHR. LT1 is not estimated |
 | FTP (W), threshold pace | 20-minute test (95% of average power), recent race | Not estimated; power and pace zones stay off |
 | HR zones (per sport) | Your own boundaries, or a lab report | Derived, best basis first: lab thresholds, a measured or test-derived LTHR (Friel), HR reserve (Karvonen), % of max HR. The LTHR estimate never sets zones |
-| Metabolic test: VO₂, VCO₂, RER, lactate per stage; FatMax and crossover point | Gas-exchange test with stages | The population curve (§2.9) |
+| Metabolic test: VO₂, VCO₂, RER, lactate per stage; FatMax and crossover point | Gas-exchange test with stages | Per-stage values are not estimated. Without a test, the fat/carb split uses the population curve (§2.9), and FatMax and the crossover point are shown only from a test |
 
 **How the app picks a value** (`packages/domain/physiology`)
 - A resolver returns, for each value, the number in use plus its source, method, date, confidence and the alternatives it passed over.
@@ -290,7 +290,7 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
 - **Strength sessions** get a MET-based kcal estimate and are labelled as mainly anaerobic and carbohydrate-heavy, with no numeric split, because heart rate tracks energy use poorly in lifting.
 
 **Aerobic vs anaerobic**
-- Anaerobic time is time at or above LT2. The resolver supplies LT2 from a lab test, from LTHR, or from the LTHR estimate (§2.8).
+- Anaerobic time is time at or above the HR value of LT2 for the session's sport (or the all-sports value). The resolver supplies it from a lab test, which reports HR at each threshold, from LTHR, or from the LTHR estimate (§2.8). A threshold known only as pace or power is never applied to HR data; it splits a session only when that session has matching pace or power data for the same sport.
 - When LT1 is known, sessions and weeks also show the low / moderate / high split used for polarized (80/20) training (Seiler, 2010).
 - The labels describe intensity, not separate engines: both energy systems work at every intensity, and the copy says so.
 - Phase 3 adds training load (TRIMP), split into aerobic and anaerobic parts, which feeds the strain and readiness scores.
@@ -300,7 +300,7 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
 - **Zones screen:** each zone's bpm range with its estimated fat/carb mix, and FatMax when it's known.
 - **Train tab:** weekly totals.
 - **Framing:** body-fat change comes from energy balance over days and weeks, not from which fuel a workout burned. Harder sessions burn a larger share of carbohydrate, but often more energy in total. Zone 2 time can be a goal for aerobic fitness, but it is never offered as a fat-loss tool.
-- **Training-day fueling (Phase 2, off by default):** the day's carbohydrate target can rise with the planned session's estimated carbohydrate use, and AI meal plans follow it.
+- **Training-day fueling (Phase 2, off by default):** the day's carbohydrate target can rise with the planned session's estimated carbohydrate use, while the calorie target stays the same. Fat comes down to make room, but never below a minimum fat share (if it hits that floor, the carb increase is capped), and protein is unchanged. Session energy is never added to the calorie target, and AI meal plans follow the adjusted macros.
 
 ---
 
@@ -381,6 +381,7 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
 - A 7-day plan for 2 people meets the macro tolerances every day and stays within budget.
 - 100 generated programs (eval) contain no exercises outside the available equipment.
 - Each guided field test computes its published formula exactly (golden fixtures), and its result replaces the estimate.
+- A training-day fueling fixture: the adjusted carb, fat and protein targets add up to the unchanged calorie target within the macro tolerances, and fat stays at or above its floor.
 - Adaptive TDEE recovers a known synthetic TDEE within ±100 kcal after 3 weeks.
 
 ### Phase 3: Health depth
@@ -457,6 +458,7 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
    - Each physiology estimator (Mifflin-St Jeor, Katch-McArdle, Tanaka, Nes, Cooper, Rockport, Keytel) matches values computed by hand from its paper.
    - The resolver always prefers pinned, then lab, field test, device or manual reading, and estimate, and deleting a measured value falls back to the next one. With only an estimated LTHR, zones come from HR reserve or % of max HR, never from Friel.
    - Zones are contiguous and ascending, and every bpm falls in exactly one zone.
+   - With the medication flag set, no output depends on age-predicted max HR, and a pace- or power-only threshold is never applied to HR data.
    - Fat and carbohydrate add up to 100% of energy, the carbohydrate share never falls as intensity rises, and an RER of 1.0 or more gives all carbohydrate.
    - Editing zones or physiology values never changes a stored session estimate.
    - Golden CSV fixtures for trends, progression and session energy estimates.
@@ -549,6 +551,6 @@ These are rough planning numbers. Phase 1 replaces them with real figures from t
 
 
 ## Sources
-- Physiology estimates (§2.8): [Mifflin-St Jeor RMR (Mifflin et al., 1990)](https://doi.org/10.1093/ajcn/51.2.241) · Katch-McArdle RMR (McArdle, Katch & Katch, *Exercise Physiology*) · [Age-predicted max HR (Tanaka et al., 2001)](https://doi.org/10.1016/s0735-1097(00)01054-8) · [Non-exercise VO₂max, HUNT study (Nes et al., 2011)](https://doi.org/10.1249/MSS.0b013e31821d3f6f) · [Cooper 12-minute test (1968)](https://pubmed.ncbi.nlm.nih.gov/5694044/) · [Rockport 1-mile walk (Kline et al., 1987)](https://pubmed.ncbi.nlm.nih.gov/3600239/) · [HR reserve (Karvonen et al., 1957)](https://pubmed.ncbi.nlm.nih.gov/13470504/) · [Friel's LTHR zones](https://www.trainingpeaks.com/blog/joe-friel-s-quick-guide-to-setting-zones/) · [PAR-Q+](https://eparmedx.com/)
+- Physiology estimates (§2.8): [Mifflin-St Jeor RMR (Mifflin et al., 1990)](https://doi.org/10.1093/ajcn/51.2.241) · Katch-McArdle RMR (McArdle, Katch & Katch, *Exercise Physiology*) · [Age-predicted max HR (Tanaka et al., 2001)](https://doi.org/10.1016/s0735-1097(00)01054-8) · [Non-exercise VO₂max, HUNT study (Nes et al., 2011)](https://doi.org/10.1249/MSS.0b013e31821d3f6f) · [Non-exercise VO₂max without resting HR (Jackson et al., 1990)](https://doi.org/10.1249/00005768-199012000-00021) · [Cooper 12-minute test (1968)](https://pubmed.ncbi.nlm.nih.gov/5694044/) · [Rockport 1-mile walk (Kline et al., 1987)](https://pubmed.ncbi.nlm.nih.gov/3600239/) · [HR reserve (Karvonen et al., 1957)](https://pubmed.ncbi.nlm.nih.gov/13470504/) · [Friel's LTHR zones](https://www.trainingpeaks.com/blog/joe-friel-s-quick-guide-to-setting-zones/) · [PAR-Q+](https://eparmedx.com/)
 - Exercise energy (§2.9): [HR-based energy expenditure (Keytel et al., 2005)](https://doi.org/10.1080/02640410470001730089) · [2024 Adult Compendium of Physical Activities](https://doi.org/10.1016/j.jshs.2023.10.010) ([pacompendium.com](https://pacompendium.com/)) · [%HRR ≈ %VO₂R (Swain & Leutholtz, 1997)](https://doi.org/10.1097/00005768-199703000-00018) · [Non-protein RQ table (Péronnet & Massicotte, 1991)](https://pubmed.ncbi.nlm.nih.gov/1645211/) · [Substrate oxidation from gas exchange (Frayn, 1983)](https://doi.org/10.1152/jappl.1983.55.2.628) · [Substrate oxidation during exercise (Jeukendrup & Wallis, 2005)](https://doi.org/10.1055/s-2004-830512) · [FatMax (Achten et al., 2002)](https://doi.org/10.1097/00005768-200201000-00015) · [Crossover concept (Brooks & Mercier, 1994)](https://doi.org/10.1152/jappl.1994.76.6.2253) · [Polarized training (Seiler, 2010)](https://doi.org/10.1123/ijspp.5.3.276)
 - Costs: [Supabase pricing](https://supabase.com/pricing) · [PowerSync pricing](https://www.powersync.com/pricing) · [Expo EAS pricing](https://expo.dev/pricing) · [Azure Artifact Signing pricing](https://azure.microsoft.com/en-ca/pricing/details/artifact-signing/) · [Terra pricing](https://tryterra.co/pricing) · [Claude vision token math](https://platform.claude.com/docs/en/build-with-claude/vision-coordinates)
