@@ -118,13 +118,15 @@ function directBackend(): TestBackend {
     async patch(table, id, data) {
       const cols = Object.keys(data).map(ident);
       if (cols.length === 0) return;
-      await asUser(
+      const res = await asUser(
         userId,
         `update public.${ident(table)} set (${cols.join(', ')}) =
            (select ${cols.join(', ')} from json_populate_record(null::public.${ident(table)}, $2::json))
          where id = $1`,
         [id, JSON.stringify(data)],
       );
+      // Same contract as supabaseWriter: an update that matched no row is a permanent failure.
+      if (res.rowCount === 0) throw new RemoteWriteError(`${table}/${id}: the update matched no row`, 'PGRST116');
     },
     async delete(table, id) {
       await asUser(userId, `delete from public.${ident(table)} where id = $1`, [id]);

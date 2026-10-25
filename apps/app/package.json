@@ -7,7 +7,7 @@
     "start": "expo start --dev-client",
     "web": "expo start --web",
     "android": "expo run:android",
-    "export:web": "powersync-web copy-assets -o public && expo export -p web",
+    "export:web": "powersync-web copy-assets -o public && expo export -p web && node scripts/write-precache.mjs",
     "postinstall": "powersync-web copy-assets -o public",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint .",

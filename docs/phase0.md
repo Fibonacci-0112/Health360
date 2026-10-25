@@ -37,7 +37,16 @@ These were bugs or platform limits; each is fixed and now covered by a test.
 4. **jsonb columns were uploaded as a string of JSON.** PowerSync keeps jsonb as text in SQLite, so `unit_prefs` reached Postgres as a JSON string and failed its `jsonb_typeof = 'object'` check. Uploads now convert jsonb and boolean columns back (`SERVER_COLUMN_TYPES`), the drift check fails if a new jsonb or boolean column isn't listed, and the e2e writer decodes payloads exactly as PostgREST does.
 5. **Accessibility on web.** React Native Web ignores `accessibilityState`, so radio buttons never reported which option was selected. The app uses the cross-platform `role` and `aria-*` props instead.
 
+6. **The desktop app rendered unstyled.** Tauri adds a nonce to the CSP's `style-src`, and with a nonce present browsers ignore `'unsafe-inline'`, so the `<style>` element React Native Web creates at runtime was blocked. `tauri.conf.json` now sets `dangerousDisableAssetCspModification: ["style-src"]`; scripts keep Tauri's hashes.
+
 Both failure paths also worked as designed: the rejected writes in 3 and 4 were quarantined in `failed_uploads` instead of blocking the queue.
+
+### Fixed after code review
+
+- **Switching accounts on one device.** A session can disappear without a sign-out event (revoked or expired while the app was closed). The local database is now bound to the user who owns it and cleared before a different user's session is used, so the next person can't see the previous user's rows or inherit their unsent writes.
+- **`ai-hello` required a signature, not a user.** The gateway's `verify_jwt` also accepts the public anon key, so the function now asks Supabase Auth for the user and returns 401 without one.
+- **Offline reload after the first visit.** The service worker now caches the whole exported app when it installs (`apps/app/scripts/write-precache.mjs` writes the file list and a version hash into `sw.js` at export time).
+- **Lost edits.** An update that matched no row (hidden by RLS, or deleted on another device) used to look like success. It now goes to `failed_uploads`, and a retried transaction no longer duplicates entries there.
 
 ## Running it locally
 
@@ -92,4 +101,6 @@ For each target: sign in, create a note with the network off, turn it back on, a
 - [ ] **Mac (Safari, Add to Dock):** same as iPhone.
 - [ ] **Tauri on Windows:** installer runs; offline write then sync; reload on a deep link.
 - [x] **Tauri on Linux:** verified headlessly here (WebKitGTK 2.52 through `tauri-driver`). Worth one run on a real desktop.
+
+**Known issue (desktop, Linux):** about 1 in 6 full-page reloads inside Tauri leaves the page on "Loading". The page's own PowerSync database lock (`db-lock-health360.sqlite`) stays held, so the local database never opens. Navigation inside the app is client-side and unaffected; only a reload (or a full-page load) can hit it. Closing and reopening the window recovers. It predates the review fixes. To be root-caused in Phase 1 before the desktop builds ship.
 - [x] **User B never receives A's note:** pgTAP and `e2e/sync`.

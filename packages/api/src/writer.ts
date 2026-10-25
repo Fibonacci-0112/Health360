@@ -1,6 +1,9 @@
 import { RemoteWriteError, type RemoteWriter } from '@health360/local-db';
 import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js';
 
+/** PostgREST's code for "no rows"; isPermanentError treats it as permanent. */
+const NO_ROW = 'PGRST116';
+
 const fail = (error: PostgrestError | null) => {
   if (error) throw new RemoteWriteError(error.message, error.code || undefined);
 };
@@ -16,8 +19,11 @@ export function supabaseWriter(client: SupabaseClient): RemoteWriter {
       fail(error);
     },
     async patch(table, id, data) {
-      const { error } = await client.from(table).update(data).eq('id', id);
+      // PostgREST answers an UPDATE that matched nothing (RLS hid the row, or another device deleted
+      // it) with success. Ask for the row back so that case is quarantined instead of silently lost.
+      const { data: rows, error } = await client.from(table).update(data).eq('id', id).select('id');
       fail(error);
+      if (!rows?.length) throw new RemoteWriteError(`${table}/${id}: the update matched no row`, NO_ROW);
     },
     async delete(table, id) {
       const { error } = await client.from(table).delete().eq('id', id);

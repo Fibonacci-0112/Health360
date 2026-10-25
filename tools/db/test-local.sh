@@ -9,12 +9,13 @@ PG_BIN="${PG_BIN:-$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail
 DATA="$(mktemp -d)"
 PORT="${PGPORT_TEST:-54329}"
 SOCK="$DATA"
-cleanup() { "$PG_BIN/pg_ctl" -D "$DATA" -m immediate stop >/dev/null 2>&1 || true; rm -rf "$DATA"; }
-trap cleanup EXIT
 
-# initdb refuses to run as root; use the postgres OS user when we are root.
+# initdb and pg_ctl refuse to run as root; use the postgres OS user when we are root.
 RUN=()
 if [ "$(id -u)" = 0 ]; then chown postgres "$DATA"; RUN=(runuser -u postgres --); fi
+
+cleanup() { "${RUN[@]}" "$PG_BIN/pg_ctl" -D "$DATA" -m immediate stop >/dev/null 2>&1 || true; rm -rf "$DATA"; }
+trap cleanup EXIT
 
 "${RUN[@]}" "$PG_BIN/initdb" -D "$DATA" -U postgres -A trust >/dev/null
 "${RUN[@]}" "$PG_BIN/pg_ctl" -D "$DATA" -l "$DATA/log" -o "-p $PORT -k $SOCK -c wal_level=logical -c listen_addresses=''" -w start >/dev/null

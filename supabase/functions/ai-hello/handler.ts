@@ -6,6 +6,7 @@ import {
   aiHelloRequestSchema,
   type AiHelloResponse,
 } from '../_shared/generated/schemas/index.ts';
+import type { Authenticate } from '../_shared/auth.ts';
 import { corsHeaders, json } from '../_shared/http.ts';
 
 /** Anything with the shape of `client.messages.parse`, so tests can pass a recorded response. */
@@ -21,10 +22,11 @@ const SYSTEM = [
  * Phase 0 smoke test for the AI layer (PLAN.md §2.4): one structured-output call, with the refusal
  * and truncation checks every AI route needs, and domain math computed by code rather than the model.
  */
-export function makeHandler(parse: ParseFn, model: string) {
+export function makeHandler(parse: ParseFn, model: string, authenticate: Authenticate) {
   return async (req: Request): Promise<Response> => {
     if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
     if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+    if (!(await authenticate(req))) return json({ error: 'unauthorized' }, 401);
 
     const input = aiHelloRequestSchema.safeParse(await req.json().catch(() => null));
     if (!input.success) return json({ error: 'invalid_request', issues: input.error.issues }, 400);

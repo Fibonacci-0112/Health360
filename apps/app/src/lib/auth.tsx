@@ -1,5 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SyncStreamConnectionMethod } from '@powersync/common';
-import type { Session } from '@supabase/supabase-js';
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { connector } from '@/db/connector';
 import { powersync } from '@/db/powersync';
@@ -14,25 +15,57 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState>({ session: null, loading: true });
 
+/** The user whose rows (and pending writes) are in the local database. */
+const DB_OWNER_KEY = 'health360.local-db-owner';
+
+/**
+ * Makes sure the local database belongs to `userId` before anything reads or syncs it. A session
+ * can vanish without a SIGNED_OUT event (revoked or expired while the app was closed), so the next
+ * person to sign in must never inherit the previous user's rows or their unsent writes.
+ */
+async function bindLocalDatabase(userId: string): Promise<void> {
+  if ((await AsyncStorage.getItem(DB_OWNER_KEY)) === userId) return;
+  await powersync.disconnectAndClear();
+  await AsyncStorage.setItem(DB_OWNER_KEY, userId);
+}
+
+function connect() {
+  return powersync.connect(connector, {
+    // A 2 s retry (default 5 s) keeps "reconnect, then visible on another device" near 5 s (PLAN.md §3).
+    retryDelayMs: 2000,
+    // WebKitGTK buffers streamed fetch responses, which delayed live updates in Tauri on Linux by
+    // ~20 s in the Phase 0 test. WebSockets aren't buffered.
+    ...(isTauri() ? { connectionMethod: SyncStreamConnectionMethod.WEB_SOCKET } : {}),
+  });
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ session: null, loading: true });
 
   useEffect(() => {
-    const { data } = supabase.auth.onAuthStateChange((event, session) => {
-      setState({ session, loading: false });
+    // Events are handled one at a time, so a database clear always finishes before a new
+    // session is published to the screens or connected.
+    let queue = Promise.resolve();
+    const handle = async (event: AuthChangeEvent, session: Session | null) => {
       if (session) {
-        // Starts syncing, and uploads whatever was written while signed out of the network.
-        void powersync.connect(connector, {
-          // A 2 s retry (default 5 s) keeps "reconnect, then visible on another device" near 5 s (PLAN.md §3).
-          retryDelayMs: 2000,
-          // WebKitGTK buffers streamed fetch responses, which delayed live updates in Tauri on Linux by
-          // ~20 s in the Phase 0 test. WebSockets aren't buffered.
-          ...(isTauri() ? { connectionMethod: SyncStreamConnectionMethod.WEB_SOCKET } : {}),
-        });
-      } else if (event === 'SIGNED_OUT') {
-        // Another person may sign in next on this device: drop every local row.
-        void powersync.disconnectAndClear();
+        await bindLocalDatabase(session.user.id);
+        setState({ session, loading: false });
+        // Token refreshes keep the existing connection; PowerSync fetches fresh credentials itself.
+        if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') await connect();
+      } else {
+        setState({ session: null, loading: false });
+        if (event === 'SIGNED_OUT') {
+          await powersync.disconnectAndClear();
+          await AsyncStorage.removeItem(DB_OWNER_KEY);
+        } else {
+          // No session, but no explicit sign-out either: keep the rows for the same user's return.
+          // bindLocalDatabase clears them if someone else signs in.
+          await powersync.disconnect();
+        }
       }
+    };
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      queue = queue.then(() => handle(event, session)).catch((error: unknown) => console.warn('Auth change failed', error));
     });
     return () => data.subscription.unsubscribe();
   }, []);

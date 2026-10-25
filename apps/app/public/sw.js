@@ -1,10 +1,14 @@
 // Service worker for the installable web app. Data lives in PowerSync's IndexedDB, not here; this
-// only makes the app shell open offline, and serves index.html for every in-app route so reloading
-// on a deep link works offline too.
-const SHELL = 'health360-shell-v1';
+// only makes the app open offline, and serves index.html for every in-app route so reloading on a
+// deep link works offline too. scripts/write-precache.mjs fills in both constants at export time.
+const PRECACHE = [];
+const VERSION = 'dev';
+const SHELL = `health360-${VERSION}`;
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(['/', '/manifest.webmanifest'])));
+  // Cache the whole exported app up front: the first visit's bundles loaded before this worker
+  // existed, so they never passed through the fetch handler below.
+  event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(['/', ...PRECACHE.filter((u) => u !== '/')])));
   self.skipWaiting();
 });
 

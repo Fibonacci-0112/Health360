@@ -89,6 +89,24 @@ describe.skipIf(!process.env.SYNC_E2E)('two-client sync', () => {
     expect(row!.height_cm).toBeCloseTo(177.8, 10);
   });
 
+  it('an offline edit to a note another device deleted is quarantined, not lost', async () => {
+    const [{ id }] = (await a2.db.getAll<{ id: string }>("SELECT id FROM notes WHERE body = 'written offline'")) as [
+      { id: string },
+    ];
+    await a1.disconnect();
+    await a1.db.execute("UPDATE notes SET body = 'edited offline' WHERE id = ?", [id]);
+    await a2.db.execute('DELETE FROM notes WHERE id = ?', [id]);
+    await waitFor(() => a2.db.getUploadQueueStats(), (s) => s.count === 0);
+
+    await a1.connect();
+    await waitFor(() => a1.db.getUploadQueueStats(), (s) => s.count === 0);
+    const failed = await a1.db.getAll<{ row_id: string; op: string; error_code: string }>(
+      'SELECT row_id, op, error_code FROM failed_uploads',
+    );
+    expect(failed).toEqual([{ row_id: id, op: 'PATCH', error_code: 'PGRST116' }]);
+    await waitFor(() => a1.db.getAll('SELECT id FROM notes WHERE id = ?', [id]), (rows) => rows.length === 0);
+  });
+
   it('a forged write is quarantined without blocking the queue', async () => {
     // B tries to write into A's profile: RLS rejects it (42501), so it is parked in failed_uploads,
     // and B's next, valid write still goes through.

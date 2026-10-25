@@ -103,11 +103,15 @@ async function applyOp(writer: RemoteWriter, op: CrudEntry): Promise<void> {
   }
 }
 
+/**
+ * Keyed by the op's position in the upload queue, so when a transaction is retried (a later op hit
+ * a network error) the same rejected op replaces its entry instead of adding a duplicate.
+ */
 async function quarantine(db: CommonPowerSyncDatabase, op: CrudEntry, code: string | undefined, message: string) {
   await db.execute(
-    `INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code, error_message, failed_at)
-     VALUES (uuid(), ?, ?, ?, ?, ?, ?, ?)`,
-    [op.table, op.id, op.op, JSON.stringify(op.opData ?? {}), code ?? null, message, new Date().toISOString()],
+    `INSERT OR REPLACE INTO failed_uploads (id, table_name, row_id, op, data, error_code, error_message, failed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [`crud-${op.clientId}`, op.table, op.id, op.op, JSON.stringify(op.opData ?? {}), code ?? null, message, new Date().toISOString()],
   );
 }
 
