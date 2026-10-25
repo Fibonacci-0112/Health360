@@ -33,18 +33,26 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Hashed bundles, wasm and worker files: cache first, then fill the cache.
-  event.respondWith(
-    caches.match(request).then(
-      (hit) =>
-        hit ||
-        fetch(request).then((res) => {
-          if (res.ok) {
-            const copy = res.clone();
-            caches.open(SHELL).then((cache) => cache.put(request, copy));
-          }
-          return res;
-        }),
-    ),
-  );
+  // Content-hashed bundles never change under the same URL, so the cache answers first.
+  if (url.pathname.startsWith('/_expo/static/')) {
+    event.respondWith(
+      caches.match(request).then(
+        (hit) =>
+          hit ||
+          fetch(request).then((res) => {
+            if (res.ok) {
+              const copy = res.clone();
+              caches.open(SHELL).then((cache) => cache.put(request, copy));
+            }
+            return res;
+          }),
+      ),
+    );
+    return;
+  }
+
+  // Everything else keeps its URL across deploys (PowerSync's worker and wasm files, the manifest),
+  // so the network answers first: an online client always gets the deployed version, never an older
+  // worker from the cache. Offline, the precached copy matches the precached shell.
+  event.respondWith(fetch(request).catch(() => caches.match(request)));
 });

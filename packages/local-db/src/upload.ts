@@ -125,46 +125,41 @@ export async function discardFailedUpload(db: CommonPowerSyncDatabase, id: strin
   await db.execute('DELETE FROM failed_uploads WHERE id = ?', [id]);
 }
 
-const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
+export type RetryResult = 'sent' | 'rejected' | 'offline';
 
 /**
- * Re-queues a quarantined write as a fresh local write (after the user has fixed what was wrong).
- * Returns false, and keeps the entry, when an edit or a deletion can't be replayed because its row
- * isn't in the local database (yet); discarding it is then the user's call.
+ * Sends a quarantined write to the server again, directly through `writer`, after the user has
+ * fixed what was wrong. It is not replayed into the local database: an edit whose values are still
+ * in the local row would queue an empty PATCH there and upload nothing.
+ *   'sent'     the server accepted it; the entry is removed and sync brings the result back.
+ *   'rejected' the server refused it again; the entry stays, with the new error.
+ *   'offline'  it couldn't be sent (no connection, server error); the entry stays as it was.
  */
-export async function retryFailedUpload(db: CommonPowerSyncDatabase, id: string): Promise<boolean> {
-  return db.writeTransaction(async (tx) => {
-    const row = await tx.getOptional<{ table_name: string; row_id: string; op: string; data: string }>(
-      'SELECT table_name, row_id, op, data FROM failed_uploads WHERE id = ?',
-      [id],
-    );
-    if (!row) return false;
-    const data = JSON.parse(row.data) as Record<string, unknown>;
-    const columns = Object.keys(data);
-    if (!IDENTIFIER.test(row.table_name) || !columns.every((c) => IDENTIFIER.test(c))) {
-      throw new Error('Refusing to replay a write with an unexpected table or column name');
-    }
-    if (row.op === UpdateType.DELETE) {
-      // Until sync restores the row the server kept, there is nothing to delete and no write to queue.
-      if (!(await tx.getOptional(`SELECT 1 FROM ${row.table_name} WHERE id = ?`, [row.row_id]))) return false;
-      await tx.execute(`DELETE FROM ${row.table_name} WHERE id = ?`, [row.row_id]);
-    } else if (row.op === UpdateType.PUT) {
-      const names = ['id', ...columns];
-      await tx.execute(
-        `INSERT OR REPLACE INTO ${row.table_name} (${names.join(', ')}) VALUES (${names.map(() => '?').join(', ')})`,
-        [row.row_id, ...columns.map((c) => data[c])],
-      );
-    } else {
-      const target = await tx.getOptional(`SELECT 1 FROM ${row.table_name} WHERE id = ?`, [row.row_id]);
-      if (!target) return false;
-      if (columns.length > 0) {
-        await tx.execute(
-          `UPDATE ${row.table_name} SET ${columns.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
-          [...columns.map((c) => data[c]), row.row_id],
-        );
-      }
-    }
-    await tx.execute('DELETE FROM failed_uploads WHERE id = ?', [id]);
-    return true;
-  });
+export async function retryFailedUpload(
+  db: CommonPowerSyncDatabase,
+  id: string,
+  writer: RemoteWriter,
+): Promise<RetryResult> {
+  const row = await db.getOptional<{ table_name: string; row_id: string; op: string; data: string }>(
+    'SELECT table_name, row_id, op, data FROM failed_uploads WHERE id = ?',
+    [id],
+  );
+  if (!row) return 'sent';
+  const op = { table: row.table_name, id: row.row_id, op: row.op as UpdateType, opData: JSON.parse(row.data) } as CrudEntry;
+  try {
+    await applyOp(writer, op);
+  } catch (error) {
+    const code = error instanceof RemoteWriteError ? error.code : undefined;
+    if (!isPermanentError(code)) return 'offline';
+    const message = error instanceof Error ? error.message : String(error);
+    await db.execute('UPDATE failed_uploads SET error_code = ?, error_message = ?, failed_at = ? WHERE id = ?', [
+      code ?? null,
+      message,
+      new Date().toISOString(),
+      id,
+    ]);
+    return 'rejected';
+  }
+  await db.execute('DELETE FROM failed_uploads WHERE id = ?', [id]);
+  return 'sent';
 }

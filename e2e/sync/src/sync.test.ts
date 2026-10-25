@@ -1,3 +1,4 @@
+import { retryFailedUpload } from '@health360/local-db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { backendFromEnv, type TestBackend } from './backend.ts';
 import { device, waitFor, type Device } from './client.ts';
@@ -105,6 +106,13 @@ describe.skipIf(!process.env.SYNC_E2E)('two-client sync', () => {
     );
     expect(failed).toEqual([{ row_id: id, op: 'PATCH', error_code: 'PGRST116' }]);
     await waitFor(() => a1.db.getAll('SELECT id FROM notes WHERE id = ?', [id]), (rows) => rows.length === 0);
+
+    // Retrying sends the saved edit to the server again; the note is still gone, so it stays quarantined.
+    const [entry] = (await a1.db.getAll<{ id: string }>('SELECT id FROM failed_uploads WHERE row_id = ?', [id])) as [
+      { id: string },
+    ];
+    expect(await retryFailedUpload(a1.db, entry.id, a1.user.writer)).toBe('rejected');
+    expect(await a1.db.getAll('SELECT 1 FROM failed_uploads WHERE id = ?', [entry.id])).toHaveLength(1);
   });
 
   it('a delete RLS silently blocks (consents keep their history) is quarantined, not reported as done', async () => {

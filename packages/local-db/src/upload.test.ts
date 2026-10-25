@@ -98,46 +98,39 @@ describe('uploadPending', () => {
 });
 
 describe('retryFailedUpload', () => {
-  /** A transaction over one quarantined entry, with `exists` deciding whether the target row is still there. */
-  function fakeDb(op: string, exists: boolean) {
-    const executed: string[] = [];
-    const tx = {
-      getOptional: async (sql: string) => {
-        if (sql.includes('FROM failed_uploads')) {
-          return { table_name: 'notes', row_id: 'n1', op, data: JSON.stringify({ body: 'edited offline' }) };
-        }
-        return exists ? { 1: 1 } : null;
-      },
-      execute: async (sql: string) => void executed.push(sql.trim().split(/\s+/).slice(0, 3).join(' ')),
+  /** One quarantined entry, a fake database recording what it executes, and a writer that does `outcome`. */
+  function setup(op: string, outcome: 'ok' | Error) {
+    const executed: unknown[][] = [];
+    const db = {
+      getOptional: async () => ({ table_name: 'notes', row_id: 'n1', op, data: JSON.stringify({ body: 'edited offline' }) }),
+      execute: async (sql: string, params: unknown[]) => void executed.push([sql.trim().split(/\s+/)[0], ...params]),
+    } as unknown as CommonPowerSyncDatabase;
+    const sent: unknown[][] = [];
+    const send = async (...args: unknown[]) => {
+      sent.push(args);
+      if (outcome !== 'ok') throw outcome;
     };
-    const db = { writeTransaction: (fn: (t: typeof tx) => Promise<unknown>) => fn(tx) } as unknown as CommonPowerSyncDatabase;
-    return { db, executed };
+    const writer: RemoteWriter = { put: send, patch: send, delete: send };
+    return { db, writer, executed, sent };
   }
 
-  it('replays an edit and removes the entry', async () => {
-    const { db, executed } = fakeDb(UpdateType.PATCH, true);
-    expect(await retryFailedUpload(db, 'crud-1')).toBe(true);
-    expect(executed).toEqual(['UPDATE notes SET', 'DELETE FROM failed_uploads']);
+  it('sends the saved payload itself, so an edit already in the local row still reaches the server', async () => {
+    const { db, writer, executed, sent } = setup(UpdateType.PATCH, 'ok');
+    expect(await retryFailedUpload(db, 'crud-1', writer)).toBe('sent');
+    expect(sent).toEqual([['notes', 'n1', { body: 'edited offline' }]]);
+    expect(executed).toEqual([['DELETE', 'crud-1']]);
   });
 
-  it('keeps the entry when the edited row no longer exists', async () => {
-    const { db, executed } = fakeDb(UpdateType.PATCH, false);
-    expect(await retryFailedUpload(db, 'crud-1')).toBe(false);
+  it('keeps the entry, with the new error, when the server refuses it again', async () => {
+    const { db, writer, executed } = setup(UpdateType.DELETE, new RemoteWriteError('denied', '42501'));
+    expect(await retryFailedUpload(db, 'crud-1', writer)).toBe('rejected');
+    expect(executed).toHaveLength(1);
+    expect(executed[0]?.slice(0, 2)).toEqual(['UPDATE', '42501']);
+  });
+
+  it('keeps the entry untouched when the server cannot be reached', async () => {
+    const { db, writer, executed } = setup(UpdateType.PUT, new Error('network down'));
+    expect(await retryFailedUpload(db, 'crud-1', writer)).toBe('offline');
     expect(executed).toEqual([]);
-  });
-
-  it('keeps a rejected deletion until sync has restored its row', async () => {
-    const missing = fakeDb(UpdateType.DELETE, false);
-    expect(await retryFailedUpload(missing.db, 'crud-1')).toBe(false);
-    expect(missing.executed).toEqual([]);
-    const present = fakeDb(UpdateType.DELETE, true);
-    expect(await retryFailedUpload(present.db, 'crud-1')).toBe(true);
-    expect(present.executed).toEqual(['DELETE FROM notes', 'DELETE FROM failed_uploads']);
-  });
-
-  it('re-inserts a rejected insert even though its row is gone', async () => {
-    const { db, executed } = fakeDb(UpdateType.PUT, false);
-    expect(await retryFailedUpload(db, 'crud-1')).toBe(true);
-    expect(executed).toEqual(['INSERT OR REPLACE', 'DELETE FROM failed_uploads']);
   });
 });

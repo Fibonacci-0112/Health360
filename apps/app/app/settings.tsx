@@ -1,3 +1,4 @@
+import { supabaseWriter } from '@health360/api';
 import { discardFailedUpload, retryFailedUpload } from '@health360/local-db';
 import { usePowerSync, useQuery } from '@powersync/react';
 import { useState } from 'react';
@@ -8,6 +9,7 @@ import { colors, space } from '@/components/theme';
 import { UnitPrefsEditor } from '@/components/UnitPrefsEditor';
 import { signOut } from '@/lib/auth';
 import { parseUnitPrefs, useMyProfile } from '@/lib/profile';
+import { supabase } from '@/lib/supabase';
 
 interface FailedUpload {
   id: string;
@@ -26,9 +28,13 @@ export default function Settings() {
   const [retryNotice, setRetryNotice] = useState<string | null>(null);
 
   const retry = async (id: string) => {
-    const replayed = await retryFailedUpload(db, id);
+    const result = await retryFailedUpload(db, id, supabaseWriter(supabase));
     setRetryNotice(
-      replayed ? null : 'That change can’t be retried yet: its entry isn’t on this device. Try again after syncing, or discard it.',
+      result === 'offline'
+        ? 'Retry needs a connection to the server. Try again when you’re online.'
+        : result === 'rejected'
+          ? 'The server refused it again. The reason is updated below; discard it if it can’t be fixed.'
+          : null,
     );
   };
 
