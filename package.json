@@ -1,0 +1,24 @@
+{
+  "name": "health360",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "codegen": "node tools/codegen/copy-shared.mjs",
+    "codegen:check": "node tools/codegen/copy-shared.mjs --check",
+    "db:test:local": "bash tools/db/test-local.sh",
+    "drift:check": "node tools/codegen/check-drift.mjs"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.10",
+    "typescript": "~6.0.3",
+    "@health360/local-db": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "pg": "^8.23.1"
+  }
+}

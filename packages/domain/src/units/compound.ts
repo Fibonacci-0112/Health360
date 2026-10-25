@@ -1,0 +1,44 @@
+import { CM_PER_IN, KG_PER_LB } from './factors.ts';
+import { roundTo } from './round.ts';
+
+const LB_PER_STONE = 14;
+const IN_PER_FT = 12;
+
+export interface StoneLb {
+  readonly st: number;
+  readonly lb: number;
+}
+
+export interface FeetInches {
+  readonly ft: number;
+  readonly in: number;
+}
+
+/**
+ * Splits a mass into stone and pounds for display, rounding the pounds to `lbDecimals`.
+ * If the pounds round up to 14, they carry into the next stone (so never "12 st 14 lb").
+ */
+export function kgToStoneLb(kg: number, lbDecimals = 1): StoneLb {
+  if (kg < 0) throw new RangeError('Mass must not be negative');
+  const totalLb = roundTo(kg / KG_PER_LB, lbDecimals);
+  const st = Math.floor(totalLb / LB_PER_STONE);
+  const lb = roundTo(totalLb - st * LB_PER_STONE, lbDecimals);
+  return lb >= LB_PER_STONE ? { st: st + 1, lb: roundTo(lb - LB_PER_STONE, lbDecimals) } : { st, lb };
+}
+
+export function stoneLbToKg({ st, lb }: StoneLb): number {
+  return (st * LB_PER_STONE + lb) * KG_PER_LB;
+}
+
+/** Splits a length into feet and inches for display, carrying 12 in into the next foot. */
+export function cmToFeetInches(cm: number, inDecimals = 0): FeetInches {
+  if (cm < 0) throw new RangeError('Length must not be negative');
+  const totalIn = roundTo(cm / CM_PER_IN, inDecimals);
+  const ft = Math.floor(totalIn / IN_PER_FT);
+  const inches = roundTo(totalIn - ft * IN_PER_FT, inDecimals);
+  return inches >= IN_PER_FT ? { ft: ft + 1, in: roundTo(inches - IN_PER_FT, inDecimals) } : { ft, in: inches };
+}
+
+export function feetInchesToCm({ ft, in: inches }: FeetInches): number {
+  return (ft * IN_PER_FT + inches) * CM_PER_IN;
+}

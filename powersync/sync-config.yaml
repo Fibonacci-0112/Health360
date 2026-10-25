@@ -1,0 +1,39 @@
+# Sync Streams. These must mirror the RLS in supabase/migrations: a row may sync to a user only if
+# RLS would let that user read it. The two-client test in e2e/sync proves it, together with pgTAP.
+#
+# Filters use columns copied onto each row (profile_id, household_id, household_members.user_id)
+# so no stream needs a join (PLAN.md §2.3).
+config:
+  edition: 3
+
+streams:
+  # U tables for the signed-in user's own profile.
+  # Phase 1 adds the 24-month window here, plus the newest physiology value per metric at any age (§2.8).
+  # Managed (child) profiles arrive in Phase 4 with their own query on profiles.managed_by.
+  me:
+    auto_subscribe: true
+    with:
+      my_profiles: SELECT id FROM profiles WHERE user_id = auth.user_id()
+    queries:
+      - SELECT * FROM profiles WHERE id IN my_profiles
+      - SELECT * FROM consents WHERE profile_id IN my_profiles
+      - SELECT * FROM sharing_grants WHERE profile_id IN my_profiles
+      - SELECT * FROM notes WHERE profile_id IN my_profiles
+
+  # H tables for every household the user belongs to.
+  household:
+    auto_subscribe: true
+    with:
+      my_households: SELECT household_id FROM household_members WHERE user_id = auth.user_id()
+    queries:
+      - SELECT * FROM households WHERE id IN my_households
+      - SELECT * FROM household_members WHERE household_id IN my_households
+
+  # G tables: global reference data, the same for everyone signed in.
+  reference:
+    auto_subscribe: true
+    queries:
+      - SELECT * FROM reference_datasets
+
+  # Not in Phase 0: `shared_profile`, an on-demand stream for another member's rows. It must check
+  # sharing_grants exactly as private.readable_profile_ids() does before it is added.

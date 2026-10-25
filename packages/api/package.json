@@ -1,0 +1,25 @@
+{
+  "name": "@health360/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed access to Supabase: the PowerSync upload writer and Edge Function clients.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@health360/local-db": "workspace:*",
+    "@health360/schemas": "workspace:*",
+    "@supabase/supabase-js": "^2.118.0"
+  },
+  "devDependencies": {
+    "@health360/config": "workspace:*",
+    "eslint": "^10.13.0",
+    "vitest": "^5.0.5"
+  }
+}
