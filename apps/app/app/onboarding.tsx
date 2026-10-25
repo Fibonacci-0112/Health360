@@ -65,26 +65,33 @@ function OnboardingForm({ profile }: { profile: ProfileRow }) {
     }
     const p = parsed.data;
     setBusy(true);
-    await db.execute(
-      `UPDATE profiles SET display_name = ?, birth_date = ?, sex_for_calcs = ?, height = ?, height_unit = ?,
-         height_cm = ?, timezone = ?, currency = ?, activity_level = ?, unit_prefs = ?, onboarded_at = ?
-       WHERE id = ?`,
-      [
-        p.display_name,
-        p.birth_date,
-        p.sex_for_calcs,
-        p.height,
-        p.height_unit,
-        h?.height_cm ?? null,
-        p.timezone,
-        p.currency,
-        p.activity_level,
-        JSON.stringify(p.unit_prefs),
-        new Date().toISOString(),
-        profile.id,
-      ],
-    );
-    setBusy(false);
+    try {
+      await db.execute(
+        `UPDATE profiles SET display_name = ?, birth_date = ?, sex_for_calcs = ?, height = ?, height_unit = ?,
+           height_cm = ?, timezone = ?, currency = ?, activity_level = ?, unit_prefs = ?, onboarded_at = ?
+         WHERE id = ?`,
+        [
+          p.display_name,
+          p.birth_date,
+          p.sex_for_calcs,
+          p.height,
+          p.height_unit,
+          h?.height_cm ?? null,
+          p.timezone,
+          p.currency,
+          p.activity_level,
+          JSON.stringify(p.unit_prefs),
+          new Date().toISOString(),
+          profile.id,
+        ],
+      );
+    } catch (e) {
+      // A local write failing is rare (storage full, database closed), but the user must be able to try again.
+      console.warn('Saving the profile failed', e);
+      setError('Couldn’t save your profile on this device. Please try again.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (

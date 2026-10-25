@@ -7,7 +7,7 @@ Status of [PLAN.md §3 Phase 0](PLAN.md). The code is done and tested in CI and 
 | Deliverable | State | Where |
 |---|---|---|
 | Monorepo and CI: typecheck, lint, Vitest, `supabase test db` | Done | `pnpm-workspace.yaml`, `turbo.json`, `.github/workflows/ci.yml` |
-| Identity and household migration, RLS helpers, pgTAP RLS-coverage test | Done; 33 pgTAP assertions | `supabase/migrations/`, `supabase/tests/database/` |
+| Identity and household migration, RLS helpers, pgTAP RLS-coverage test | Done; 39 pgTAP assertions | `supabase/migrations/`, `supabase/tests/database/` |
 | PowerSync with `me`, `household` and `reference` streams; permanent upload errors quarantined in `failed_uploads` | Done locally (Docker). **Cloud: you** | `powersync/`, `packages/local-db/src/upload.ts` |
 | Expo app: tabs, sign-in by emailed code, onboarding with per-type unit preferences and locale defaults | Done; web verified in a browser. **Android dev client: you** | `apps/app/` |
 | `packages/domain/units`: exact factors and property tests | Done; 42 tests incl. fast-check properties | `packages/domain/src/units/` |
@@ -46,6 +46,10 @@ Both failure paths also worked as designed: the rejected writes in 3 and 4 were 
 - **Switching accounts on one device.** A session can disappear without a sign-out event (revoked or expired while the app was closed). The local database is now bound to the user who owns it and cleared before a different user's session is used, so the next person can't see the previous user's rows or inherit their unsent writes.
 - **`ai-hello` required a signature, not a user.** The gateway's `verify_jwt` also accepts the public anon key, so the function now asks Supabase Auth for the user and returns 401 without one.
 - **Offline reload after the first visit.** The service worker now caches the whole exported app when it installs (`apps/app/scripts/write-precache.mjs` writes the file list and a version hash into `sw.js` at export time).
+- **Signing out kept or lost the wrong things.** Supabase's own SIGNED_OUT (a refresh token that stopped working) no longer clears the device; only an explicit sign-out does, and it asks first when changes haven't reached the server.
+- **Consents are append-only.** Signed-in users can insert consent records but not edit or delete them, so the record of what someone agreed to can't be rewritten.
+- **Sharing grants are read-only for now** and can only name a profile that belongs to the household; write access arrives with the shared-profile stream. Changing who manages a profile now updates their household memberships.
+- **`ai-hello` without `ANTHROPIC_API_KEY`** answers 503 `not_configured` instead of crashing on start.
 - **Lost edits.** An update that matched no row (hidden by RLS, or deleted on another device) used to look like success. It now goes to `failed_uploads`, and a retried transaction no longer duplicates entries there.
 
 ## Running it locally

@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { assertAlmostEquals, assertEquals } from 'jsr:@std/assert@^1';
-import { makeHandler, type ParseFn } from './handler.ts';
+import { makeHandler, notConfiguredHandler, type ParseFn } from './handler.ts';
 
 // Recorded-shape responses: no live Claude calls in CI (PLAN.md §5.4).
 function fakeParse(response: Record<string, unknown>) {
@@ -91,4 +91,13 @@ Deno.test('SDK failures come back as JSON with CORS headers', async () => {
     assertEquals(await res.json(), { error: code });
     assertEquals(res.headers.get('Access-Control-Allow-Origin'), '*');
   }
+});
+
+Deno.test('without an API key the function answers with a readable error, and preflight still passes', async () => {
+  const res = await notConfiguredHandler(post({ weight: 80, weight_unit: 'kg' }));
+  assertEquals(res.status, 503);
+  assertEquals(await res.json(), { error: 'not_configured' });
+  assertEquals(res.headers.get('Access-Control-Allow-Origin'), '*');
+  const preflight = await notConfiguredHandler(new Request('http://localhost/ai-hello', { method: 'OPTIONS' }));
+  assertEquals(preflight.status, 200);
 });

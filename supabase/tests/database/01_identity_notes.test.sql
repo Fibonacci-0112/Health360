@@ -1,7 +1,7 @@
 -- A vs B, member vs non-member, and sharing grants, on the Phase 0 tables.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(26);
+select plan(32);
 
 -- Users A and B each get a profile and a personal household from the sign-up trigger.
 -- C is a member of A's household; B is not.
@@ -18,6 +18,8 @@ select set_config('t.ha', (select household_id::text from household_members wher
 insert into household_members (household_id, profile_id, role)
   values (current_setting('t.ha')::uuid, current_setting('t.c')::uuid, 'adult');
 insert into reference_datasets (code, version) values ('pgtap-fixture', '1');
+
+
 
 select is((select display_name from profiles where id = current_setting('t.a')::uuid), 'Alex', 'sign-up uses display_name metadata');
 select is((select display_name from profiles where id = current_setting('t.b')::uuid), 'b', 'sign-up falls back to the email name');
@@ -78,6 +80,14 @@ select is((select height_cm from profiles where id = current_setting('t.a')::uui
   'the database recomputes canonical height from the value as entered');
 
 select is((select count(*) from reference_datasets where code = 'pgtap-fixture'), 1::bigint, 'reference data is readable');
+
+select lives_ok(
+  format($$ insert into consents (id, profile_id, kind, version, granted)
+            values ('20000000-0000-0000-0000-000000000001', %L, 'tos', '1', true) $$, current_setting('t.a')),
+  'A can record a consent decision'
+);
+select throws_ok($$ update consents set granted = false $$, '42501', null, 'past consent decisions cannot be changed');
+select throws_ok($$ delete from consents $$, '42501', null, 'past consent decisions cannot be erased');
 select throws_ok($$ insert into reference_datasets (code, version) values ('x', '1') $$,
   '42501', null, 'clients cannot write reference data');
 
@@ -109,6 +119,37 @@ select throws_ok(
   format($$ insert into sharing_grants (profile_id, household_id, grantee_profile_id, category)
             values (%L, %L, %L, 'notes') $$, current_setting('t.a'), current_setting('t.ha'), current_setting('t.b')),
   '42501', null, 'A cannot share with someone outside the household'
+);
+-- Managed profiles, set up as superuser (only the server creates them).
+reset role;
+-- M: a profile A manages, which is a member of B's household (A's own profile is not).
+select set_config('t.hb', (select household_id::text from household_members where profile_id = current_setting('t.b')::uuid), true);
+insert into profiles (id, managed_by, display_name)
+  values ('30000000-0000-0000-0000-00000000000d', '00000000-0000-0000-0000-00000000000a', 'Kid');
+select set_config('t.m', '30000000-0000-0000-0000-00000000000d', true);
+insert into household_members (household_id, profile_id, role)
+  values (current_setting('t.hb')::uuid, current_setting('t.m')::uuid, 'teen');
+
+-- Handing M to C must move M's membership (and so the household stream) to C.
+update profiles set managed_by = '00000000-0000-0000-0000-00000000000c' where id = current_setting('t.m')::uuid;
+select is(
+  (select user_id from household_members where profile_id = current_setting('t.m')::uuid),
+  '00000000-0000-0000-0000-00000000000c'::uuid,
+  'a new manager takes over the copied user_id on existing memberships'
+);
+update profiles set managed_by = '00000000-0000-0000-0000-00000000000a' where id = current_setting('t.m')::uuid;
+set local role authenticated;
+select pg_temp.login('a');
+
+select throws_ok(
+  format($$ insert into sharing_grants (profile_id, household_id, category)
+            values (%L, %L, 'notes') $$, current_setting('t.a'), current_setting('t.hb')),
+  '42501', null, 'a grant must name a household its owner profile belongs to, not just another of the user''s profiles'
+);
+select throws_ok(
+  format($$ insert into sharing_grants (profile_id, household_id, grantee_profile_id, category, access)
+            values (%L, %L, %L, 'notes', 'write') $$, current_setting('t.a'), current_setting('t.ha'), current_setting('t.c')),
+  '23514', null, 'write grants are not accepted until something enforces them'
 );
 
 select pg_temp.login('c');

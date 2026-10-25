@@ -73,3 +73,12 @@ export function makeHandler(parse: ParseFn, model: string, authenticate: Authent
     return json(body);
   };
 }
+
+/**
+ * Served when ANTHROPIC_API_KEY is missing: the function still boots, preflights still pass, and
+ * callers get a JSON error they can read instead of an opaque boot failure.
+ */
+export async function notConfiguredHandler(req: Request): Promise<Response> {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  return json({ error: 'not_configured' }, 503);
+}

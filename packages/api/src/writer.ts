@@ -1,4 +1,4 @@
-import { RemoteWriteError, type RemoteWriter } from '@health360/local-db';
+import { INSERT_ONLY_TABLES, RemoteWriteError, type RemoteWriter } from '@health360/local-db';
 import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js';
 
 /** PostgREST's code for "no rows"; isPermanentError treats it as permanent. */
@@ -17,7 +17,10 @@ const fail = (error: PostgrestError | null) => {
 export function supabaseWriter(client: SupabaseClient): RemoteWriter {
   return {
     async put(table, id, data) {
-      const { error } = await client.from(table).upsert({ ...data, id });
+      // Insert-only tables (consents) have no UPDATE grant; a replayed insert must then be a no-op.
+      const { error } = await client
+        .from(table)
+        .upsert({ ...data, id }, { onConflict: 'id', ignoreDuplicates: INSERT_ONLY_TABLES.has(table) });
       fail(error);
     },
     async patch(table, id, data) {

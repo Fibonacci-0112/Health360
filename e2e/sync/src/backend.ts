@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { supabaseWriter } from '@health360/api';
-import { RemoteWriteError, type RemoteWriter } from '@health360/local-db';
+import { INSERT_ONLY_TABLES, RemoteWriteError, type RemoteWriter } from '@health360/local-db';
 import { createClient } from '@supabase/supabase-js';
 import { SignJWT } from 'jose';
 import pg from 'pg';
@@ -111,7 +111,7 @@ function directBackend(): TestBackend {
         userId,
         `insert into public.${ident(table)} (${cols})
          select ${cols} from json_populate_record(null::public.${ident(table)}, $1::json)
-         on conflict (id) do ${updates.length ? `update set ${updates.join(', ')}` : 'nothing'}`,
+         on conflict (id) do ${updates.length && !INSERT_ONLY_TABLES.has(table) ? `update set ${updates.join(', ')}` : 'nothing'}`,
         [JSON.stringify(row)],
       );
     },
