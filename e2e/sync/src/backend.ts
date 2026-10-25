@@ -129,7 +129,11 @@ function directBackend(): TestBackend {
       if (res.rowCount === 0) throw new RemoteWriteError(`${table}/${id}: the update matched no row`, 'PGRST116');
     },
     async delete(table, id) {
-      await asUser(userId, `delete from public.${ident(table)} where id = $1`, [id]);
+      const res = await asUser(userId, `delete from public.${ident(table)} where id = $1`, [id]);
+      if (res.rowCount) return;
+      // Same contract as supabaseWriter: a row that is still visible after a no-op delete was protected.
+      const still = await asUser(userId, `select 1 from public.${ident(table)} where id = $1`, [id]);
+      if (still.rowCount) throw new RemoteWriteError(`${table}/${id}: the delete was not allowed`, '42501');
     },
   });
 

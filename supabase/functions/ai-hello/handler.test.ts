@@ -1,3 +1,4 @@
+import Anthropic from '@anthropic-ai/sdk';
 import { assertAlmostEquals, assertEquals } from 'jsr:@std/assert@^1';
 import { makeHandler, type ParseFn } from './handler.ts';
 
@@ -75,4 +76,19 @@ Deno.test('a caller without a user session never reaches the model', async () =>
   const res = await makeHandler(parse, 'm', anonymous)(post({ weight: 80, weight_unit: 'kg' }));
   assertEquals(res.status, 401);
   assertEquals(calls.length, 0);
+});
+
+Deno.test('SDK failures come back as JSON with CORS headers', async () => {
+  const failing = (error: unknown) => (() => Promise.reject(error)) as unknown as ParseFn;
+  const rateLimited = new Anthropic.RateLimitError(429, { type: 'error' }, 'rate limited', new Headers());
+  const cases: [unknown, number, string][] = [
+    [rateLimited, 429, 'rate_limited'],
+    [new Anthropic.APIConnectionError({ message: 'network down' }), 502, 'upstream_error'],
+  ];
+  for (const [error, status, code] of cases) {
+    const res = await makeHandler(failing(error), 'm', signedIn)(post({ weight: 80, weight_unit: 'kg' }));
+    assertEquals(res.status, status);
+    assertEquals(await res.json(), { error: code });
+    assertEquals(res.headers.get('Access-Control-Allow-Origin'), '*');
+  }
 });

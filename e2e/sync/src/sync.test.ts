@@ -107,6 +107,29 @@ describe.skipIf(!process.env.SYNC_E2E)('two-client sync', () => {
     await waitFor(() => a1.db.getAll('SELECT id FROM notes WHERE id = ?', [id]), (rows) => rows.length === 0);
   });
 
+  it('a delete RLS silently blocks (consents keep their history) is quarantined, not reported as done', async () => {
+    const [{ id }] = (await b.db.getAll<{ id: string }>('SELECT uuid() AS id')) as [{ id: string }];
+    await b.db.execute(
+      `INSERT INTO consents (id, profile_id, kind, version, granted, decided_at) VALUES (?, ?, 'tos', '1', 1, ?)`,
+      [id, b.user.profileId, new Date().toISOString()],
+    );
+    await waitFor(() => b.db.getUploadQueueStats(), (s) => s.count === 0);
+    await waitFor(
+      () => b.db.getAll("SELECT 1 FROM ps_oplog WHERE row_type = 'consents' AND row_id = ?", [id]),
+      (rows) => rows.length === 1,
+    );
+
+    await b.db.execute('DELETE FROM consents WHERE id = ?', [id]);
+    await waitFor(() => b.db.getUploadQueueStats(), (s) => s.count === 0);
+    const failed = await b.db.getAll<{ op: string; error_code: string }>(
+      "SELECT op, error_code FROM failed_uploads WHERE table_name = 'consents' AND row_id = ?",
+      [id],
+    );
+    expect(failed).toEqual([{ op: 'DELETE', error_code: '42501' }]);
+    // The server still has it, so sync puts it back.
+    await waitFor(() => b.db.getAll('SELECT id FROM consents WHERE id = ?', [id]), (rows) => rows.length === 1);
+  });
+
   it('a forged write is quarantined without blocking the queue', async () => {
     // B tries to write into A's profile: RLS rejects it (42501), so it is parked in failed_uploads,
     // and B's next, valid write still goes through.
@@ -119,10 +142,10 @@ describe.skipIf(!process.env.SYNC_E2E)('two-client sync', () => {
     await waitFor(() => b.db.getUploadQueueStats(), (s) => s.count === 0);
 
     const failed = await b.db.getAll<{ table_name: string; error_code: string }>(
-      'SELECT table_name, error_code FROM failed_uploads',
+      "SELECT table_name, error_code FROM failed_uploads WHERE table_name = 'notes'",
     );
     expect(failed).toEqual([{ table_name: 'notes', error_code: '42501' }]);
-    expect(b.quarantined).toHaveLength(1);
+    expect(b.quarantined.filter((q) => q.table === 'notes')).toHaveLength(1);
 
     // The server's state wins: the forged row disappears locally, the valid one stays.
     const bodies = await waitFor(

@@ -33,19 +33,28 @@ export function makeHandler(parse: ParseFn, model: string, authenticate: Authent
 
     const weight = quantity('body_weight', input.data.weight, input.data.weight_unit);
 
-    const response = await parse(
-      {
-        model,
-        max_tokens: 16000,
-        // Effort is the only depth control on this model; extraction-sized work runs at low.
-        output_config: { effort: 'low', format: zodOutputFormat(aiHelloOutputSchema) },
-        // A declined request is re-run server-side on Anthropic's recommended fallback model.
-        fallbacks: 'default',
-        system: SYSTEM,
-        messages: [{ role: 'user', content: 'Greet someone who just set up their health tracker.' }],
-      },
-      { headers: { 'anthropic-beta': 'server-side-fallback-2026-07-01' } },
-    );
+    let response: Awaited<ReturnType<ParseFn>>;
+    try {
+      response = await parse(
+        {
+          model,
+          max_tokens: 16000,
+          // Effort is the only depth control on this model; extraction-sized work runs at low.
+          output_config: { effort: 'low', format: zodOutputFormat(aiHelloOutputSchema) },
+          // A declined request is re-run server-side on Anthropic's recommended fallback model.
+          fallbacks: 'default',
+          system: SYSTEM,
+          messages: [{ role: 'user', content: 'Greet someone who just set up their health tracker.' }],
+        },
+        { headers: { 'anthropic-beta': 'server-side-fallback-2026-07-01' } },
+      );
+    } catch (error) {
+      // The SDK has already retried transient failures. Answer in the same JSON + CORS shape as every
+      // other outcome, so the app can show it; rate limits get their own status so it can back off.
+      if (error instanceof Anthropic.RateLimitError) return json({ error: 'rate_limited' }, 429);
+      console.error('ai-hello: model call failed', error instanceof Anthropic.APIError ? error.status : error);
+      return json({ error: 'upstream_error' }, 502);
+    }
 
     if (response.stop_reason === 'refusal') return json({ error: 'refused' }, 422);
     if (response.stop_reason === 'max_tokens') return json({ error: 'truncated' }, 502);
