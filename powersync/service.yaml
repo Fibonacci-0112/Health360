@@ -1,0 +1,34 @@
+# PowerSync Service config for local development against `supabase start`.
+# Cloud uses the PowerSync dashboard instead; see docs/phase0.md.
+replication:
+  connections:
+    - type: postgresql
+      # Local Supabase Postgres. Superuser is fine locally; cloud uses a dedicated replication role.
+      uri: !env PS_DATA_SOURCE_URI
+      sslmode: disable
+
+storage:
+  type: postgresql
+  uri: !env PS_STORAGE_URI
+  sslmode: disable
+
+port: 8080
+
+sync_config:
+  path: sync-config.yaml
+
+client_auth:
+  # `supabase start` signs access tokens with its legacy HS256 JWT secret unless signing keys are
+  # configured, in which case it publishes them at the JWKS URI. Accept either.
+  supabase: true
+  supabase_jwt_secret: !env PS_SUPABASE_JWT_SECRET
+  jwks_uri: !env PS_JWKS_URI
+  audience: ['authenticated']
+
+telemetry:
+  disable_telemetry_sharing: true
+
+system:
+  logging:
+    level: info
+    format: text

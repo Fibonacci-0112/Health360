@@ -1,0 +1,23 @@
+node_modules/
+.turbo/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+
+# Expo
+.expo/
+apps/app/ios/
+apps/app/android/
+apps/app/public/@powersync/
+web-build/
+
+# Tauri
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# Supabase
+supabase/.branches/
+supabase/.temp/

@@ -1,0 +1,68 @@
+/**
+ * Exact conversion factors (PLAN.md §2.6). Each unit is defined as a ratio to its dimension's
+ * base unit, so definitions such as "1 kcal = 4.184 kJ" appear here literally instead of as a
+ * pre-divided float. Nothing else in the codebase may hard-code a conversion factor.
+ */
+
+/** International avoirdupois pound (1959 agreement). */
+export const KG_PER_LB = 0.45359237;
+/** Avoirdupois ounce = 1/16 lb. */
+export const G_PER_OZ = 28.349523125;
+/** International inch (1959 agreement). */
+export const CM_PER_IN = 2.54;
+/** International mile = 5280 ft. */
+export const M_PER_MI = 1609.344;
+/** US customary fluid ounce = 1/128 US gallon (231 in³). */
+export const ML_PER_US_FL_OZ = 29.5735295625;
+/** Thermochemical calorie. */
+export const KJ_PER_KCAL = 4.184;
+/**
+ * Glucose only: mg/dL per mmol/L, from the molar mass of C6H12O6 (180.156 g/mol).
+ * Every other lab analyte has its own factor in `biomarkers.unit_conversions`; never reuse this one.
+ */
+export const GLUCOSE_MG_DL_PER_MMOL_L = 18.0156;
+
+/** value_in_base = value × num / den */
+export interface Ratio {
+  readonly num: number;
+  readonly den: number;
+}
+
+const r = (num: number, den = 1): Ratio => ({ num, den });
+
+export const MASS = {
+  kg: r(1),
+  g: r(1, 1000),
+  lb: r(KG_PER_LB),
+  oz: r(G_PER_OZ, 1000),
+} as const satisfies Record<string, Ratio>;
+
+export const LENGTH = {
+  m: r(1),
+  cm: r(1, 100),
+  km: r(1000),
+  in: r(CM_PER_IN, 100),
+  ft: r(CM_PER_IN * 12, 100),
+  yd: r(CM_PER_IN * 36, 100),
+  mi: r(M_PER_MI),
+} as const satisfies Record<string, Ratio>;
+
+/** US customary kitchen measures: 1 cup = 8 fl oz, 1 tbsp = 1/2 fl oz, 1 tsp = 1/6 fl oz. */
+export const VOLUME = {
+  ml: r(1),
+  l: r(1000),
+  fl_oz: r(ML_PER_US_FL_OZ),
+  cup: r(ML_PER_US_FL_OZ * 8),
+  tbsp: r(ML_PER_US_FL_OZ, 2),
+  tsp: r(ML_PER_US_FL_OZ, 6),
+} as const satisfies Record<string, Ratio>;
+
+export const ENERGY = {
+  kcal: r(1),
+  kJ: r(1, KJ_PER_KCAL),
+} as const satisfies Record<string, Ratio>;
+
+export const GLUCOSE = {
+  'mmol/L': r(1),
+  'mg/dL': r(1, GLUCOSE_MG_DL_PER_MMOL_L),
+} as const satisfies Record<string, Ratio>;

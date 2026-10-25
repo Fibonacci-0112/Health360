@@ -1,0 +1,23 @@
+{
+  "name": "@health360/local-db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Client SQLite schema (Drizzle). Generates the PowerSync schema, so there is one client schema to maintain.",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@powersync/common": "^2.4.0",
+    "@powersync/drizzle-driver": "^0.8.0",
+    "drizzle-orm": "^0.45.4"
+  },
+  "devDependencies": {
+    "@health360/config": "workspace:*",
+    "eslint": "^10.13.0",
+    "vitest": "^5.0.5"
+  }
+}

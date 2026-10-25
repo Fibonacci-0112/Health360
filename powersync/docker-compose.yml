@@ -1,0 +1,43 @@
+# Local PowerSync next to `supabase start`:
+#   supabase start
+#   docker compose -f powersync/docker-compose.yml up -d
+# The app and tests then sync through http://localhost:8080.
+services:
+  powersync:
+    image: journeyapps/powersync-service:1.27.2
+    command: ['start', '-r', 'unified']
+    restart: unless-stopped
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      POWERSYNC_CONFIG_PATH: /config/service.yaml
+      PS_DATA_SOURCE_URI: ${PS_DATA_SOURCE_URI:-postgresql://postgres:postgres@host.docker.internal:54322/postgres}
+      PS_STORAGE_URI: postgresql://postgres:postgres@storage:5432/powersync_storage
+      PS_JWKS_URI: ${PS_JWKS_URI:-http://host.docker.internal:54321/auth/v1/.well-known/jwks.json}
+      # The well-known default secret of `supabase start`. Local only; never use it for a real project.
+      PS_SUPABASE_JWT_SECRET: ${PS_SUPABASE_JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+    volumes:
+      - ./service.yaml:/config/service.yaml:ro
+      - ./sync-config.yaml:/config/sync-config.yaml:ro
+    ports:
+      - '8080:8080'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+  # Bucket storage, kept apart from the app database.
+  storage:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: powersync_storage
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 2s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - powersync_storage:/var/lib/postgresql/data
+
+volumes:
+  powersync_storage:
