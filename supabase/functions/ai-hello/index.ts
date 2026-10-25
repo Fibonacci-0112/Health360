@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { authenticateUser } from '../_shared/auth.ts';
-import { makeHandler, notConfiguredHandler } from './handler.ts';
+import { makeHandler, makeNotConfiguredHandler } from './handler.ts';
 
 // ANTHROPIC_API_KEY comes from Supabase secrets; the key never reaches a client (PLAN.md §2.4).
 // The gateway checks the JWT signature (config.toml: verify_jwt = true); the handler then requires a
@@ -13,5 +13,5 @@ if (apiKey) {
   Deno.serve(makeHandler(client.messages.parse.bind(client.messages), model, authenticateUser));
 } else {
   console.error('ai-hello: ANTHROPIC_API_KEY is not set. Run `supabase secrets set ANTHROPIC_API_KEY=...`.');
-  Deno.serve(notConfiguredHandler);
+  Deno.serve(makeNotConfiguredHandler(authenticateUser));
 }

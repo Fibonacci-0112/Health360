@@ -113,7 +113,8 @@ export interface UnsyncedChanges {
 /**
  * Signs out and removes this account's data from the device. If that would delete changes that
  * never reached the server, nothing happens and the counts come back so the caller can ask first;
- * pass `discardUnsynced` once the user has agreed.
+ * pass `discardUnsynced` once the user has agreed. Throws if Supabase couldn't sign out; nothing
+ * is cleared then.
  */
 export async function signOut(options: { discardUnsynced?: boolean } = {}): Promise<UnsyncedChanges | null> {
   if (!options.discardUnsynced) {
@@ -122,6 +123,14 @@ export async function signOut(options: { discardUnsynced?: boolean } = {}): Prom
     if (pending > 0 || rejected > 0) return { pending, rejected };
   }
   signOutRequested = true;
-  await supabase.auth.signOut();
+  try {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+  } catch (error) {
+    // Still signed in (offline, say). Drop the flag so a later SIGNED_OUT the user didn't ask for
+    // can't pick it up and clear the database.
+    signOutRequested = false;
+    throw error;
+  }
   return null;
 }

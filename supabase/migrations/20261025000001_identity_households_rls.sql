@@ -114,20 +114,6 @@ end $$;
 
 create trigger household_members_copy_user before insert or update of profile_id on public.household_members
   for each row execute function private.household_members_copy_user();
-
--- Keeps the copy right when a profile changes hands (a managed profile gets a new manager, or its
--- own login), so the household stream follows the current owner, as RLS already does.
-create function private.profiles_refresh_memberships() returns trigger
-language plpgsql security definer set search_path = '' as $$
-begin
-  update public.household_members m set user_id = coalesce(new.user_id, new.managed_by)
-  where m.profile_id = new.id;
-  return null;
-end $$;
-
-create trigger profiles_refresh_memberships after update of user_id, managed_by on public.profiles
-  for each row when (old.user_id is distinct from new.user_id or old.managed_by is distinct from new.managed_by)
-  execute function private.profiles_refresh_memberships();
 create trigger household_members_updated_at before update on public.household_members
   for each row execute function private.set_updated_at();
 
@@ -145,8 +131,7 @@ create table public.household_invites (
 );
 
 -- U: lets an owner share one category of their data with one household member, or with all of
--- them when grantee_profile_id is null. Read-only for now: write access comes with the on-demand
--- shared_profile stream, together with the policies that enforce it.
+-- them when grantee_profile_id is null.
 create table public.sharing_grants (
   id uuid primary key default gen_random_uuid(),
   profile_id uuid not null references public.profiles (id) on delete cascade,
@@ -155,7 +140,7 @@ create table public.sharing_grants (
   category text not null check (category in (
     'body', 'photos', 'physiology', 'workouts', 'nutrition', 'goals', 'labs', 'supplements', 'mental', 'notes'
   )),
-  access text not null default 'read' check (access = 'read'),
+  access text not null default 'read' check (access in ('read', 'write')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint sharing_grants_not_self check (grantee_profile_id is distinct from profile_id)
@@ -337,11 +322,7 @@ create policy sharing_grants_write on public.sharing_grants for all to authentic
   using (profile_id in (select private.my_profile_ids()))
   with check (
     profile_id in (select private.my_profile_ids())
-    -- The owner profile itself must belong to the household, not just another of the user's profiles.
-    and exists (
-      select 1 from public.household_members m
-      where m.household_id = sharing_grants.household_id and m.profile_id = sharing_grants.profile_id
-    )
+    and household_id in (select private.my_household_ids())
     and (grantee_profile_id is null or exists (
       select 1 from public.household_members m
       where m.household_id = sharing_grants.household_id and m.profile_id = sharing_grants.grantee_profile_id
@@ -352,9 +333,10 @@ create policy consents_select on public.consents for select to authenticated
   using (profile_id in (select private.my_profile_ids()));
 create policy consents_insert on public.consents for insert to authenticated
   with check (profile_id in (select private.my_profile_ids()));
--- Consents are a record: a new decision is a new row (the latest per kind wins), and past rows can be
--- neither changed nor erased.
-revoke update, delete on public.consents from authenticated;
+create policy consents_update on public.consents for update to authenticated
+  using (profile_id in (select private.my_profile_ids()))
+  with check (profile_id in (select private.my_profile_ids()));
+-- Consents are a record: no delete policy, so clients can't erase them.
 
 revoke insert, update, delete on public.reference_datasets from authenticated;
 create policy reference_datasets_select on public.reference_datasets for select to authenticated

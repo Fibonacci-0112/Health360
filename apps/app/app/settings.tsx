@@ -27,8 +27,18 @@ export default function Settings() {
   const { data: failed } = useQuery<FailedUpload>('SELECT * FROM failed_uploads ORDER BY failed_at DESC');
   const prefs = parseUnitPrefs(profile?.unit_prefs);
   const [retryNotice, setRetryNotice] = useState<string | null>(null);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
 
   const handleSignOut = async () => {
+    setSignOutError(null);
+    try {
+      await confirmAndSignOut();
+    } catch {
+      setSignOutError('Couldn’t sign out. Check your connection and try again.');
+    }
+  };
+
+  const confirmAndSignOut = async () => {
     const unsynced = await signOut();
     if (!unsynced) return;
     const parts = [
@@ -101,6 +111,11 @@ export default function Settings() {
       </Text>
       <Text style={styles.muted}>Signing out removes this account&apos;s data from this device.</Text>
       <Button title="Sign out" variant="secondary" onPress={handleSignOut} />
+      {signOutError ? (
+        <Text style={styles.muted} role="alert">
+          {signOutError}
+        </Text>
+      ) : null}
     </ScrollView>
   );
 }
