@@ -26,19 +26,10 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
   if (request.mode === 'navigate') {
-    // Network first so a new deploy shows up; the cached shell when offline.
-    event.respondWith(
-      fetch(request)
-        .then((res) => {
-          // Only a good response may replace the shell; a 404 or 503 page must never become it.
-          if (res.ok) {
-            const copy = res.clone();
-            caches.open(SHELL).then((cache) => cache.put('/', copy));
-          }
-          return res;
-        })
-        .catch(() => caches.match('/')),
-    );
+    // Network first so a new deploy shows up; the precached shell when offline. The shell is never
+    // rewritten here: it must stay paired with the bundles this worker version precached, and a
+    // new deploy's HTML arrives with its own worker.
+    event.respondWith(fetch(request).catch(() => caches.match('/')));
     return;
   }
 

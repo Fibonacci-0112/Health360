@@ -28,7 +28,7 @@ export default function Settings() {
   const retry = async (id: string) => {
     const replayed = await retryFailedUpload(db, id);
     setRetryNotice(
-      replayed ? null : 'That edit can’t be retried because its entry was deleted. Discard it if you no longer need it.',
+      replayed ? null : 'That change can’t be retried yet: its entry isn’t on this device. Try again after syncing, or discard it.',
     );
   };
 

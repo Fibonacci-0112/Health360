@@ -129,8 +129,8 @@ const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
 /**
  * Re-queues a quarantined write as a fresh local write (after the user has fixed what was wrong).
- * Returns false, and keeps the entry, when an edit can't be replayed because its row no longer
- * exists locally; discarding it is then the user's call.
+ * Returns false, and keeps the entry, when an edit or a deletion can't be replayed because its row
+ * isn't in the local database (yet); discarding it is then the user's call.
  */
 export async function retryFailedUpload(db: CommonPowerSyncDatabase, id: string): Promise<boolean> {
   return db.writeTransaction(async (tx) => {
@@ -145,6 +145,8 @@ export async function retryFailedUpload(db: CommonPowerSyncDatabase, id: string)
       throw new Error('Refusing to replay a write with an unexpected table or column name');
     }
     if (row.op === UpdateType.DELETE) {
+      // Until sync restores the row the server kept, there is nothing to delete and no write to queue.
+      if (!(await tx.getOptional(`SELECT 1 FROM ${row.table_name} WHERE id = ?`, [row.row_id]))) return false;
       await tx.execute(`DELETE FROM ${row.table_name} WHERE id = ?`, [row.row_id]);
     } else if (row.op === UpdateType.PUT) {
       const names = ['id', ...columns];

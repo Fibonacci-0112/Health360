@@ -50,7 +50,7 @@ Both failure paths also worked as designed: the rejected writes in 3 and 4 were 
 
 ## Running it locally
 
-Prerequisites: Node 22, pnpm 10, Docker, the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started), and Deno 2 for Edge Function tests.
+Prerequisites: Node 22.18 or later (for its built-in TypeScript stripping), pnpm 10, Docker, the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started), and Deno 2 for Edge Function tests.
 
 ```sh
 pnpm install

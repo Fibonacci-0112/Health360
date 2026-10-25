@@ -126,6 +126,15 @@ describe('retryFailedUpload', () => {
     expect(executed).toEqual([]);
   });
 
+  it('keeps a rejected deletion until sync has restored its row', async () => {
+    const missing = fakeDb(UpdateType.DELETE, false);
+    expect(await retryFailedUpload(missing.db, 'crud-1')).toBe(false);
+    expect(missing.executed).toEqual([]);
+    const present = fakeDb(UpdateType.DELETE, true);
+    expect(await retryFailedUpload(present.db, 'crud-1')).toBe(true);
+    expect(present.executed).toEqual(['DELETE FROM notes', 'DELETE FROM failed_uploads']);
+  });
+
   it('re-inserts a rejected insert even though its row is gone', async () => {
     const { db, executed } = fakeDb(UpdateType.PUT, false);
     expect(await retryFailedUpload(db, 'crud-1')).toBe(true);
