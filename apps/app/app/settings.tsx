@@ -8,6 +8,7 @@ import { SyncBadge } from '@/components/SyncBadge';
 import { colors, space } from '@/components/theme';
 import { UnitPrefsEditor } from '@/components/UnitPrefsEditor';
 import { signOut } from '@/lib/auth';
+import { confirm } from '@/lib/confirm';
 import { parseUnitPrefs, useMyProfile } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
 
@@ -26,6 +27,31 @@ export default function Settings() {
   const { data: failed } = useQuery<FailedUpload>('SELECT * FROM failed_uploads ORDER BY failed_at DESC');
   const prefs = parseUnitPrefs(profile?.unit_prefs);
   const [retryNotice, setRetryNotice] = useState<string | null>(null);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+
+  const handleSignOut = async () => {
+    setSignOutError(null);
+    try {
+      await confirmAndSignOut();
+    } catch {
+      setSignOutError('Couldn’t sign out. Check your connection and try again.');
+    }
+  };
+
+  const confirmAndSignOut = async () => {
+    const unsynced = await signOut();
+    if (!unsynced) return;
+    const parts = [
+      unsynced.pending > 0 ? `${unsynced.pending} change${unsynced.pending === 1 ? '' : 's'} not synced yet` : null,
+      unsynced.rejected > 0 ? `${unsynced.rejected} change${unsynced.rejected === 1 ? '' : 's'} the server rejected` : null,
+    ].filter(Boolean);
+    const ok = await confirm(
+      'Sign out and delete unsynced changes?',
+      `This device has ${parts.join(' and ')}. Signing out deletes them. To keep them, stay signed in until they sync.`,
+      'Sign out',
+    );
+    if (ok) await signOut({ discardUnsynced: true });
+  };
 
   const retry = async (id: string) => {
     const result = await retryFailedUpload(db, id, supabaseWriter(supabase));
@@ -84,7 +110,12 @@ export default function Settings() {
         Account
       </Text>
       <Text style={styles.muted}>Signing out removes this account&apos;s data from this device.</Text>
-      <Button title="Sign out" variant="secondary" onPress={signOut} />
+      <Button title="Sign out" variant="secondary" onPress={handleSignOut} />
+      {signOutError ? (
+        <Text style={styles.muted} role="alert">
+          {signOutError}
+        </Text>
+      ) : null}
     </ScrollView>
   );
 }

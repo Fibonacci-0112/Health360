@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { pendingUploadCount } from '@health360/local-db';
 import { SyncStreamConnectionMethod } from '@powersync/common';
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
@@ -17,6 +18,12 @@ const AuthContext = createContext<AuthState>({ session: null, loading: true });
 
 /** The user whose rows (and pending writes) are in the local database. */
 const DB_OWNER_KEY = 'health360.local-db-owner';
+
+/**
+ * Set only while the user is signing out on purpose. Supabase also emits SIGNED_OUT on its own (a
+ * refresh token that stopped working), and that must not delete writes nobody chose to give up.
+ */
+let signOutRequested = false;
 
 /**
  * Makes sure the local database belongs to `userId` before anything reads or syncs it. A session
@@ -74,11 +81,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') await connect();
       } else {
         setState({ session: null, loading: false });
-        if (event === 'SIGNED_OUT') {
+        if (event === 'SIGNED_OUT' && signOutRequested) {
+          signOutRequested = false;
           await clearLocalDatabase();
         } else {
-          // No session, but no explicit sign-out either: keep the rows for the same user's return.
-          // bindLocalDatabase clears them if someone else signs in.
+          // Signed out without asking (or no session at launch): keep the rows, unsent writes
+          // included, for the same user's return. bindLocalDatabase clears them if someone else
+          // signs in.
           await powersync.disconnect();
         }
       }
@@ -94,6 +103,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export const useAuth = () => useContext(AuthContext);
 
-export async function signOut() {
-  await supabase.auth.signOut();
+export interface UnsyncedChanges {
+  /** Writes still waiting to upload. */
+  pending: number;
+  /** Writes the server rejected, kept in Settings for retry. */
+  rejected: number;
+}
+
+/**
+ * Signs out and removes this account's data from the device. If that would delete changes that
+ * never reached the server, nothing happens and the counts come back so the caller can ask first;
+ * pass `discardUnsynced` once the user has agreed. Throws if Supabase couldn't sign out; nothing
+ * is cleared then.
+ */
+export async function signOut(options: { discardUnsynced?: boolean } = {}): Promise<UnsyncedChanges | null> {
+  if (!options.discardUnsynced) {
+    const pending = await pendingUploadCount(powersync);
+    const rejected = (await powersync.get<{ n: number }>('SELECT count(*) AS n FROM failed_uploads')).n;
+    if (pending > 0 || rejected > 0) return { pending, rejected };
+  }
+  signOutRequested = true;
+  try {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+  } catch (error) {
+    // Still signed in (offline, say). Drop the flag so a later SIGNED_OUT the user didn't ask for
+    // can't pick it up and clear the database.
+    signOutRequested = false;
+    throw error;
+  }
+  return null;
 }

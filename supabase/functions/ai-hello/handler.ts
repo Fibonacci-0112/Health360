@@ -73,3 +73,17 @@ export function makeHandler(parse: ParseFn, model: string, authenticate: Authent
     return json(body);
   };
 }
+
+/**
+ * Served when ANTHROPIC_API_KEY is missing: the function still boots, preflights still pass, and
+ * signed-in callers get a JSON error they can read instead of an opaque boot failure. Anyone else
+ * gets the usual 401, so the configuration state isn't visible without signing in.
+ */
+export function makeNotConfiguredHandler(authenticate: Authenticate) {
+  return async (req: Request): Promise<Response> => {
+    if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+    if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+    if (!(await authenticate(req))) return json({ error: 'unauthorized' }, 401);
+    return json({ error: 'not_configured' }, 503);
+  };
+}

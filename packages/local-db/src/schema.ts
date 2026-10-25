@@ -131,6 +131,12 @@ export const SERVER_COLUMN_TYPES: Readonly<Record<string, Readonly<Record<string
   consents: { granted: 'boolean' },
 };
 
+/**
+ * Tables whose rows are a record: clients may add rows but never change them (no UPDATE grant), so
+ * uploads insert with ON CONFLICT DO NOTHING instead of upserting, which would need UPDATE.
+ */
+export const INSERT_ONLY_TABLES: ReadonlySet<string> = new Set(['consents']);
+
 /** Tables the client may write. Everything else synced is read-only on the client. */
 export const UPLOADABLE_TABLES = ['profiles', 'consents', 'sharing_grants', 'notes'] as const;
 export type UploadableTable = (typeof UPLOADABLE_TABLES)[number];
