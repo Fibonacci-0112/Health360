@@ -54,6 +54,8 @@ export async function uploadPending(
     for (const op of tx.crud) {
       try {
         await applyOp(writer, op);
+        // A retried transaction may now accept an op it rejected on an earlier attempt.
+        await db.execute('DELETE FROM failed_uploads WHERE id = ?', [quarantineId(op)]);
       } catch (error) {
         const code = error instanceof RemoteWriteError ? error.code : undefined;
         if (!isPermanentError(code)) throw error;
@@ -93,6 +95,9 @@ export function toServerRow(table: string, data: Record<string, unknown>): Recor
 
 async function applyOp(writer: RemoteWriter, op: CrudEntry): Promise<void> {
   const data = toServerRow(op.table, op.opData ?? {});
+  // An UPDATE that assigns the values a row already has (re-selecting the current unit) still
+  // queues a PATCH, with nothing in it. There is nothing to send, and no row to check for.
+  if (op.op === UpdateType.PATCH && Object.keys(data).length === 0) return;
   switch (op.op) {
     case UpdateType.PUT:
       return writer.put(op.table, op.id, data);
@@ -103,6 +108,8 @@ async function applyOp(writer: RemoteWriter, op: CrudEntry): Promise<void> {
   }
 }
 
+const quarantineId = (op: CrudEntry) => `crud-${op.clientId}`;
+
 /**
  * Keyed by the op's position in the upload queue, so when a transaction is retried (a later op hit
  * a network error) the same rejected op replaces its entry instead of adding a duplicate.
@@ -111,7 +118,7 @@ async function quarantine(db: CommonPowerSyncDatabase, op: CrudEntry, code: stri
   await db.execute(
     `INSERT OR REPLACE INTO failed_uploads (id, table_name, row_id, op, data, error_code, error_message, failed_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [`crud-${op.clientId}`, op.table, op.id, op.op, JSON.stringify(op.opData ?? {}), code ?? null, message, new Date().toISOString()],
+    [quarantineId(op), op.table, op.id, op.op, JSON.stringify(op.opData ?? {}), code ?? null, message, new Date().toISOString()],
   );
 }
 

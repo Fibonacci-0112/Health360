@@ -92,8 +92,49 @@ describe('uploadPending', () => {
     await uploadPending(db, writer);
 
     expect(completed).toBe(true);
-    // Written twice (once per attempt), but under the same id, so INSERT OR REPLACE keeps one row.
-    expect(executed.map((p) => p[0])).toEqual(['crud-1', 'crud-1']);
+    // Quarantined twice (once per attempt) under the same id, so INSERT OR REPLACE keeps one row;
+    // op 2 succeeded on the second attempt, which clears any entry it might have had.
+    expect(executed.map((p) => p[0])).toEqual(['crud-1', 'crud-1', 'crud-2']);
+  });
+
+  it('clears a rejection once a retried transaction gets the op accepted', async () => {
+    const crud = [{ clientId: 7, op: UpdateType.PUT, table: 'notes', id: 'a', opData: { body: 'x' } }];
+    let completed = false;
+    const executed: [string, unknown[]][] = [];
+    const db = {
+      getNextCrudTransaction: async () => (completed ? null : { crud, complete: async () => void (completed = true) }),
+      execute: async (sql: string, params: unknown[]) => void executed.push([sql.trim().split(/\s+/)[0]!, params]),
+    } as unknown as CommonPowerSyncDatabase;
+    let attempt = 0;
+    const writer: RemoteWriter = {
+      put: async () => {
+        attempt++;
+        if (attempt === 1) throw new RemoteWriteError('conflict', '23505');
+      },
+      patch: async () => {},
+      delete: async () => {},
+    };
+    await uploadPending(db, writer); // rejected: quarantined, transaction completed
+    completed = false; // the same op comes round again (e.g. replayed after a transient failure)
+    await uploadPending(db, writer);
+    expect(executed).toEqual([
+      ['INSERT', expect.arrayContaining(['crud-7'])],
+      ['DELETE', ['crud-7']],
+    ]);
+  });
+
+  it('skips an empty PATCH instead of reporting it as a missing row', async () => {
+    const crud = [{ clientId: 3, op: UpdateType.PATCH, table: 'profiles', id: 'p', opData: {} }];
+    let completed = false;
+    const db = {
+      getNextCrudTransaction: async () => (completed ? null : { crud, complete: async () => void (completed = true) }),
+      execute: async () => {},
+    } as unknown as CommonPowerSyncDatabase;
+    let patched = 0;
+    const writer: RemoteWriter = { put: async () => {}, patch: async () => void patched++, delete: async () => {} };
+    const quarantined: unknown[] = [];
+    await uploadPending(db, writer, (q) => quarantined.push(q));
+    expect([patched, quarantined.length, completed]).toEqual([0, 0, true]);
   });
 });
 

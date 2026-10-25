@@ -14,6 +14,8 @@ export function Button({ title, onPress, disabled, busy, variant = 'primary' }: 
   return (
     <Pressable
       role="button"
+      // Keeps the button's name while the spinner replaces its text.
+      aria-label={title}
       aria-disabled={!!inactive}
       aria-busy={!!busy}
       onPress={onPress}

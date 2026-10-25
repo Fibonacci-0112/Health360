@@ -24,9 +24,29 @@ const DB_OWNER_KEY = 'health360.local-db-owner';
  * person to sign in must never inherit the previous user's rows or their unsent writes.
  */
 async function bindLocalDatabase(userId: string): Promise<void> {
-  if ((await AsyncStorage.getItem(DB_OWNER_KEY)) === userId) return;
-  await powersync.disconnectAndClear();
-  await AsyncStorage.setItem(DB_OWNER_KEY, userId);
+  await withOwnerLock(async () => {
+    if ((await AsyncStorage.getItem(DB_OWNER_KEY)) === userId) return;
+    await powersync.disconnectAndClear();
+    await AsyncStorage.setItem(DB_OWNER_KEY, userId);
+  });
+}
+
+async function clearLocalDatabase(): Promise<void> {
+  await withOwnerLock(async () => {
+    await powersync.disconnectAndClear();
+    await AsyncStorage.removeItem(DB_OWNER_KEY);
+  });
+}
+
+/**
+ * On the web, several tabs share one database and each gets the same auth events. Without a
+ * cross-tab lock, two tabs could both read the old owner and the slower one would clear the
+ * database after the other had already accepted the new user's writes. Native apps have one
+ * instance and no Web Locks, so the work just runs.
+ */
+function withOwnerLock(work: () => Promise<void>): Promise<void> {
+  const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
+  return locks ? locks.request('health360-local-db-owner', work) : work();
 }
 
 function connect() {
@@ -55,8 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         setState({ session: null, loading: false });
         if (event === 'SIGNED_OUT') {
-          await powersync.disconnectAndClear();
-          await AsyncStorage.removeItem(DB_OWNER_KEY);
+          await clearLocalDatabase();
         } else {
           // No session, but no explicit sign-out either: keep the rows for the same user's return.
           // bindLocalDatabase clears them if someone else signs in.
