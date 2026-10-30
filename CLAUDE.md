@@ -4,26 +4,38 @@ Instructions for Claude Code working in the Health360 repository. Keep this file
 
 ## Project goals and current state
 
-Health360 is a household-oriented health and fitness app for nutrition, workouts, body metrics, physiology, and goals. It is intended to work offline and across Android, web/PWA, and Windows/Linux desktop. Health and fitness values are sensitive personal data.
+Health360 is a household-oriented health and fitness app for nutrition, workouts, body metrics, physiology, and goals. It targets Android, the web, and Windows desktop, with offline logging on Android and Windows. Apple (iOS, macOS) and Linux desktop are out of scope ([ADR 0002](docs/adr/0002-dotnet-maui-blazor.md)). Health and fitness values are sensitive personal data.
 
 The repository is currently in **Phase 0: foundation and risk tests**. The implementation plan describes later phases; do not assume a planned feature is already implemented. Treat the current source, package manifests, migrations, tests, and CI as the facts on the ground. The `notes` table and the `ai-hello` Edge Function are throwaway Phase 0 scaffolding; do not build features on them.
+
+**Stack transition.** ADR 0002 replaces the TypeScript stack (Expo, Tauri, Edge Functions) with .NET: MAUI Blazor Hybrid for Android and Windows, a Blazor Web App, and an ASP.NET Core API (PLAN.md §2.1–2.2). The TypeScript code in `apps/`, `packages/`, `supabase/functions/` and `tools/codegen/` is the Phase 0 prototype, and Phase 0b replaces it. Keep it working and follow the rules below while it exists, but don't add product features to it. `supabase/migrations`, `supabase/tests` and `powersync/` carry over to the .NET stack unchanged.
 
 Before significant work, read the relevant parts of:
 
 - `README.md` — repository layout and quick start.
 - `docs/PLAN.md` — architecture, data model, privacy, unit conventions, roadmap, and risks.
 - `docs/FEATURES.md` — feature requirements.
-- `docs/adr/0001-language-and-stack.md` — accepted stack decision.
+- `docs/adr/0002-dotnet-maui-blazor.md` — accepted stack and platform decision (supersedes ADR 0001).
 - `docs/phase0.md` — current implementation status, local setup, and "What the tests found" (bugs and platform limits already hit; don't reintroduce them).
 
 ## Stack and repository layout
 
-Use the existing stack. **Do not migrate the app to Next.js or replace Expo Router with a web-only framework unless explicitly asked and the change is agreed as an architecture decision.** React Native + React Native Web is intentional to share the app across native and web targets.
+The target stack is fixed by ADR 0002. **Don't change it, or add Apple or Linux desktop targets, unless the user explicitly asks and the change is recorded as a new ADR.**
+
+Target (.NET, from Phase 0b; see PLAN.md §2.2 for the layout):
+
+- `Health360.Domain`: pure C# calculations, units and UUIDv7 ids. It replaces `packages/domain`, and the same purity rules apply.
+- `Health360.Contracts`: records and validators for API payloads and Claude's structured output. It replaces `packages/schemas`.
+- `Health360.UI`: a Razor Class Library shared by the MAUI app and the Blazor Web App.
+- `Health360.Maui` (Android, Windows; PowerSync .NET), `Health360.Web` / `Health360.Web.Client` (Blazor Web App, online-first), `Health360.Server` (the ASP.NET Core API, hosted with the web app).
+- The API replaces Edge Functions. It must validate the Supabase JWT and the signed-in user on every request, and query Postgres as that user so RLS applies. The service-role key is used only for admin jobs.
+
+Current prototype (TypeScript), described below:
 
 - Runtime/tooling: TypeScript, Node.js ≥22.18 (`engines` in `package.json`; CI reads the major version from `.nvmrc`), pnpm 10.28.0 (`packageManager`), and Turborepo.
 - `.npmrc` sets `node-linker=hoisted` because Metro resolves far more reliably from a flat `node_modules`. Don't change it.
-- Client: Expo, React Native, Expo Router, and React Native Web. Android and web/PWA are the current targets; iOS is designed for but native Apple support is deferred.
-- Desktop: Tauri 2 wraps the exported web app for Windows and Linux.
+- Client: Expo, React Native, Expo Router, and React Native Web, for Android and web.
+- Desktop: Tauri 2 wraps the exported web app. It is verified on Linux, which is now out of scope; the target desktop app is MAUI on Windows.
 - Backend: Supabase Postgres, Auth, Row-Level Security (RLS), Storage, and TypeScript/Deno Edge Functions.
 - Offline data: SQLite with Drizzle and PowerSync. Offline writes must remain reliable and must not weaken server-side authorization.
 - Shared code: Zod contracts in `packages/schemas`; deterministic, I/O-free calculations in `packages/domain`.
@@ -129,7 +141,7 @@ Two-client sync tests require local Supabase and PowerSync services plus the env
 
 ### Claude and other AI features
 
-- Call Claude from Supabase Edge Functions only. The client must never receive the Anthropic API key.
+- Call Claude from server code only: Supabase Edge Functions in the prototype, the ASP.NET Core API in the .NET stack. No client (browser, MAUI app) may ever receive the Anthropic API key.
 - Use structured output and the shared schemas in `packages/schemas`; validate the parsed result again on the server.
 - Treat model output as untrusted input. Validate calculations, ranges, nutrient arithmetic, costs, exercise IDs, equipment constraints, and other domain rules in `packages/domain` before saving or presenting it. Follow the documented one-repair-then-fail/manual-fallback approach where applicable.
 - AI may propose content; code must compute anything deterministic. Do not let a model invent a calculated number that the app can calculate itself.
@@ -142,7 +154,7 @@ Two-client sync tests require local Supabase and PowerSync services plus the env
 - For React Native Web accessibility, use the `role` and `aria-*` props; React Native Web ignores `accessibilityState`.
 - Test loading, error, empty, offline, and sync-pending states for data-entry flows. Make failed saves visible; never show success when no row was changed or a write was rejected.
 - Preserve the PWA manifest, service-worker precache generation (`apps/app/scripts/write-precache.mjs`), and offline behavior when changing web export or routing; verify with `export:web`.
-- Tauri workarounds are deliberate and gated with `isTauri()`; keep them desktop-only:
+- Tauri workarounds (prototype only; they target Linux WebKitGTK, which is out of scope) are deliberate and gated with `isTauri()`; keep them desktop-only and don't extend them:
   - PowerSync web uses `enableMultiTabs: false` (WebKitGTK can't start a SharedWorker from `tauri://`) in `apps/app/src/db/database.web.ts`.
   - Sync uses WebSockets (WebKitGTK buffers streamed HTTP) in `apps/app/src/lib/auth.tsx`.
   - `tauri.conf.json` keeps `dangerousDisableAssetCspModification: ["style-src"]` so React Native Web's runtime styles load. Check CSP `connect-src` when changing hosts.

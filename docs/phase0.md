@@ -1,5 +1,7 @@
 # Phase 0: foundation and risk tests
 
+> **Stack change (2026-10-30):** [ADR 0002](adr/0002-dotnet-maui-blazor.md) moves Health360 to .NET MAUI (Android, Windows), a Blazor Web App and an ASP.NET Core API, and drops Apple and Linux desktop. This page records the **TypeScript prototype**. Its database, RLS and sync results still apply: the migrations, pgTAP tests and `powersync/sync-config.yaml` carry over. The Expo and Tauri findings are history. The .NET foundation is Phase 0b in [PLAN.md §3](PLAN.md).
+
 Status of [PLAN.md §3 Phase 0](PLAN.md). The code is done and tested in CI and locally. What's left needs your accounts and devices: cloud projects, the Android dev build, and the six-target check.
 
 ## Deliverables
@@ -101,10 +103,9 @@ For each target: sign in, create a note with the network off, turn it back on, a
 
 - [ ] **Android app (dev client):** the note survives killing the app while offline.
 - [ ] **Chrome** and **Firefox:** reload on `/settings` works; the badge shows "Offline · 1 unsynced" while offline.
-- [ ] **iPhone (Safari, Add to Home Screen):** the app installs; `navigator.storage.persist()` is granted; offline write then sync.
-- [ ] **Mac (Safari, Add to Dock):** same as iPhone.
+- ~~**iPhone (Safari)** and **Mac (Safari)**~~: dropped; Apple is out of scope (ADR 0002).
 - [ ] **Tauri on Windows:** installer runs; offline write then sync; reload on a deep link.
-- [x] **Tauri on Linux:** verified headlessly here (WebKitGTK 2.52 through `tauri-driver`). Worth one run on a real desktop.
+- [x] **Tauri on Linux:** verified headlessly here (WebKitGTK 2.52 through `tauri-driver`). Linux desktop is now out of scope (ADR 0002).
 
-**Known issue (desktop, Linux):** about 1 in 6 full-page reloads inside Tauri leaves the page on "Loading". The page's own PowerSync database lock (`db-lock-health360.sqlite`) stays held, so the local database never opens. Navigation inside the app is client-side and unaffected; only a reload (or a full-page load) can hit it. Closing and reopening the window recovers. It predates the review fixes. To be root-caused in Phase 1 before the desktop builds ship.
+**Known issue (desktop, Linux):** about 1 in 6 full-page reloads inside Tauri leaves the page on "Loading". The page's own PowerSync database lock (`db-lock-health360.sqlite`) stays held, so the local database never opens. Navigation inside the app is client-side and unaffected; only a reload (or a full-page load) can hit it. Closing and reopening the window recovers. It predates the review fixes. Linux desktop is now out of scope and the desktop app moves to MAUI on Windows (ADR 0002), so this no longer blocks shipping.
 - [x] **User B never receives A's note:** pgTAP and `e2e/sync`.

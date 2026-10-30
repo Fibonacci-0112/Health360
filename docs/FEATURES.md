@@ -62,7 +62,7 @@ Tags: **[MVP]** means Phase 1; **[P2]**, **[P3]** and **[P4]** are later phases.
 - **[MVP]** Templates with supersets, rep ranges and rest times. A weekly schedule and calendar.
 - **[MVP]** ★ Live logger (Hevy, Strong):
   - Last session's values pre-filled, so accepting a set takes one tap.
-  - Set types, RPE or RIR, and a rest timer with a notification. In the iPhone web app the timer only alerts while the app is open ([PLAN.md §2.7](PLAN.md)).
+  - Set types, RPE or RIR, and a rest timer with a notification. In the web app the timer only alerts while the app is open ([PLAN.md §2.7](PLAN.md)).
   - Exercise swap and a plate calculator. Suggested loads round to weights you can actually load (5 lb or 2.5 kg steps, depending on the plates).
   - Survives the app being killed mid-workout, and works fully offline.
 - **[MVP]** ★ PRs: estimated 1RM (Epley/Brzycki), heaviest weight, best reps at a given weight, and volume. Plus weekly sets per muscle and e1RM history.
@@ -81,7 +81,7 @@ Tags: **[MVP]** means Phase 1; **[P2]**, **[P3]** and **[P4]** are later phases.
   - ★ Side-by-side and slider comparison (ZOZOFIT).
   - Location data stripped on the device, private storage, offline upload queue.
   - Never shared with household members unless you turn it on.
-- **[P3]** Health Connect (Android): weight, body fat, steps, workouts, sleep, resting HR, HRV, VO₂max and HR samples, with duplicate removal. VO₂max, resting HR and HR samples feed the physiology profile as device values (§1.6). **HealthKit (Apple Health and Apple Watch) comes with the deferred iPhone app** ([PLAN.md §2.7](PLAN.md)).
+- **[P3]** Health Connect (Android): weight, body fat, steps, workouts, sleep, resting HR, HRV, VO₂max and HR samples, with duplicate removal. VO₂max, resting HR and HR samples feed the physiology profile as device values (§1.6).
 - **[P3]** Labs:
   - Upload a PDF or photo (drag-and-drop on desktop). Claude parses it, the app maps each value to a biomarker (LOINC) and converts units, and you confirm.
   - Trend charts, with your lab's reference range shown first and ★ cited "optimal" ranges after it (InsideTracker).
