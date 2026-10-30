@@ -172,6 +172,12 @@ Against the local stack (`supabase start`, then `docker compose -f powersync/doc
 dotnet build src/Health360.Maui -t:Run -f net10.0-android -p:AndroidSdkDirectory=$HOME/android-sdk -p:Health360SupabaseApiKey=<publishable key>
 ```
 
+On Windows, build the Windows target instead (no Android SDK needed). The key is baked in per build, so an app built without it, including one started from Visual Studio, shows "This build isn't connected to a server yet". To run from Visual Studio, set `Health360SupabaseApiKey` as an environment variable and start Visual Studio from that shell.
+
+```sh
+dotnet build src/Health360.Maui -t:Run -f net10.0-windows10.0.19041.0 -p:Health360SupabaseApiKey=<publishable key>
+```
+
 The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54324). For a cloud project, also set `Health360SupabaseUrl` and `Health360PowerSyncUrl`. Never pass the service-role key.
 
 ## CI
@@ -195,6 +201,7 @@ The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54
 - PowerSync tables are views with `INSTEAD OF` triggers, so `Execute` reports 0 rows affected for an UPDATE that did change a row. Check that the row exists instead (`Profiles`).
 - PowerSync reads rows with Dapper, which emits IL at run time. .NET 10 file-based apps (`dotnet run app.cs`) default to `PublishAot`, which turns dynamic code off, so a scratch harness needs `#:property PublishAot=false`. The MAUI app runs on Mono (Android) and CoreCLR (Windows) and is unaffected.
 - bUnit's synchronous `Click()`, `Change()` and `Submit()` can race the app's background re-renders (sync status, watched queries): an event lands on a handler a concurrent render just replaced and is lost, which made about half the component-test runs fail. The UI tests await `ClickAsync`, `SubmitAsync` and `TriggerEventAsync` instead (`AppTestContext`).
+- With invariant globalization (every project except the MAUI app and those that set `UseCultureData`), Windows can't resolve an IANA time zone id such as `America/Chicago`: `FindSystemTimeZoneById` needs ICU to map it to a Windows id and throws `TimeZoneNotFoundException`. Linux reads IANA ids from tzdata, so the Linux CI runner never sees it. Tests in invariant projects build their zones with `TimeZoneInfo.CreateCustomTimeZone`; only projects that keep culture data (the MAUI app and `Health360.UI.Tests`) look zones up by IANA id.
 - `Directory.Build.props` is read before the project file, so a condition there on a property the project sets (such as `UseMaui`) is always false. Put such settings in `Directory.Build.targets`.
 - The Windows targets set the MAUI app's `PackageVersion` from `ApplicationDisplayVersion`, while Android keeps the `1.0.0` default. Visual Studio evaluates both target frameworks and fails with "Unable to read project information for 'Health360.Maui': The property PackageVersion was expected to have a single value across all target frameworks". The project sets `Version` to `$(ApplicationDisplayVersion)` so both agree; the command line, which builds one framework, doesn't hit it.
 - A `workloadVersion` in `global.json` makes every build fail ("Workload version ... was not found") unless that workload set is installed, including builds that use no workloads. That's why the version is pinned on `dotnet workload install` instead.
