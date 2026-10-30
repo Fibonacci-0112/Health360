@@ -31,22 +31,26 @@ public static class TestTokens
         string issuer = Issuer,
         string audience = "authenticated",
         string role = "authenticated",
-        string? subject = null)
+        string? subject = null,
+        string? sessionId = "")
     {
-        var now = DateTimeOffset.UtcNow;
-        return Create(
-            new Dictionary<string, object>
-            {
-                ["iss"] = issuer,
-                ["aud"] = audience,
-                ["sub"] = subject ?? userId.ToString(),
-                ["role"] = role,
-                ["email"] = "user@example.com",
-                ["session_id"] = Guid.NewGuid().ToString(),
-                ["aal"] = "aal1",
-            },
-            expires ?? now.AddHours(1),
-            credentials ?? Es256);
+        var claims = new Dictionary<string, object>
+        {
+            ["iss"] = issuer,
+            ["aud"] = audience,
+            ["sub"] = subject ?? userId.ToString(),
+            ["role"] = role,
+            ["email"] = "user@example.com",
+            ["aal"] = "aal1",
+        };
+
+        // "" means a fresh session; null leaves the claim out.
+        if (sessionId is not null)
+        {
+            claims["session_id"] = sessionId.Length == 0 ? Guid.NewGuid().ToString() : sessionId;
+        }
+
+        return Create(claims, expires ?? DateTimeOffset.UtcNow.AddHours(1), credentials ?? Es256);
     }
 
     /// <summary>The project's public anon key: a valid signature, but no user (legacy HS256 shape).</summary>

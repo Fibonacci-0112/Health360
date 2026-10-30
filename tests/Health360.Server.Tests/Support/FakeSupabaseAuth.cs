@@ -21,6 +21,12 @@ public sealed class FakeSupabaseAuth
     /// <summary>When set, Auth answers 503 to user lookups.</summary>
     public bool Down { get; set; }
 
+    /// <summary>When set, the JWKS endpoint answers 500.</summary>
+    public bool JwksDown { get; set; }
+
+    /// <summary>When set, user lookups answer 200 with this body instead of the user.</summary>
+    public string? UserBodyOverride { get; set; }
+
     public int UserCalls => _userCalls;
 
     /// <summary>A fresh handler each time: the HTTP client factory disposes the handlers it is given.</summary>
@@ -31,7 +37,7 @@ public sealed class FakeSupabaseAuth
         var path = request.RequestUri!.AbsolutePath;
         if (path == "/auth/v1/.well-known/jwks.json")
         {
-            return Json(HttpStatusCode.OK, new { keys = new[] { PublicJwk() } });
+            return JwksDown ? new HttpResponseMessage(HttpStatusCode.InternalServerError) : Json(HttpStatusCode.OK, new { keys = new[] { PublicJwk() } });
         }
 
         if (path != "/auth/v1/user")
@@ -49,6 +55,11 @@ public sealed class FakeSupabaseAuth
         if (!request.Headers.Contains("apikey") || token is null || SignedOut.ContainsKey(token))
         {
             return Json(HttpStatusCode.Forbidden, new { code = 403, error_code = "session_not_found" });
+        }
+
+        if (UserBodyOverride is not null)
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(UserBodyOverride, Encoding.UTF8, "application/json") };
         }
 
         // The real Auth checks the signature too; the API has already done that before asking.

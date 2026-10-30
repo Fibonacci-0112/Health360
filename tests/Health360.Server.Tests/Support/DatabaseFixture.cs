@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Npgsql;
 
 namespace Health360.Server.Tests.Support;
@@ -7,23 +8,27 @@ namespace Health360.Server.Tests.Support;
 /// that can create roles and users (locally <c>postgres</c> on <c>supabase db start</c>, or
 /// tools/db/test-local.sh's database). Without it, the database tests are skipped.
 /// <para>
-/// Creates the API's login role the way docs/phase0b.md says to, and two users, A and B, whose
-/// profiles and households come from the sign-up trigger. The users are deleted afterwards.
+/// Creates a throwaway login role set up like the API's (docs/phase0b.md), with a random name and
+/// password, and two users, A and B, whose profiles and households come from the sign-up trigger.
+/// All of it is removed afterwards, even when setup fails partway, so no known login is left behind
+/// and a real <c>health360_api</c> role is never touched.
 /// </para>
 /// </summary>
 public sealed class DatabaseFixture : IAsyncLifetime
 {
     public const string EnvironmentVariable = "HEALTH360_TEST_DATABASE";
-    private const string ApiRole = "health360_api";
-    private const string ApiPassword = "health360-api-local-test";
 
     private readonly string? _adminConnectionString = Environment.GetEnvironmentVariable(EnvironmentVariable);
+    private bool _roleCreated;
 
     public bool Available => !string.IsNullOrEmpty(_adminConnectionString);
 
-    public TestUser A { get; private set; } = null!;
+    /// <summary>This run's stand-in for <c>health360_api</c>.</summary>
+    public string ApiRole { get; } = $"health360_api_test_{Guid.NewGuid():N}";
 
-    public TestUser B { get; private set; } = null!;
+    public TestUser? A { get; private set; }
+
+    public TestUser? B { get; private set; }
 
     /// <summary>The API's connection string: its own login role, which can only become <c>authenticated</c>.</summary>
     public string ApiConnectionString { get; private set; } = "";
@@ -35,44 +40,58 @@ public sealed class DatabaseFixture : IAsyncLifetime
             return;
         }
 
-        await using var admin = await OpenAdminAsync();
-        await ExecuteAsync(admin, $"""
-            do $$ begin
-              if not exists (select from pg_roles where rolname = '{ApiRole}') then
-                create role {ApiRole} login noinherit password '{ApiPassword}';
-              end if;
-            end $$;
-            grant authenticated to {ApiRole};
-            """);
-
-        A = await CreateUserAsync(admin, "Alex");
-        B = await CreateUserAsync(admin, "Blake");
-
-        ApiConnectionString = new NpgsqlConnectionStringBuilder(_adminConnectionString)
+        try
         {
-            Username = ApiRole,
-            Password = ApiPassword,
-        }.ConnectionString;
-    }
+            var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+            await using var admin = await OpenAdminAsync();
+            await ExecuteAsync(admin, $"create role {ApiRole} login noinherit password '{password}'");
+            _roleCreated = true;
+            await ExecuteAsync(admin, $"grant authenticated to {ApiRole}");
 
-    public async ValueTask DisposeAsync()
-    {
-        if (!Available || A is null)
-        {
-            return;
+            A = await CreateUserAsync(admin, "Alex");
+            B = await CreateUserAsync(admin, "Blake");
+
+            ApiConnectionString = new NpgsqlConnectionStringBuilder(_adminConnectionString)
+            {
+                Username = ApiRole,
+                Password = password,
+            }.ConnectionString;
         }
-
-        await using var admin = await OpenAdminAsync();
-        await using var command = new NpgsqlCommand("delete from auth.users where id = any($1)", admin);
-        command.Parameters.Add(new NpgsqlParameter { Value = new[] { A.UserId, B?.UserId ?? Guid.Empty } });
-        await command.ExecuteNonQueryAsync();
+        catch
+        {
+            await CleanUpAsync();
+            throw;
+        }
     }
+
+    public ValueTask DisposeAsync() => Available ? new(CleanUpAsync()) : ValueTask.CompletedTask;
 
     public async Task<NpgsqlConnection> OpenAdminAsync()
     {
         var connection = new NpgsqlConnection(_adminConnectionString);
         await connection.OpenAsync();
         return connection;
+    }
+
+    private async Task CleanUpAsync()
+    {
+        // Pooled connections of the throwaway role would outlive it.
+        NpgsqlConnection.ClearAllPools();
+        await using var admin = await OpenAdminAsync();
+
+        var users = new[] { A?.UserId, B?.UserId }.OfType<Guid>().ToArray();
+        if (users.Length > 0)
+        {
+            await using var command = new NpgsqlCommand("delete from auth.users where id = any($1)", admin);
+            command.Parameters.Add(new NpgsqlParameter { Value = users });
+            await command.ExecuteNonQueryAsync();
+        }
+
+        if (_roleCreated)
+        {
+            await ExecuteAsync(admin, $"drop role if exists {ApiRole}");
+            _roleCreated = false;
+        }
     }
 
     private static async Task<TestUser> CreateUserAsync(NpgsqlConnection admin, string name)

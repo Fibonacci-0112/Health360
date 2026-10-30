@@ -78,9 +78,16 @@ public sealed partial class SupabaseSessionVerifier(
 
             await using var body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             using var user = await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken).ConfigureAwait(false);
-            return user.RootElement.TryGetProperty("id", out var id) && id.TryGetGuid(out var authUserId) && authUserId == userId
-                ? SessionStatus.Active
-                : SessionStatus.Rejected;
+            if (user.RootElement.ValueKind != JsonValueKind.Object
+                || !user.RootElement.TryGetProperty("id", out var id)
+                || id.ValueKind != JsonValueKind.String)
+            {
+                // A 2xx that isn't Auth's user object (a proxy page, say): not an answer about this user.
+                LogAuthUnexpectedBody(logger, user.RootElement.ValueKind.ToString());
+                return SessionStatus.Unavailable;
+            }
+
+            return id.TryGetGuid(out var authUserId) && authUserId == userId ? SessionStatus.Active : SessionStatus.Rejected;
         }
         // A TaskCanceledException without our token cancelled is HttpClient's timeout.
         catch (Exception e) when (e is HttpRequestException or JsonException
@@ -94,6 +101,9 @@ public sealed partial class SupabaseSessionVerifier(
     // Status codes and exception types only: never the token or the user.
     [LoggerMessage(Level = LogLevel.Warning, Message = "Supabase Auth answered {StatusCode} when verifying a session")]
     private static partial void LogAuthStatus(ILogger logger, int statusCode);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Supabase Auth answered a session check with an unexpected body ({RootKind})")]
+    private static partial void LogAuthUnexpectedBody(ILogger logger, string rootKind);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Supabase Auth could not be reached to verify a session ({ExceptionType})")]
     private static partial void LogAuthUnreachable(ILogger logger, string exceptionType);

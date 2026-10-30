@@ -29,6 +29,9 @@ public class AuthenticationTests
             { "anon role with a user's claims", TestTokens.User(UserA, role: "anon") },
             { "service_role role with a user's claims", TestTokens.User(UserA, role: "service_role") },
             { "sub is not a user id", TestTokens.User(UserA, subject: "anonymous") },
+            { "no session_id (Auth would skip its session check)", TestTokens.User(UserA, sessionId: null) },
+            { "nil session_id", TestTokens.User(UserA, sessionId: Guid.Empty.ToString()) },
+            { "session_id is not a UUID", TestTokens.User(UserA, sessionId: "session") },
             { "signed with another HS256 secret", TestTokens.User(UserA, TestTokens.Hmac("another-secret-that-is-at-least-32-characters")) },
             { "alg none", TestTokens.AlgNone(UserA) },
             { "not a JWT", "not-a-jwt" },
@@ -124,6 +127,80 @@ public class AuthenticationTests
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.NotNull(response.Headers.RetryAfter);
         Assert.Empty(db.Users);
+    }
+
+    [Theory]
+    [InlineData("""["not","an","object"]""")]
+    [InlineData("""{"id":42}""")]
+    [InlineData("""{"aud":"authenticated"}""")]
+    public async Task Answers_503_when_Auth_answers_with_something_other_than_a_user(string body)
+    {
+        var db = new FakeUserDatabase();
+        await using var factory = new ServerFactory { Database = db };
+        factory.Auth.UserBodyOverride = body;
+        using var client = factory.CreateClient(TestTokens.User(UserA));
+
+        var response = await client.GetAsync(new Uri("/me", UriKind.Relative), Ct);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Empty(db.Users);
+    }
+
+    [Fact]
+    public async Task Rejects_a_user_object_for_a_different_user()
+    {
+        var db = new FakeUserDatabase();
+        await using var factory = new ServerFactory { Database = db };
+        factory.Auth.UserBodyOverride = $$"""{"id":"{{Guid.CreateVersion7()}}"}""";
+        using var client = factory.CreateClient(TestTokens.User(UserA));
+
+        var response = await client.GetAsync(new Uri("/me", UriKind.Relative), Ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(db.Users);
+    }
+
+    [Theory]
+    [InlineData("ES256 from the JWKS")]
+    [InlineData("legacy HS256 secret")]
+    public async Task Answers_503_when_the_signing_keys_cannot_be_loaded(string signing)
+    {
+        var db = new FakeUserDatabase();
+        await using var factory = new ServerFactory { Database = db };
+        factory.Auth.JwksDown = true;
+        var token = TestTokens.User(UserA, signing.StartsWith("ES256", StringComparison.Ordinal) ? TestTokens.Es256 : TestTokens.Hs256);
+        using var client = factory.CreateClient(token);
+
+        var response = await client.GetAsync(new Uri("/me", UriKind.Relative), Ct);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.NotNull(response.Headers.RetryAfter);
+        Assert.Empty(db.Users);
+    }
+
+    [Fact]
+    public async Task Recovers_once_the_signing_keys_load_again()
+    {
+        await using var factory = new ServerFactory { Database = new FakeUserDatabase() };
+        factory.Auth.JwksDown = true;
+        using var client = factory.CreateClient(TestTokens.User(UserA));
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.GetAsync(new Uri("/me", UriKind.Relative), Ct)).StatusCode);
+
+        factory.Auth.JwksDown = false;
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(new Uri("/me", UriKind.Relative), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Requests_without_a_token_are_401_even_when_the_signing_keys_cannot_be_loaded()
+    {
+        await using var factory = new ServerFactory { Database = new FakeUserDatabase() };
+        factory.Auth.JwksDown = true;
+        using var client = factory.CreateClient(token: null);
+
+        var response = await client.GetAsync(new Uri("/me", UriKind.Relative), Ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]

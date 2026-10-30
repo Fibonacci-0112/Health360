@@ -37,8 +37,8 @@ Every endpoint requires a signed-in user unless it is marked `AllowAnonymous` (o
 
 1. It is signed by the project's Auth. Keys come from the JWKS at `/auth/v1/.well-known/jwks.json` (ES256 or RS256). HS256 is accepted only when `Supabase:JwtSecret` is set, for projects or local stacks that still use the legacy secret.
 2. Its issuer is `{Supabase:Url}/auth/v1`, its audience is `authenticated`, and it hasn't expired (30 s clock skew).
-3. Its `role` is `authenticated` and its `sub` is a user id. This rejects the anon and service-role keys, which are validly signed but carry no user.
-4. Auth still accepts it: the API calls `GET /auth/v1/user`, as `authenticateUser` does in the Edge Functions, so signed-out sessions and deleted users are rejected before their token expires. A confirmed session is cached for 60 s (`Supabase:SessionCacheDuration`), so a sign-out takes effect within a minute. If Auth can't be reached, the API answers 503 with `Retry-After`, not 401, so the app doesn't treat the user as signed out.
+3. Its `role` is `authenticated`, its `sub` is a user id, and its `session_id` is a session id. This rejects the anon and service-role keys, which are validly signed but carry no user. Every token Auth issues to a signed-in user names its session, and Auth skips its session check for tokens that don't, so the API requires one.
+4. Auth still accepts it: the API calls `GET /auth/v1/user`, as `authenticateUser` does in the Edge Functions, so signed-out sessions and deleted users are rejected before their token expires. A confirmed session is cached for 60 s (`Supabase:SessionCacheDuration`), so a sign-out takes effect within a minute. Auth looks the session up by `session_id` and answers 403 `session_not_found` once it is gone. If Auth can't be reached, or its signing keys can't be loaded, the API answers 503 with `Retry-After`, not 401, so the app doesn't treat the user as signed out. Once loaded, the keys are cached, and a failed refresh keeps the old ones.
 
 Endpoints take a `SignedInUser` parameter and query through `IUserDatabase` (`src/Health360.Server/Data`). It runs each request's queries in one transaction after `set_config('role', 'authenticated', true)` and `set_config('request.jwt.claims', <the token's payload>, true)`, as PostgREST does, so `auth.uid()` and RLS work as they do for the app. Both settings are transaction-local, so a pooled connection carries nothing over to the next request.
 
@@ -58,7 +58,9 @@ Configuration (environment variables use `__` for `:`, such as `Supabase__ApiKey
 | `Supabase:JwtSecret` | Only for HS256 projects, such as a local stack whose `supabase status` lists a JWT secret |
 | `ConnectionStrings:Database` | Npgsql connection string for `health360_api` |
 
-Tests: `AuthenticationTests` covers the token rules against a fake Auth and needs no database. `UserDatabaseTests` needs a migrated database. Set `HEALTH360_TEST_DATABASE` to an Npgsql connection string for a role that can create roles and users. The tests create `health360_api` and two users, A and B, and delete the users afterwards. Without the variable those tests are skipped; CI's database job runs them against `supabase db start`:
+The API refuses to start without `Supabase:Url`, `Supabase:ApiKey` or `ConnectionStrings:Database`.
+
+Tests: `AuthenticationTests` covers the token rules against a fake Auth and needs no database. `UserDatabaseTests` needs a migrated database. Set `HEALTH360_TEST_DATABASE` to an Npgsql connection string for a role that can create roles and users. The tests create a throwaway login role set up like `health360_api` (random name and password) and two users, A and B, and remove all of them afterwards. Without the variable those tests are skipped; CI's database job runs them against `supabase db start`:
 
 ```sh
 HEALTH360_TEST_DATABASE="Host=127.0.0.1;Port=54322;Username=postgres;Password=postgres;Database=postgres" \
@@ -108,3 +110,5 @@ On Windows, install `maui-windows` (same `--version`) and build with `-f net10.0
 - `using` directives needed only in `#if DEBUG` code must sit inside the same `#if`. Otherwise the Release build fails on IDE0005 (unnecessary using), because warnings are errors.
 - JwtBearer fetches signing keys with its own `HttpClient`, which tests can't redirect. The API builds its configuration manager on the named client `supabase-auth` instead, and tests point that client at a fake Auth. Give the factory a new handler each time (`ConfigurePrimaryHttpMessageHandler`), because the HTTP client factory disposes the handlers it is given.
 - With a fallback authorization policy, unknown routes answer 401 instead of 404 to callers without a token, so probing for endpoints reveals nothing.
+- Don't test startup failures through `WebApplicationFactory`. When the app throws at startup, its deferred host races the app's own disposal, so the test sometimes sees `ObjectDisposedException` instead of the real error. `StartupValidationTests` runs the same registrations and `IStartupValidator` directly.
+- Supabase Auth checks the session (`auth.sessions`) only for tokens that carry a `session_id` claim. Tokens it issues to signed-in users always do, so the API rejects tokens without one rather than relying on the user lookup alone.

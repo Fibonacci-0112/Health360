@@ -17,6 +17,10 @@ public sealed class UserDatabaseTests(DatabaseFixture db) : IClassFixture<Databa
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    private TestUser A => db.A!;
+
+    private TestUser B => db.B!;
+
     public ValueTask InitializeAsync()
     {
         Assert.SkipUnless(db.Available, $"Set {DatabaseFixture.EnvironmentVariable} to run the database tests.");
@@ -35,38 +39,38 @@ public sealed class UserDatabaseTests(DatabaseFixture db) : IClassFixture<Databa
     [Fact]
     public async Task Me_reads_as_the_signed_in_user()
     {
-        using var client = _factory.CreateClient(TestTokens.User(db.A.UserId));
+        using var client = _factory.CreateClient(TestTokens.User(A.UserId));
 
         var me = await client.GetFromJsonAsync<MeResponse>(new Uri("/me", UriKind.Relative), Ct);
 
         // auth.uid() inside the database session, not the token's sub echoed back.
-        Assert.Equal(db.A.UserId, me!.UserId);
-        Assert.Equal([new ProfileSummary(db.A.ProfileId, db.A.DisplayName)], me.Profiles);
-        Assert.Equal([db.A.HouseholdId], me.HouseholdIds);
+        Assert.Equal(A.UserId, me!.UserId);
+        Assert.Equal([new ProfileSummary(A.ProfileId, A.DisplayName)], me.Profiles);
+        Assert.Equal([A.HouseholdId], me.HouseholdIds);
     }
 
     [Fact]
     public async Task Users_never_see_each_others_profiles_or_households()
     {
-        using var asA = _factory.CreateClient(TestTokens.User(db.A.UserId));
-        using var asB = _factory.CreateClient(TestTokens.User(db.B.UserId));
+        using var asA = _factory.CreateClient(TestTokens.User(A.UserId));
+        using var asB = _factory.CreateClient(TestTokens.User(B.UserId));
 
         var meA = await asA.GetFromJsonAsync<MeResponse>(new Uri("/me", UriKind.Relative), Ct);
         var meB = await asB.GetFromJsonAsync<MeResponse>(new Uri("/me", UriKind.Relative), Ct);
 
-        Assert.DoesNotContain(meA!.Profiles, p => p.Id == db.B.ProfileId);
-        Assert.DoesNotContain(db.B.HouseholdId, meA.HouseholdIds);
-        Assert.DoesNotContain(meB!.Profiles, p => p.Id == db.A.ProfileId);
-        Assert.DoesNotContain(db.A.HouseholdId, meB.HouseholdIds);
+        Assert.DoesNotContain(meA!.Profiles, p => p.Id == B.ProfileId);
+        Assert.DoesNotContain(B.HouseholdId, meA.HouseholdIds);
+        Assert.DoesNotContain(meB!.Profiles, p => p.Id == A.ProfileId);
+        Assert.DoesNotContain(A.HouseholdId, meB.HouseholdIds);
     }
 
     [Fact]
     public async Task Another_users_profile_id_is_not_found()
     {
-        using var asA = _factory.CreateClient(TestTokens.User(db.A.UserId));
+        using var asA = _factory.CreateClient(TestTokens.User(A.UserId));
 
-        var own = await asA.GetAsync(new Uri($"/profiles/{db.A.ProfileId}", UriKind.Relative), Ct);
-        var other = await asA.GetAsync(new Uri($"/profiles/{db.B.ProfileId}", UriKind.Relative), Ct);
+        var own = await asA.GetAsync(new Uri($"/profiles/{A.ProfileId}", UriKind.Relative), Ct);
+        var other = await asA.GetAsync(new Uri($"/profiles/{B.ProfileId}", UriKind.Relative), Ct);
 
         Assert.Equal(HttpStatusCode.OK, own.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, other.StatusCode);
@@ -109,7 +113,7 @@ public sealed class UserDatabaseTests(DatabaseFixture db) : IClassFixture<Databa
     [Fact]
     public async Task The_user_role_does_not_outlive_the_request_on_a_pooled_connection()
     {
-        using (var client = _factory.CreateClient(TestTokens.User(db.A.UserId)))
+        using (var client = _factory.CreateClient(TestTokens.User(A.UserId)))
         {
             Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(new Uri("/me", UriKind.Relative), Ct)).StatusCode);
         }
@@ -122,7 +126,7 @@ public sealed class UserDatabaseTests(DatabaseFixture db) : IClassFixture<Databa
         await using var reader = await command.ExecuteReaderAsync(Ct);
         await reader.ReadAsync(Ct);
 
-        Assert.Equal("health360_api", reader.GetString(0));
+        Assert.Equal(db.ApiRole, reader.GetString(0));
         Assert.Equal("", reader.GetString(1));
     }
 }

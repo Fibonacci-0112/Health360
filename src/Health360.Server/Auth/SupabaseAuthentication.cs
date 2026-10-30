@@ -16,7 +16,7 @@ namespace Health360.Server.Auth;
 /// <list type="number">
 /// <item>is signed by the project's Auth (JWKS; or the legacy HS256 secret, when configured),</item>
 /// <item>has the project's issuer, the <c>authenticated</c> audience and an unexpired <c>exp</c>,</item>
-/// <item>has <c>role = authenticated</c> and a user id in <c>sub</c> (this rejects the anon and service-role keys), and</item>
+/// <item>has <c>role = authenticated</c>, a user id in <c>sub</c> and a session id in <c>session_id</c> (this rejects the anon and service-role keys), and</item>
 /// <item>belongs to a session Auth still accepts (<see cref="SupabaseSessionVerifier"/>).</item>
 /// </list>
 /// </summary>
@@ -88,16 +88,46 @@ public static class SupabaseAuthentication
         jwt.TokenValidationParameters = parameters;
         jwt.Events = new JwtBearerEvents
         {
+            OnMessageReceived = OnMessageReceivedAsync,
             OnTokenValidated = OnTokenValidatedAsync,
             OnChallenge = OnChallengeAsync,
         };
     }
 
+    /// <summary>
+    /// Loads the signing keys before the token is validated, so an Auth outage answers 503 like a
+    /// failed session check, instead of failing as if the token were bad. Once loaded, keys are cached
+    /// and a failed refresh keeps the old ones.
+    /// </summary>
+    private static async Task OnMessageReceivedAsync(MessageReceivedContext context)
+    {
+        if (context.Options.ConfigurationManager is not { } keys
+            || !context.Request.Headers.Authorization.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            await keys.GetConfigurationAsync(context.HttpContext.RequestAborted).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            // The configuration manager wraps every retrieval failure (network, status, bad JSON) in this.
+            context.HttpContext.Items[AuthUnavailableKey] = true;
+            context.Fail("Supabase Auth's signing keys are unavailable.");
+        }
+    }
+
     private static async Task OnTokenValidatedAsync(TokenValidatedContext context)
     {
+        // Auth checks the session only for tokens that name one (session_id), and every token it
+        // issues to a signed-in user does, so a token without one is not a user session.
         if (context.SecurityToken is not JsonWebToken token
             || !token.TryGetPayloadValue<string>("role", out var role) || role != AuthenticatedRole
-            || !Guid.TryParse(token.Subject, out var userId) || userId == Guid.Empty)
+            || !Guid.TryParse(token.Subject, out var userId) || userId == Guid.Empty
+            || !token.TryGetPayloadValue<string>("session_id", out var sessionId)
+            || !Guid.TryParse(sessionId, out var session) || session == Guid.Empty)
         {
             context.Fail("Not a signed-in user's token.");
             return;
