@@ -6,7 +6,7 @@ Status: **Phase 0** (foundation and risk tests). See [docs/phase0.md](docs/phase
 
 - [Implementation plan](docs/PLAN.md): architecture, data model, phased roadmap, risks, tests, running costs.
 - [Feature catalogue](docs/FEATURES.md)
-- [ADR 0002: .NET MAUI, Blazor and ASP.NET Core](docs/adr/0002-dotnet-maui-blazor.md): the current stack. Platforms: Android, Web and Windows.
+- [ADR 0002: .NET MAUI Blazor Hybrid and ASP.NET Core](docs/adr/0002-dotnet-maui-blazor.md): the current stack. Platforms: Android and Windows.
 - [ADR 0001: language and stack](docs/adr/0001-language-and-stack.md) (superseded)
 
 ## Layout

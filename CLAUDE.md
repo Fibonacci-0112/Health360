@@ -4,11 +4,11 @@ Instructions for Claude Code working in the Health360 repository. Keep this file
 
 ## Project goals and current state
 
-Health360 is a household-oriented health and fitness app for nutrition, workouts, body metrics, physiology, and goals. It targets Android, the web, and Windows desktop, with offline logging on Android and Windows. Apple (iOS, macOS) and Linux desktop are out of scope ([ADR 0002](docs/adr/0002-dotnet-maui-blazor.md)). Health and fitness values are sensitive personal data.
+Health360 is a household-oriented health and fitness app for nutrition, workouts, body metrics, physiology, and goals. It targets Android and Windows desktop, with offline logging on both. A web (browser) app, Apple (iOS, macOS) and Linux desktop are out of scope ([ADR 0002](docs/adr/0002-dotnet-maui-blazor.md)). Health and fitness values are sensitive personal data.
 
 The repository is currently in **Phase 0: foundation and risk tests**. The implementation plan describes later phases; do not assume a planned feature is already implemented. Treat the current source, package manifests, migrations, tests, and CI as the facts on the ground. The `notes` table and the `ai-hello` Edge Function are throwaway Phase 0 scaffolding; do not build features on them.
 
-**Stack transition.** ADR 0002 replaces the TypeScript stack (Expo, Tauri, Edge Functions) with .NET: MAUI Blazor Hybrid for Android and Windows, a Blazor Web App, and an ASP.NET Core API (PLAN.md §2.1–2.2). The TypeScript code in `apps/`, `packages/`, `supabase/functions/` and `tools/codegen/` is the Phase 0 prototype, and Phase 0b replaces it. Keep it working and follow the rules below while it exists, but don't add product features to it. `supabase/migrations`, `supabase/tests` and `powersync/` carry over to the .NET stack unchanged.
+**Stack transition.** ADR 0002 replaces the TypeScript stack (Expo, Tauri, Edge Functions) with .NET: MAUI Blazor Hybrid for Android and Windows, and an ASP.NET Core API (PLAN.md §2.1–2.2). The TypeScript code in `apps/`, `packages/`, `supabase/functions/` and `tools/codegen/` is the Phase 0 prototype, and Phase 0b replaces it. Keep it working and follow the rules below while it exists, but don't add product features to it. `supabase/migrations`, `supabase/tests` and `powersync/` carry over to the .NET stack unchanged.
 
 Before significant work, read the relevant parts of:
 
@@ -20,14 +20,14 @@ Before significant work, read the relevant parts of:
 
 ## Stack and repository layout
 
-The target stack is fixed by ADR 0002. **Don't change it, or add Apple or Linux desktop targets, unless the user explicitly asks and the change is recorded as a new ADR.**
+The target stack is fixed by ADR 0002. **Don't change it, or add web, Apple or Linux desktop targets, unless the user explicitly asks and the change is recorded as a new ADR.**
 
 Target (.NET, from Phase 0b; see PLAN.md §2.2 for the layout):
 
 - `Health360.Domain`: pure C# calculations, units and UUIDv7 ids. It replaces `packages/domain`, and the same purity rules apply.
 - `Health360.Contracts`: records and validators for API payloads and Claude's structured output. It replaces `packages/schemas`.
-- `Health360.UI`: a Razor Class Library shared by the MAUI app and the Blazor Web App.
-- `Health360.Maui` (Android, Windows; PowerSync .NET), `Health360.Web` / `Health360.Web.Client` (Blazor Web App, online-first), `Health360.Server` (the ASP.NET Core API, hosted with the web app).
+- `Health360.UI`: a Razor Class Library with the MAUI app's screens.
+- `Health360.Maui` (Android, Windows; PowerSync .NET) and `Health360.Server` (the ASP.NET Core API, its own host).
 - The API replaces Edge Functions. It must validate the Supabase JWT and the signed-in user on every request, and query Postgres as that user so RLS applies. The service-role key is used only for admin jobs.
 
 Current prototype (TypeScript), described below:

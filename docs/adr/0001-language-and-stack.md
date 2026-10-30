@@ -1,6 +1,6 @@
 # ADR 0001: Language and stack
 
-- **Status:** Superseded by [ADR 0002](0002-dotnet-maui-blazor.md) (2026-10-30): .NET MAUI, Blazor and ASP.NET Core, for Android, Web and Windows only. Kept as the record of the original comparison.
+- **Status:** Superseded by [ADR 0002](0002-dotnet-maui-blazor.md) (2026-10-30): .NET MAUI Blazor Hybrid and ASP.NET Core, for Android and Windows only. Kept as the record of the original comparison.
 - **Date:** 2026-10-25
 
 ## Context

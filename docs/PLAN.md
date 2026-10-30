@@ -8,11 +8,11 @@ Health360 is one app for planning and reaching health and fitness goals. It cove
 - [adr/0001-language-and-stack.md](adr/0001-language-and-stack.md): the earlier TypeScript/Expo decision (superseded) and the full language comparison.
 
 ## Decisions
-- **Platforms:** Android and Windows desktop (.NET MAUI), and the web (Blazor). **Apple (iPhone, Mac) and Linux desktop are out of scope** (§2.7).
+- **Platforms:** Android and Windows desktop, both with .NET MAUI. **A web (browser) app, Apple (iPhone, Mac) and Linux desktop are out of scope** (§2.7).
 - **Audience:** a household of 2–4 people first. It is built so it could go public later, so compliance and billing stay light for now.
 - **MVP:** all four core modules: Nutrition with label OCR, Workouts with progression, Body metrics with photos, and Goals with cost planning.
 - **Backend:** Supabase.
-- **Stack:** C#/.NET: .NET MAUI Blazor Hybrid, a Blazor Web App and an ASP.NET Core API, with PowerSync and Supabase ([ADR 0002](adr/0002-dotnet-maui-blazor.md)).
+- **Stack:** C#/.NET: .NET MAUI Blazor Hybrid and an ASP.NET Core API, with PowerSync and Supabase ([ADR 0002](adr/0002-dotnet-maui-blazor.md)).
 - **Units:** metric and imperial, stored as entered (§2.6).
 - **Measured beats estimated:** lab and test values you enter (RMR, DEXA, VO₂max, LTHR, max HR, HR zones) replace formula estimates everywhere they are used, and every derived number shows which inputs it used (§2.8).
 
@@ -25,16 +25,15 @@ Section 1 (the feature catalogue) is in [FEATURES.md](FEATURES.md), and section 
 ### 2.1 Stack
 | Layer | Choice | Why |
 |---|---|---|
-| App | **.NET MAUI Blazor Hybrid** (current .NET LTS) for **Android and Windows**. Screens are Razor components in a shared Razor Class Library (`Health360.UI`) | One UI codebase for phone, desktop and web. Native APIs (camera, SQLite, Health Connect, notifications) through MAUI |
-| Web | **Blazor Web App** on ASP.NET Core, Interactive Auto render mode (server first, then WebAssembly), using the same Razor Class Library. **Online-first** (§2.7); a service worker is registered only for Web Push | Shares one host with the API; fast first paint |
+| App | **.NET MAUI Blazor Hybrid** (current .NET LTS) for **Android and Windows**. Screens are Razor components in a shared Razor Class Library (`Health360.UI`) | One UI codebase for phone and desktop. Native APIs (camera, SQLite, Health Connect, notifications) through MAUI |
 | Desktop | MAUI on **WinUI 3**, unpackaged, with a **Velopack** installer and auto-updater | Native Windows app with no wrapper; a signing certificate stays optional; file drag-and-drop for lab PDFs |
 | Offline sync | **PowerSync .NET SDK** (Sync Streams, SQLite) in the MAUI app. Its client schema mirrors the Postgres tables | Offline logging on Android and Windows. Uploads go through the API or the Supabase C# client with the signed-in user's JWT, so database permissions still apply. Beta, so gated in Phase 0b (§4) |
 | Backend | **Supabase**: Postgres + RLS, Auth (emailed 6-digit code in the MVP; Google later), Storage, pg_cron | Fits relational health data, per-user and per-household security, and private files |
-| Server | **ASP.NET Core** minimal API (`Health360.Server`), hosted in the same app as the Blazor Web App. Validates the Supabase JWT (JWKS) and the signed-in user on every request and queries Postgres as that user | One C# domain library on client and server; the service role is used only for admin jobs |
-| UI | A Razor component library and a Blazor chart library that both work in Hybrid and WebAssembly, chosen in Phase 0b; virtualized lists (`Virtualize`) | Works on all three targets from one codebase |
-| State | PowerSync live queries for local data (MAUI); typed `HttpClient` calls to the API for online-only work (search, AI) and for the web app; scoped services for in-session UI state such as the active workout | Each tool does one job |
+| Server | **ASP.NET Core** minimal API (`Health360.Server`), deployed as its own small host. Validates the Supabase JWT (JWKS) and the signed-in user on every request and queries Postgres as that user | One C# domain library on client and server; the service role is used only for admin jobs |
+| UI | A Razor component library and a Blazor chart library that work in Blazor Hybrid, chosen in Phase 0b; virtualized lists (`Virtualize`) | Works on Android and Windows from one codebase |
+| State | PowerSync live queries for local data (MAUI); typed `HttpClient` calls to the API for online-only work (search, AI); scoped services for in-session UI state such as the active workout | Each tool does one job |
 | Forms and validation | C# records + **FluentValidation** in `Health360.Contracts` | The same contracts check forms, API payloads and the JSON Claude returns; Claude's JSON Schemas are generated from the same types |
-| Device | `BarcodeScanning.Native.Maui` (barcodes on Android and Windows), a WebAssembly barcode reader through JS interop on the web, MAUI MediaPicker, on-device resize and EXIF stripping, local notifications on Android and Windows, biometric app lock | |
+| Device | `BarcodeScanning.Native.Maui` (barcodes on Android and Windows), MAUI MediaPicker, on-device resize and EXIF stripping, local notifications on Android and Windows, biometric app lock | |
 | Health (P3) | Health Connect through **Shiny.Health** | Reads directly on the device |
 | AI | The official `Anthropic` NuGet package, in the API only | The API key never reaches a client |
 | Ops | Sentry .NET with PII scrubbing; GitHub Actions (Linux runners, plus a Windows runner for the Windows build); Supabase Pro (backups) or a nightly `pg_dump` | Health values must never land in error reports |
@@ -56,14 +55,12 @@ Health360/
     Health360.Maui/         MAUI Blazor Hybrid (Android, Windows): PowerSync database, upload
                             connector with permanent-error quarantine, attachments, platform
                             services (health, camera, files, secure storage, notifications)
-    Health360.Web/          ASP.NET Core host: Blazor Web App + the API
-    Health360.Web.Client/   WebAssembly render-mode project
-    Health360.Server/       API endpoints, auth, Claude client, quotas, jobs: food-search,
+    Health360.Server/       ASP.NET Core host for the API: endpoints, auth, Claude client, quotas, jobs: food-search,
                             barcode-lookup, ai-label-ocr, ai-meal-plan, ai-workout-program,
                             ai-weekly-checkin, ai-meal-photo, ai-lab-parse, ai-receipt,
                             household-invite, account-delete, data-export
   tests/                    xUnit + FsCheck (domain), bUnit (components), API integration,
-                            two-client sync, Playwright (web)
+                            two-client sync
   supabase/
     migrations/             SQL schema, RLS, helper functions, triggers, storage policies
     tests/                  pgTAP RLS + storage tests, RLS-coverage test
@@ -73,7 +70,7 @@ Health360/
   tools/drift/              schema-drift check (Postgres vs the PowerSync client schema and contracts)
   evals/                    label-ocr/ lab-parse/ (incl. DEXA, RMR, metabolic tests) meal-plan/
                             workout-program/ (fixtures + runners)
-  e2e/                      playwright/ maestro/ windows/
+  e2e/                      maestro/ windows/
   docs/                     PLAN.md FEATURES.md adr/
 ```
 The repository still holds the Phase 0 TypeScript prototype (`apps/`, `packages/`, `supabase/functions/`, `tools/codegen/`, `e2e/sync/`). Phase 0b (§3) replaces it with this layout; `supabase/migrations`, `supabase/tests` and `powersync/` carry over unchanged.
@@ -121,7 +118,7 @@ The repository still holds the Phase 0 TypeScript prototype (`apps/`, `packages/
 - Delete triggers or functions remove the matching Storage files.
 
 ### 2.4 AI layer
-- **Where it runs:** the ASP.NET Core API only. `ANTHROPIC_API_KEY` is kept in the host's secret store and never reaches the MAUI app or the browser.
+- **Where it runs:** the ASP.NET Core API only. `ANTHROPIC_API_KEY` is kept in the host's secret store and never reaches the MAUI app.
 - **Model:** `claude-opus-5-5` ($4 / $20 per million input/output tokens), configurable per function. You can trial cheaper models (`claude-sonnet-5-5`, `claude-haiku-5-5`) for high-volume OCR. Switch only if the eval set shows no accuracy drop.
 - **Effort:**
   - `low` for extraction (labels, labs, receipts).
@@ -206,15 +203,8 @@ The repository still holds the Phase 0 TypeScript prototype (`apps/`, `packages/
 |---|---|---|---|
 | **Android** | .NET MAUI (Blazor Hybrid) | **Yes**: PowerSync .NET + SQLite; logging survives the app being killed | Health Connect (P3), camera and barcodes, local notifications, Google Play internal testing or a direct APK |
 | **Windows** | .NET MAUI on WinUI 3 | **Yes**: same as Android | Velopack installer with auto-update; drag-and-drop for lab PDFs; signing optional for family use |
-| **Web** | Blazor Web App on ASP.NET Core | **Online-first** | Any modern browser (tested on Chromium and Firefox). Label photos and barcodes through the browser camera, server Web Push for reminders |
 
-**Not supported:** iPhone, iPad and Mac apps, HealthKit and Apple Watch data, Sign in with Apple, Linux desktop, and Safari/WebKit testing. The web app may open in other browsers but isn't tested there. Adding any of these needs a new ADR.
-
-**The web app while it is online-first**
-- Every feature in FEATURES.md is available on the web while online. What the web lacks is offline logging: on Android and Windows, entries are written locally and sync later.
-- When the connection drops, the web app shows an offline banner, blocks new writes with a clear message (never a silent failure), and keeps unsaved form input on the page until it can be submitted.
-- Reminders reach web users through server Web Push. The rest timer alerts only while the page is open.
-- **Upgrade path (Phase 4, optional):** render the logging screens in WebAssembly mode and use PowerSync's GA JavaScript web SDK through JS interop, so the web app can queue writes offline like the native apps.
+**Not supported:** a web (browser) app, iPhone, iPad and Mac apps, HealthKit and Apple Watch data, Sign in with Apple, and Linux desktop. Adding any of these needs a new ADR.
 
 ### 2.8 Physiology profile: measured values first, estimates otherwise
 You can enter values from lab tests, field tests or a device. Anything you haven't entered is estimated where a published method exists (BMD, VAT, FTP, threshold pace, LT1 and per-stage test values are not), and the app always shows which one it is using.
@@ -300,12 +290,10 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
 - `Health360.Domain/Units` and UUIDv7 ids ported, with the same exact factors and FsCheck property tests. It comes first because every module depends on it.
 - `Health360.Server`: Supabase JWT and signed-in-user validation on every endpoint, queries as the signed-in user, and one test Claude call with structured output validated against `Health360.Contracts`.
 - MAUI app on Android and Windows: tab navigation, login by emailed code, onboarding with per-type unit preferences and locale defaults, PowerSync .NET with the existing streams, and the `failed_uploads` quarantine.
-- Blazor Web App: the same screens from `Health360.UI`, online, with an offline banner.
-- A throwaway `notes` table on **all three targets**: the Android app, Chrome and Firefox, and the Windows app.
+- A throwaway `notes` table on **both targets**: the Android app and the Windows app.
 
 **Exit criteria**
 - Android and Windows: sign in, create a note offline, reconnect, and see it on the other device within about 5 seconds; the note survives killing the app while offline.
-- Web: sign in, create a note online, see it on Android and Windows; going offline shows the banner and no write is reported as saved.
 - User B never receives A's note; pgTAP and a two-client sync test both prove this.
 - An API request with the anon key, an expired token or another user's ids is rejected or sees no data (integration tests).
 - CI is green.
@@ -344,9 +332,9 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
 5. **Ship to the household**
    - Desktop: the Windows app as a Velopack installer (signing optional), plus the auto-updater.
    - Phones: Android through the Play internal testing track (or a direct APK).
-   - Web: the ASP.NET Core host (Blazor Web App + API) deployed, plus server Web Push for reminders.
+   - Server: the ASP.NET Core API deployed. Reminders use local notifications on Android and Windows.
    - Also: consent screens, export, account deletion, Sentry with scrubbing, and backups.
-   - **Phase 1 exit:** 2–3 household members use it daily for 2 weeks on phone, web and desktop, with zero lost entries, zero leaks between users, and every suite green.
+   - **Phase 1 exit:** 2–3 household members use it daily for 2 weeks on phone and desktop, with zero lost entries, zero leaks between users, and every suite green.
 
 ### Phase 2: AI depth
 **Deliverables**
@@ -390,7 +378,6 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
 - Pantry, Instacart and Kroger, CSV import, ICS feed.
 - RevenueCat and Stripe billing; GDPR and FTC Health Breach Notification Rule review.
 - OFF attribution and share-alike compliance, SQLCipher local database encryption, and an accessibility audit.
-- Optional: offline logging in the web app (WebAssembly render mode + PowerSync's JavaScript web SDK, §2.7).
 
 ---
 
@@ -404,8 +391,7 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
 | .NET MAUI quality issues on Android or Windows | Pinned .NET and MAUI workload versions, upgrades in their own PRs, smoke tests on both platforms on every main-branch build |
 | The ASP.NET Core API is a new attack surface between clients and the database | JWT validated against Supabase's keys and the signed-in user checked on every request; queries run as that user so RLS applies; the service role only in admin jobs; rate limits and quotas; negative tests for anon keys, expired tokens and other users' ids |
 | Health Connect needs a Play health-permissions declaration and a privacy policy | Dev builds from day 1; sign Phase 3 off on a physical Android phone |
-| The web app is online-first, so a dropped connection could lose an entry | Offline banner, writes blocked with a clear message instead of failing silently, form input kept until submitted; Android and Windows for offline logging; optional web offline upgrade (§2.7) |
-| No over-the-air hot-fixes | Small releases; Windows auto-update; Play internal track for fast Android rollout; web fixes ship by redeploying the host |
+| No over-the-air hot-fixes | Small releases; Windows auto-update; Play internal track for fast Android rollout; API fixes ship by redeploying the API |
 | OCR accuracy (EU vs US label formats, glare, curved packs) | Framing guide, empty-when-unreadable fields, arithmetic checks, required confirmation, original image kept for re-processing, eval gate on every prompt or model change |
 | Meal-photo calories are underestimated | Range plus estimate badge, never the default entry method, prompt to weigh food |
 | Progress-photo privacy | Private bucket keyed by profile id, signed URLs, EXIF stripped on device, not shared by default, consent required before any AI sees a photo |
@@ -441,21 +427,19 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
 4. **API:** integration tests (`WebApplicationFactory`) against local Supabase with recorded Claude responses (no live calls in CI). Contract tests; auth tests (anon key, expired token, another user's ids); validator and repair-loop tests with deliberately bad outputs.
 5. **AI evals (`evals/`, nightly or manual):** label OCR per-field accuracy, lab-parse accuracy (including DEXA, RMR and metabolic-test reports), meal-plan tolerance pass rate, workout-program constraint violations. No regression allowed on prompt or model changes.
 6. **Components:** bUnit for the set logger, food entry, OCR confirm screen, goal wizard and physiology entry form.
-7. **Web E2E:** Playwright for .NET against the Blazor Web App with seeded local Supabase, on Chromium and Firefox:
+7. **Mobile E2E:** Maestro on the Android emulator, nightly:
    - Log food.
    - Build a template and log sets.
    - Add weight → create a goal → check the cost estimate.
    - Enter a lab RMR and max HR → check the calorie target and zones change.
-   - Go offline → check the offline banner and that no write is reported as saved.
-8. **Mobile E2E:** Maestro on the Android emulator, nightly. The same flows plus airplane mode (offline log, then sync) and killing the app mid-workout.
-9. **Desktop:** Windows smoke tests (Appium with the Windows driver, or FlaUI) on a Windows runner: install, sign in, offline write then sync, auto-update.
-10. **Manual device checklist each phase:**
+   - Airplane mode: log offline, then sync; kill the app mid-workout and lose nothing.
+8. **Desktop:** Windows smoke tests (Appium with the Windows driver, or FlaUI) on a Windows runner: install, sign in, offline write then sync, auto-update.
+9. **Manual device checklist each phase:**
     - Android: Health Connect permissions, barcode and label capture in poor light, notifications.
     - A Windows PC: installer and auto-update, offline logging, drag-and-drop of a lab PDF, notifications.
-    - The web app in Chrome and Firefox: Web Push reminder, camera capture for labels, offline banner.
-11. **CI order:**
-    - Every PR: `dotnet build` with analyzers, `dotnet format --verify-no-changes`, unit and component tests, API tests, pgTAP, drift check, sync tests, Playwright.
-    - Main branch: Android (AAB/APK) and Windows (Velopack) builds, Windows smoke tests, web host deploy.
+10. **CI order:**
+    - Every PR: `dotnet build` with analyzers, `dotnet format --verify-no-changes`, unit and component tests, API tests, pgTAP, drift check, sync tests.
+    - Main branch: Android (AAB/APK) and Windows (Velopack) builds, Windows smoke tests, API deploy.
     - Nightly: Maestro and AI evals.
 
 ## 6. Running costs (list prices checked Oct 2026; USD)
@@ -466,14 +450,13 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
 | **Supabase** | Postgres, Auth, Storage, pg_cron | $0. Paused after 1 week inactive, **no backups**, 500 MB database, 1 GB files | **Pro $25/mo**: never paused, daily backups (7 days), 8 GB database, 100 GB files, 250 GB egress, 2M function calls, and $10 compute credit covering one Micro instance. Each extra project ~$10/mo compute. Small compute $15, Medium $60. PITR $100/mo (not needed) |
 | **PowerSync** | Offline sync | $0. 2 GB synced/mo, 50 concurrent clients, 500 MB hosted; **deactivated after about 1–2 weeks unused** | **Pro $49/mo**: 30 GB synced, 1,000 clients. Or **self-host the free Open Edition** on a ~$5–10/mo VPS (you run it yourself) |
 | **Claude API** (`claude-opus-5-5`) | OCR, meal plans, programs, coach | none | $4 / $20 per million input/output tokens, cache reads $0.20/M, Batches 50% off (see 6.2) |
-| **ASP.NET Core host** | The Blazor Web App and the API (one app) | Runs locally while building | A small always-on container or VPS, **~$5–15/mo**. Blazor's server mode keeps a live connection per user, so pick a host that doesn't scale to zero |
+| **ASP.NET Core host** | The API | Runs locally while building | A small always-on container or VPS, **~$5–15/mo** |
 | **Google Play** | Android distribution | none | **$25 one-time** |
 | **Windows code signing** | No SmartScreen warning on install | skip it for family use (click through the warning) | Azure Artifact Signing Basic **$9.99/mo** (optional) |
 | Login emails | Emailed sign-in codes (Supabase's built-in email is rate-limited and meant for testing) | Free tier of a transactional email service | AWS SES ~$0.10 per 1,000 emails |
 | Sentry | Error reports | Developer plan: $0 | Team ~$26/mo (public launch only) |
 | USDA FoodData Central, Open Food Facts | Food data | $0 (API key, rate limits) | — |
 | GitHub Actions | CI and the Android and Windows builds | 2,000 private-repo minutes/mo; Linux runners for most jobs | Windows runner minutes count 2× (Windows build and smoke tests, main branch only) |
-| Web Push | Reminders in the web app | $0 (VAPID keys; sent from the API) | — |
 | Domain | `health360.<tld>` | — | ~$10–20/yr |
 | Terra (wearables) | Garmin, Oura, WHOOP | — | **$499/mo, so skipped.** Most wearables already sync into Health Connect, which the app reads for free. Open Wearables (MIT) is the free self-hosted fallback |
 
