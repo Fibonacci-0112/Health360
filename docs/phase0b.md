@@ -7,7 +7,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 | Deliverable | State |
 |---|---|
 | Solution layout (§2.2) and CI: build, format and analyzers, tests | **Scaffolded.** Projects compile, with placeholder tests only |
-| `Health360.Domain` units and UUIDv7 ids, with FsCheck property tests | Not started (port `packages/domain/src/units` and `src/ids`) |
+| `Health360.Domain` units and UUIDv7 ids, with FsCheck property tests | **Done.** `Units/` and `Ids/UuidV7` port `packages/domain`, with the same factors and property tests (FsCheck) |
 | `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | Not started. Only an unauthenticated `/health` endpoint exists |
 | MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | Not started. The app shows one placeholder page |
 | Throwaway `notes` table on Android and Windows | Not started |
@@ -21,6 +21,15 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 - `src/Health360.Domain/BannedSymbols.txt`: the banned-API analyzer fails the build on file, network, console or environment access, and on reading the clock or ambient randomness (`DateTime.UtcNow`, `Guid.NewGuid`, `Random.Shared`, ...). Pass a `TimeProvider` or a random source in instead. `tests/Health360.Domain.Tests/PurityTests.cs` also fails if Domain gains a package or project reference.
 - `Health360.Maui` targets `net10.0-android` on every OS and adds `net10.0-windows10.0.19041.0` on Windows. It is an unpackaged WinUI 3 app (`WindowsPackageType=None`). The Android manifest sets `allowBackup="false"` so the local health database and its pending uploads are not copied to cloud backups.
 - `Health360.UI` holds the router, layout and pages. The MAUI app's `BlazorWebView` renders `Health360.UI.Routes`.
+
+## Units and ids
+
+`src/Health360.Domain/Units` ports `packages/domain/src/units` and `Ids/UuidV7.cs` ports `src/ids`. The TypeScript copy stays the prototype's source until the prototype is retired; keep the two identical.
+
+- Units are `Unit` singletons (`Unit.Pound`, `Unit.Parse("lb")`) carrying the database code. Unit preferences are enums, and `UnitPrefOptions` maps them to the codes stored in `profiles.unit_prefs` (the same codes as `UNIT_PREF_OPTIONS`).
+- Conversions evaluate `value × a.num × b.den / (a.den × b.num)` in the same order as the TypeScript, so both stacks produce the same doubles. This was checked bit for bit against the TypeScript on about 38,700 inputs (conversions, rounding, stone/feet display, pace, protein ratio, UUIDv7 bytes, locale defaults).
+- `UuidV7.Create` takes the clock (a `TimeProvider` or Unix milliseconds) and a `RandomFill`; the app passes `RandomNumberGenerator.Fill`. It returns a `Guid`, whose string form and `CompareTo` both sort by creation time.
+- Deviations from the TypeScript: units, quantity kinds and units of the wrong dimension are checked at run time (`ArgumentException`), not by the type system; stone/pound and feet/inch display also reject NaN and infinity; `UuidV7.TimestampOf` rejects ids that aren't version 7.
 
 ## Running it
 
@@ -57,4 +66,6 @@ On Windows, install `maui-windows` (same `--version`) and build with `-f net10.0
 - `Directory.Build.props` is read before the project file, so a condition there on a property the project sets (such as `UseMaui`) is always false. Put such settings in `Directory.Build.targets`.
 - A `workloadVersion` in `global.json` makes every build fail ("Workload version ... was not found") unless that workload set is installed, including builds that use no workloads. That's why the version is pinned on `dotnet workload install` instead.
 - The Android SDK installer (`InstallAndroidDependencies`) fails with "CommonUtilities.Helpers.UserName must have a valid value" when `USER` isn't set, as in some containers. Set `USER` before running it.
+- JavaScript's `Number.EPSILON` (2^-52) is not C#'s `double.Epsilon` (the smallest subnormal). `Rounding.RoundTo` spells out 2^-52 for its half-up nudge.
+- FsCheck 3's C# API (`FsCheck.Fluent`) has `Gen.Zip` for two generators only; nest it for three.
 - `using` directives needed only in `#if DEBUG` code must sit inside the same `#if`. Otherwise the Release build fails on IDE0005 (unnecessary using), because warnings are errors.

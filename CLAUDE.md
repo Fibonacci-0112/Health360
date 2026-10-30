@@ -122,7 +122,7 @@ Two-client sync tests require local Supabase and PowerSync services plus the env
 
 ### Health calculations, units, and numerical correctness
 
-- Use `packages/domain/src/units` as the single source of truth for unit conversion factors. Do not duplicate conversion constants in UI code, API clients, prompts, or migrations.
+- Use `packages/domain/src/units` (prototype) and `src/Health360.Domain/Units` (.NET) as the only sources of unit conversion factors. While both exist, keep them identical: same factors, same evaluation order, same results. Do not duplicate conversion constants in UI code, API clients, prompts, or migrations.
 - Preserve both the value and unit as entered and the canonical value used for math and comparisons. The database trigger recomputes canonical values server-side; maintain parity with the client logic.
 - Avoid converting through a rounded display value. Round for presentation, not as an intermediate calculation step.
 - Money is integer minor units plus a currency code (`amount_minor bigint` / `*_minor` + `currency`, per PLAN.md), never floating point.
