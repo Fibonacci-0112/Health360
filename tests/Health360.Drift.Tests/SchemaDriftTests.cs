@@ -86,7 +86,7 @@ public class SchemaDriftTests
     {
         var problems = Check(Published().Where(c => c.Column != "amount"));
 
-        Assert.Equal(["things.amount: on the client but not in Postgres"], problems);
+        Assert.Equal(["things.amount: on the client but not published by Postgres"], problems);
     }
 
     [Fact]
@@ -124,6 +124,23 @@ public class SchemaDriftTests
         };
 
         Assert.Equal(["things.count: bigint is listed as Boolean in ServerColumnTypes"], Check(Published(), codecs));
+    }
+
+    [Fact]
+    public void A_codec_for_a_column_that_is_not_synced()
+    {
+        var codecs = new Dictionary<string, IReadOnlyDictionary<string, ServerColumnType>>
+        {
+            ["things"] = new Dictionary<string, ServerColumnType>(Codecs["things"])
+            {
+                ["removed"] = ServerColumnType.Json,
+                ["id"] = ServerColumnType.Boolean,
+            },
+        };
+
+        Assert.Equal(
+            ["things.removed: in ServerColumnTypes but not a synced column", "things.id: in ServerColumnTypes but not a synced column"],
+            Check(Published(), codecs));
     }
 
     [Fact]

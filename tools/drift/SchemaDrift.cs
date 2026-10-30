@@ -13,7 +13,7 @@ public sealed record ServerColumn(string Table, string Column, string DataType);
 /// <item>the client has the table, with the same columns (PowerSync supplies <c>id</c> itself);</item>
 /// <item>each column's SQLite type matches its Postgres type;</item>
 /// <item>every jsonb and boolean column is in <see cref="AppSchema.ServerColumnTypes"/>, so uploads
-/// convert it back, and nothing else is.</item>
+/// convert it back, and no other column (or <c>id</c>) is.</item>
 /// </list>
 /// And that every synced client table, and every uploadable table, is published.
 /// </summary>
@@ -115,7 +115,13 @@ public static class SchemaDrift
 
             foreach (var column in mine.Columns.Keys.Where(c => !columns.ContainsKey(c)))
             {
-                problems.Add($"{table}.{column}: on the client but not in Postgres");
+                problems.Add($"{table}.{column}: on the client but not published by Postgres");
+            }
+
+            // Uploads apply every listed codec, so an entry for a column that isn't synced is stale.
+            foreach (var column in codecs?.Keys.Where(c => c == "id" || !columns.ContainsKey(c)) ?? [])
+            {
+                problems.Add($"{table}.{column}: in ServerColumnTypes but not a synced column");
             }
         }
 

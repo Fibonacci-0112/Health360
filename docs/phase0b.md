@@ -105,8 +105,8 @@ Tests: `tests/Health360.LocalDb.Tests` runs the upload queue and the account bin
 
 `tools/drift` (`Health360.Drift`) compares `AppSchema` with the tables a migrated database publishes to PowerSync (the `powersync` publication), and exits non-zero on drift. It ports `tools/codegen/check-drift.mjs`, with the same Postgres-to-SQLite type map:
 
-- every published table is in `AppSchema` with the same columns and storage types, and has an `id` (PowerSync supplies it on the client);
-- every jsonb and boolean column is in `ServerColumnTypes` with the right codec, and no other column is (a stale entry would turn text into JSON on upload);
+- every published table is in `AppSchema` with the same columns and storage types, and has an `id` (PowerSync supplies it on the client). Columns left out of a publication column list count as not synced;
+- every jsonb and boolean column is in `ServerColumnTypes` with the right codec, and no other column is, including columns that are no longer synced and `id` (uploads apply every entry, so a stale one would turn text into JSON);
 - every synced client table and every `UploadableTables` entry is published, and every `ServerColumnTypes` table is a synced client table. `failed_uploads` (local only) is skipped.
 
 ```sh
@@ -114,7 +114,7 @@ HEALTH360_DRIFT_DATABASE='Host=127.0.0.1;Port=54322;Username=postgres;Password=p
   dotnet run --project tools/drift
 ```
 
-Exit codes: 0 matches, 1 drift (or an empty publication: migrations not applied), 2 no connection string or no connection. The connection string is never printed. `tests/Health360.Drift.Tests` covers the comparison; CI's database job runs the tool against `supabase db start`. It works the same against `tools/db/test-local.sh`'s kind of database (the shim plus the migrations on a plain Postgres 16).
+Exit codes: 0 matches, 1 drift (or an empty publication: migrations not applied), 2 no connection string, a malformed one, or no connection. The connection string is never printed. `tests/Health360.Drift.Tests` covers the comparison; CI's database job runs the tool against `supabase db start`. It works the same against `tools/db/test-local.sh`'s kind of database (the shim plus the migrations on a plain Postgres 16).
 
 Not covered yet: the C# contracts (PLAN.md §2.2 lists them for `tools/drift`), since no contract mirrors a synced row yet.
 

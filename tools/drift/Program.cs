@@ -26,7 +26,8 @@ try
         select c.table_name, c.column_name, c.data_type
         from information_schema.columns c
         join pg_publication_tables p on p.schemaname = c.table_schema and p.tablename = c.table_name
-        where p.pubname = 'powersync' and c.table_schema = 'public'
+        -- attnames honours a publication column list: only the columns PowerSync actually receives.
+        where p.pubname = 'powersync' and c.table_schema = 'public' and c.column_name::name = any (p.attnames)
         order by c.table_name, c.ordinal_position
         """,
         connection);
@@ -40,6 +41,12 @@ catch (NpgsqlException e)
 {
     // The message only; the connection string (and its password) is never printed.
     Console.Error.WriteLine($"Could not read the schema: {e.Message}");
+    return 2;
+}
+catch (ArgumentException)
+{
+    // A malformed connection string. Npgsql's message can quote part of it, so it isn't printed.
+    Console.Error.WriteLine($"{Variable} is not a valid Npgsql connection string.");
     return 2;
 }
 
