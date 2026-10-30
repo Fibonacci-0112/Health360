@@ -121,9 +121,9 @@ Tests: `tests/Health360.UI.Tests` runs the Auth client, the session and `AuthSer
 
 The throwaway `notes` table (PLAN.md §3) ports the prototype's `NotesTest`; don't build features on it. The table, its RLS and the `me` stream already existed, so this is client code only:
 
-- `Health360.Contracts/Notes`: `NoteInput` and its validator (ports `noteInputSchema`: 1 to 2000 characters after trimming, the table's constraint).
+- `Health360.Contracts/Notes`: `NoteInput` and its validator (ports `noteInputSchema`: 1 to 2000 characters after trimming, the table's constraint). Characters are counted as Postgres's `char_length` counts them (code points), so an emoji counts once; zod and an HTML `maxlength` count UTF-16 units, which would refuse notes the table accepts.
 - `Health360.LocalDb/Notes`: `AddAsync` writes the note with a UUIDv7 id made on the device, the signed-in profile, today's date in the device's time zone (`TimeProvider.GetLocalNow`) and `created_at`/`updated_at`; it uploads through the usual queue. `Watch` lists every note the device has, newest first. It doesn't filter by profile, so a row the streams shouldn't have delivered would show up rather than be hidden.
-- `Health360.UI/Components/NotesTest.razor`, on the Today tab: the text box (disabled Add for a blank note), the list, and its loading, empty and error states. A failed save keeps the text and says so.
+- `Health360.UI/Components/NotesTest.razor`, on the Today tab: the text box (Add disabled for a blank or too-long note), the list, and its loading, empty and error states. A failed save keeps the text and says so; text typed while a save is in flight is kept. If the watched query fails, the error shows even over an earlier list, and only the exception type is logged.
 
 Tests: `NotesTests` in `Health360.LocalDb.Tests` (id, local date across midnight UTC, trimming, the queued PUT, empty notes write nothing, order) and in `Health360.UI.Tests` (adding, the disabled Add, a synced note appearing). Not yet done: running it on Android and Windows against a real stack, and the exit criteria's two-device, kill-while-offline and two-client isolation checks.
 

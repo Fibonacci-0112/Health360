@@ -18,6 +18,16 @@ public class NoteInputTests
         Assert.False(Validator.Validate(new NoteInput(new string('a', 2001))).IsValid);
     }
 
+    [Fact]
+    public void CountsCharactersAsPostgresDoes()
+    {
+        // 2000 emoji are 4000 UTF-16 units but 2000 characters to char_length.
+        var emoji = string.Concat(Enumerable.Repeat("\U0001F600", 2000));
+        Assert.Equal(2000, NoteInputValidator.Length(emoji));
+        Assert.True(Validator.Validate(new NoteInput(emoji)).IsValid);
+        Assert.False(Validator.Validate(new NoteInput(emoji + "a")).IsValid);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(" \t\n ")]

@@ -48,6 +48,19 @@ public sealed class NotesTests : AppTestContext
     }
 
     [Fact]
+    public async Task ATooLongNoteSaysSoAndCannotBeAdded()
+    {
+        var cut = await TodayAsync();
+
+        await TypeAsync(cut, "#note-body", new string('a', 2001));
+
+        Assert.Contains("at most 2000 characters", cut.Find("#note-too-long").TextContent, StringComparison.Ordinal);
+        Assert.True(cut.Find(".note-form button").HasAttribute("disabled"));
+        await SubmitAsync(cut);
+        Assert.Empty(await Notes.ListAsync(App.Database.Db));
+    }
+
+    [Fact]
     public async Task NotesFromAnotherDeviceAppearAsTheySync()
     {
         var cut = await TodayAsync();

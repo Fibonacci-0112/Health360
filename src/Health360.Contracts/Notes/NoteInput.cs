@@ -16,7 +16,17 @@ public sealed class NoteInputValidator : AbstractValidator<NoteInput>
 
     public NoteInputValidator()
     {
-        RuleFor(x => x.Body).Must(body => body?.Trim().Length is >= 1 and <= MaxLength)
+        RuleFor(x => x.Body).Must(body => body is not null && Length(body) is >= 1 and <= MaxLength)
             .WithMessage($"'Body' must be 1 to {MaxLength} characters.");
+    }
+
+    /// <summary>
+    /// Characters after trimming, counted as Postgres's <c>char_length</c> counts them (code points), so an
+    /// emoji is one character, not the two UTF-16 units <see cref="string.Length"/> counts.
+    /// </summary>
+    public static int Length(string body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        return body.Trim().EnumerateRunes().Count();
     }
 }

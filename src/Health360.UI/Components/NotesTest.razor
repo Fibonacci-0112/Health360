@@ -4,6 +4,7 @@
 @inject PowerSyncDatabase Db
 @inject ProfileService Profiles
 @inject TimeProvider Clock
+@inject ILogger<NotesTest> Logger
 
 @* Phase 0b sync test (PLAN.md §3): a note written here, even offline, should reach the user's other
    devices within about 5 seconds of both being online. Throwaway; ports the prototype's NotesTest. *@
@@ -11,19 +12,29 @@
     <h2 id="notes-title">Sync test</h2>
     <p class="muted">Notes written here, even offline, should reach your other devices.</p>
     <form class="note-form" @onsubmit="AddAsync">
-        <input id="note-body" aria-label="New note" placeholder="Write a note" maxlength="@NoteInputValidator.MaxLength"
+        @* No maxlength: browsers count UTF-16 units, the table counts characters (NoteInputValidator.Length). *@
+        <input id="note-body" aria-label="New note" placeholder="Write a note" aria-describedby="@(TooLong ? "note-too-long" : null)"
                @bind="body" @bind:event="oninput" />
-        <button type="submit" class="primary" disabled="@(busy || string.IsNullOrWhiteSpace(body) || Profiles.Profile is null)"
+        <button type="submit" class="primary" disabled="@(busy || string.IsNullOrWhiteSpace(body) || TooLong || Profiles.Profile is null)"
                 aria-busy="@(busy ? "true" : "false")">Add</button>
     </form>
+    @if (TooLong)
+    {
+        <p class="error" id="note-too-long">A note can be at most @NoteInputValidator.MaxLength characters.</p>
+    }
     @if (error is not null)
     {
         <p class="error" role="alert">@error</p>
     }
 
-    @if (notes is null)
+    @if (watchFailed)
     {
-        <p class="muted">@(watchFailed ? "Couldn't read notes on this device." : "Loading notes")</p>
+        @* Shown even after earlier results, so a list that stopped updating isn't taken as current. *@
+        <p class="error" role="alert">Couldn't read notes on this device. Leave this tab and come back to try again.</p>
+    }
+    else if (notes is null)
+    {
+        <p class="muted">Loading notes</p>
     }
     else if (notes.Length == 0)
     {
@@ -45,6 +56,8 @@
 
 @code {
     private static readonly NoteInputValidator Validator = new();
+    private static readonly Action<ILogger, string, Exception?> LogWatchFailed =
+        LoggerMessage.Define<string>(LogLevel.Error, default, "Watching notes failed ({Error})");
     private readonly CancellationTokenSource stop = new();
     private NoteRow[]? notes;
     private bool watchFailed;
@@ -74,6 +87,8 @@
         }
         catch (Exception failure) when (failure is not ObjectDisposedException)
         {
+            // The type only: an exception's message can quote SQL parameters, which here are note text.
+            LogWatchFailed(Logger, failure.GetType().Name, null);
             watchFailed = true;
             Refresh();
         }
@@ -92,7 +107,11 @@
         try
         {
             await Notes.AddAsync(Db, profile.Id, note, Clock);
-            body = "";
+            // Keep anything typed while the save was in flight.
+            if (body == note.Body)
+            {
+                body = "";
+            }
         }
         catch (Exception failure) when (failure is not OperationCanceledException)
         {
@@ -104,6 +123,8 @@
             busy = false;
         }
     }
+
+    private bool TooLong => NoteInputValidator.Length(body) > NoteInputValidator.MaxLength;
 
     private void Refresh() => _ = InvokeAsync(StateHasChanged);
 
