@@ -1,3 +1,4 @@
+using Health360.Server.Ai;
 using Health360.Server.Auth;
 using Health360.Server.Data;
 using Microsoft.AspNetCore.Hosting;
@@ -12,6 +13,11 @@ namespace Health360.Server.Tests.Support;
 public sealed class ServerFactory : WebApplicationFactory<Program>
 {
     public FakeSupabaseAuth Auth { get; } = new();
+
+    public FakeAnthropic Anthropic { get; } = new();
+
+    /// <summary>The Anthropic API key; null leaves the API without one.</summary>
+    public string? AnthropicApiKey { get; init; } = "test-anthropic-key";
 
     /// <summary>The legacy HS256 secret; null for a project that signs with asymmetric keys only.</summary>
     public string? JwtSecret { get; init; } = TestTokens.JwtSecret;
@@ -28,10 +34,13 @@ public sealed class ServerFactory : WebApplicationFactory<Program>
         builder.UseSetting("Supabase:ApiKey", TestTokens.ApiKey);
         builder.UseSetting("Supabase:JwtSecret", JwtSecret ?? "");
         builder.UseSetting("ConnectionStrings:Database", ConnectionString);
+        builder.UseSetting("Anthropic:ApiKey", AnthropicApiKey ?? "");
+        builder.UseSetting("Anthropic:MaxRetries", "0");
 
         builder.ConfigureTestServices(services =>
         {
             services.AddHttpClient(SupabaseSessionVerifier.HttpClientName).ConfigurePrimaryHttpMessageHandler(Auth.CreateHandler);
+            services.AddHttpClient(StructuredClaude.HttpClientName).ConfigurePrimaryHttpMessageHandler(Anthropic.CreateHandler);
             if (Database is not null)
             {
                 services.Replace(ServiceDescriptor.Singleton(Database));

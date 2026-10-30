@@ -8,7 +8,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 |---|---|
 | Solution layout (§2.2) and CI: build, format and analyzers, tests | **Scaffolded.** Projects compile, with placeholder tests only |
 | `Health360.Domain` units and UUIDv7 ids, with FsCheck property tests | **Done.** `Units/` and `Ids/UuidV7` port `packages/domain`, with the same factors and property tests (FsCheck) |
-| `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | **Auth and user-scoped queries done** (see [API authentication](#api-authentication)), with `/me` and `/profiles/{id}` as the first endpoints. The test Claude call is not started |
+| `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | **Auth and user-scoped queries done** (see [API authentication](#api-authentication)), with `/me` and `/profiles/{id}` as the first endpoints. **Test Claude call started:** `POST /ai/hello` (see [Claude calls](#claude-calls)), tested against recorded responses only; not yet run against the live API |
 | MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | Not started. The app shows one placeholder page |
 | Throwaway `notes` table on Android and Windows | Not started |
 | `tools/drift` against the PowerSync .NET schema | Not started (`tools/codegen/check-drift.mjs` still checks the TypeScript client schema) |
@@ -69,6 +69,18 @@ HEALTH360_TEST_DATABASE="Host=127.0.0.1;Port=54322;Username=postgres;Password=po
 
 Not yet tested against a real Auth server: the `/auth/v1/user` check and the JWKS format are tested with a fake that follows Supabase's documented responses.
 
+## Claude calls
+
+`POST /ai/hello` ports the prototype's `ai-hello` Edge Function: it validates the request, computes the body weight in kg with `Health360.Domain`, and asks Claude for a greeting and a wellness tip. It is the template for later AI endpoints (PLAN.md §2.4):
+
+- `Health360.Contracts/Ai` holds the records, their FluentValidation validators and `AiJsonContext`. `StructuredOutputSchema.For` generates the JSON schema sent as `output_config.format` from the same type the output is parsed into (`JsonSchemaExporter`, every object closed with `additionalProperties: false`).
+- `Health360.Server/Ai/StructuredClaude` makes the call with the official `Anthropic` package: `claude-opus-5-5`, effort set per request (`low` here), no sampling parameters, and server-side refusal fallback (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`). It checks `stop_reason` for `refusal` and `max_tokens` before parsing, then parses strictly (missing, null or unknown properties fail) and runs the validator. Failures go back to the model once, as a fresh request that lists the errors; after that the endpoint answers 502 `invalid_output`. Errors are logged by exception type and status only, never with prompts or output.
+- Outcomes: 200; 400 for an invalid request (no model call); 422 `refused`; 502 `truncated`, `invalid_output` or `upstream_error`; 429 `rate_limited`; 503 `not_configured` when no key is set (the API still starts). Callers without a valid user token get 401 before any of this.
+
+Configuration: `Anthropic:ApiKey` (or `ANTHROPIC_API_KEY`; keep it in user secrets or the host's secret store), `Anthropic:Model`, `Anthropic:MaxRetries` (SDK retries, default 2) and `Anthropic:Timeout`.
+
+Tests: `AiHelloTests` runs the real SDK against `FakeAnthropic`, an HTTP handler that records requests and replays canned Messages API responses, so CI makes no live calls. `AiHelloContractTests` pins the generated schema and the validators. Not yet done: per-profile quotas and `ai_generations` logging, prompt caching, and a manual run against the live API.
+
 ## Running it
 
 ```sh
@@ -111,4 +123,6 @@ On Windows, install `maui-windows` (same `--version`) and build with `-f net10.0
 - JwtBearer fetches signing keys with its own `HttpClient`, which tests can't redirect. The API builds its configuration manager on the named client `supabase-auth` instead, and tests point that client at a fake Auth. Give the factory a new handler each time (`ConfigurePrimaryHttpMessageHandler`), because the HTTP client factory disposes the handlers it is given.
 - With a fallback authorization policy, unknown routes answer 401 instead of 404 to callers without a token, so probing for endpoints reveals nothing.
 - Don't test startup failures through `WebApplicationFactory`. When the app throws at startup, its deferred host races the app's own disposal, so the test sometimes sees `ObjectDisposedException` instead of the real error. `StartupValidationTests` runs the same registrations and `IStartupValidator` directly.
+- The `Anthropic` C# SDK (13.x) sends `ApiKey` as `Authorization: Bearer`, not `x-api-key` (its XML docs say so); tests assert that header.
+- `ToJsonString()` escapes `'` as `\u0027`, so tests that look for text inside a recorded request body read the string value instead of searching the serialized JSON.
 - Supabase Auth checks the session (`auth.sessions`) only for tokens that carry a `session_id` claim. Tokens it issues to signed-in users always do, so the API rejects tokens without one rather than relying on the user lookup alone.
