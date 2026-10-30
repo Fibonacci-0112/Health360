@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The app's offline database: the PowerSync client schema, the upload connector and the
+    failed_uploads quarantine (ports packages/local-db and packages/api's writer). A plain library,
+    not part of the MAUI project, so it builds and is tested on every OS without a workload; the
+    MAUI app supplies the platform's SQLite factory and the signed-in session.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PowerSync.Common" />
+    <!-- PowerSync.Common 1.0.0 brings in 2.1.10, which has a high-severity advisory (GHSA-2m69-gcr7-jv3q). -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+</Project>

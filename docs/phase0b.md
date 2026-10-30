@@ -9,7 +9,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 | Solution layout (§2.2) and CI: build, format and analyzers, tests | **Scaffolded.** Projects compile, with placeholder tests only |
 | `Health360.Domain` units and UUIDv7 ids, with FsCheck property tests | **Done.** `Units/` and `Ids/UuidV7` port `packages/domain`, with the same factors and property tests (FsCheck) |
 | `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | **Auth and user-scoped queries done** (see [API authentication](#api-authentication)), with `/me` and `/profiles/{id}` as the first endpoints. **Test Claude call started:** `POST /ai/hello` (see [Claude calls](#claude-calls)), tested against recorded responses only; not yet run against the live API |
-| MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | Not started. The app shows one placeholder page |
+| MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | **Local database started** (see [Local database](#local-database)): PowerSync .NET schema, upload connector, `failed_uploads` quarantine and account binding in `Health360.LocalDb`, registered in the MAUI app. Not yet connected to a server: that needs sign-in, which isn't started. Tabs and onboarding not started; the app shows one placeholder page |
 | Throwaway `notes` table on Android and Windows | Not started |
 | `tools/drift` against the PowerSync .NET schema | Not started (`tools/codegen/check-drift.mjs` still checks the TypeScript client schema) |
 
@@ -83,6 +83,22 @@ Configuration: `Anthropic:ApiKey` (or `ANTHROPIC_API_KEY`; keep it in user secre
 
 Tests: `AiHelloTests` runs the real SDK against `FakeAnthropic`, an HTTP handler that records requests and replays canned Messages API responses, so CI makes no live calls. `AiHelloContractTests` pins the generated schema and the validators. Not yet done: per-profile daily quotas and `ai_generations` usage logging, prompt caching, and a manual run against the live API.
 
+## Local database
+
+`src/Health360.LocalDb` ports `packages/local-db` (schema and upload queue) and the upload writer in `packages/api`. It is a plain `net10.0` library, not part of the MAUI project, so it builds and is tested in `Health360.Core.slnf` on Linux; the MAUI app only supplies the platform SQLite (`src/Health360.Maui/Data`). Keep it identical to the TypeScript while both exist.
+
+- **SDK:** `PowerSync.Common` and `PowerSync.Maui` 1.0.0, pinned together in `Directory.Packages.props`. The README still calls the SDK beta, so the gate in PLAN.md §3 stands.
+- `AppSchema` mirrors `schema.ts` table for table: the same columns and types, `failed_uploads` local only, and the same `ServerColumnTypes`, `InsertOnlyTables` and `UploadableTables`.
+- `Uploads.UploadPendingAsync` is `uploadPending`: each op reaches the server, is quarantined in `failed_uploads` (permanent errors: SQLSTATE 22/23/42, PGRST1xx/2xx), or aborts the upload so PowerSync retries it. Quarantine entries are keyed by the op's queue position, so a retried transaction replaces its entry instead of adding one, and an op that later succeeds clears it. An update that changes nothing sends nothing. `RetryFailedUploadAsync` and `DiscardFailedUploadAsync` are the Settings actions.
+- `PostgrestWriter` uploads through PostgREST with the user's access token and the publishable key, so RLS checks every write. PUT is an upsert (insert-only tables ignore duplicates); PATCH asks for the row back and quarantines an update that matched no row (`PGRST116`); DELETE checks whether a row RLS hid from the delete is still there (`42501`). An error without a code (a gateway page) and a missing session are retried, never quarantined.
+- Sync and uploads use the session's token only when it belongs to the database's owner (`ISupabaseSession` returns the user id with the token). If someone else has signed in, nothing syncs or uploads until `ConnectAsync` has rebound and cleared the database, so the previous user's queued writes are never sent as the new user. A 2xx reply that isn't JSON (a captive portal) is retried, not quarantined.
+- `SupabaseConnector` gives PowerSync the access token and the PowerSync URL, and logs only the op, table and error code of a quarantined write (no ids, no row data).
+- `LocalDatabase` binds the database to the user who owns it. `ConnectAsync(userId)` clears it first when another user (or nobody known) owned it, including pending uploads and `failed_uploads`; `DisconnectAsync` keeps everything for the same user's return; `ClearAsync` is for a sign-out the user asked for. The owner is kept in MAUI `Preferences` (`PreferencesOwnerStore`). Connections retry every 2 s, as in the prototype.
+
+Not done yet: sign-in (it provides `ISupabaseSession` and `SyncEndpoints`, which the MAUI app doesn't register yet, so nothing connects), the `notes` screens, the two-device and kill-while-offline checks of the gate, and a drift check of `AppSchema` against the migrations (`tools/drift`).
+
+Tests: `tests/Health360.LocalDb.Tests` runs the upload queue and the account binding against a real PowerSync database (the SDK's native core and SQLite, in a temporary file) with a fake writer, and `PostgrestWriter` against a fake PostgREST. No server is involved.
+
 ## Running it
 
 ```sh
@@ -116,6 +132,9 @@ On Windows, install `maui-windows` (same `--version`) and build with `-f net10.0
 
 ## Findings
 
+- `PowerSync.Common` 1.0.0 depends on `SQLitePCLRaw.bundle_e_sqlite3` 2.1.10, which has a high-severity advisory (GHSA-2m69-gcr7-jv3q). NuGet's audit warning fails the restore because warnings are errors. `Health360.LocalDb` references 2.1.14 directly.
+- The SDK parses each queued write's data (`CrudEntry.OpData`) with Newtonsoft, which turns any text that looks like an ISO date-time into a `DateTime`: `created_at` (or a note that reads like a timestamp) loses its text and UTC offset. `Uploads` reads the op's JSON from `ps_crud` instead; `SendsTimestampsExactlyAsStored` guards it.
+- `PowerSync.Common` ships its native core for Linux, macOS and Windows desktop as content files, so a plain `net10.0` test project can open a real PowerSync database on the Linux CI runner.
 - `Directory.Build.props` is read before the project file, so a condition there on a property the project sets (such as `UseMaui`) is always false. Put such settings in `Directory.Build.targets`.
 - A `workloadVersion` in `global.json` makes every build fail ("Workload version ... was not found") unless that workload set is installed, including builds that use no workloads. That's why the version is pinned on `dotnet workload install` instead.
 - The Android SDK installer (`InstallAndroidDependencies`) fails with "CommonUtilities.Helpers.UserName must have a valid value" when `USER` isn't set, as in some containers. Set `USER` before running it.
