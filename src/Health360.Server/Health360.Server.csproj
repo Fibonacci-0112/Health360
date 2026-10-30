@@ -6,6 +6,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Health360.Contracts\Health360.Contracts.csproj" />
     <ProjectReference Include="..\Health360.Domain\Health360.Domain.csproj" />
   </ItemGroup>

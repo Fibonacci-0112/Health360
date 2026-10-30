@@ -117,6 +117,16 @@ jobs:
         run: pnpm drift:check
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      # The API's database tests: its login role, and RLS as the signed-in user, on Supabase's own Postgres.
+      - name: API queries as the signed-in user
+        run: dotnet test tests/Health360.Server.Tests -c Release -p:ContinuousIntegrationBuild=true --filter Category=Database
+        env:
+          DOTNET_NOLOGO: '1'
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+          HEALTH360_TEST_DATABASE: Host=127.0.0.1;Port=54322;Username=postgres;Password=postgres;Database=postgres
 
   sync:
     name: Two-client sync (Supabase + PowerSync)
