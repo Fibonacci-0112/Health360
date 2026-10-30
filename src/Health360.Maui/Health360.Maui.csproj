@@ -17,6 +17,11 @@
     <ApplicationId>com.health360.app</ApplicationId>
     <ApplicationDisplayVersion>0.1</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
+    <!--
+      The Windows targets set PackageVersion from ApplicationDisplayVersion; Android leaves the 1.0.0 default.
+      NuGet needs one value across target frameworks ("Unable to read project information" in Visual Studio).
+    -->
+    <Version>$(ApplicationDisplayVersion)</Version>
 
     <!-- Unpackaged WinUI 3 app; the installer and auto-update come from Velopack (PLAN.md §2.1). -->
     <WindowsPackageType>None</WindowsPackageType>
