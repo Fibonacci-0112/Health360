@@ -1,0 +1,18 @@
+<Project>
+  <!-- Settings shared by every .NET project. Package versions live in Directory.Packages.props. -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- CS1591: public members without XML docs. Docs are written where they help, not everywhere. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <InvariantGlobalization Condition="'$(UseMaui)' != 'true'">true</InvariantGlobalization>
+    <!-- Lock files, like pnpm's frozen lockfile. MAUI is left out: its restore graph differs by OS. -->
+    <RestorePackagesWithLockFile Condition="'$(UseMaui)' != 'true'">true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true' And '$(UseMaui)' != 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
+</Project>

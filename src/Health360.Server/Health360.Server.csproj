@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- ASP.NET Core API: replaces the Supabase Edge Functions. Its own host; never shipped to clients. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Health360.Contracts\Health360.Contracts.csproj" />
+    <ProjectReference Include="..\Health360.Domain\Health360.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

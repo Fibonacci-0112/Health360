@@ -2,7 +2,7 @@
 
 An all-in-one app for planning and reaching health and fitness goals: nutrition with label OCR, workouts and progression, body metrics and progress photos, a physiology profile (lab RMR, DEXA, VO₂max, LTHR, max HR and HR zones, or estimates when you don't have them), aerobic/anaerobic and fat/carb estimates for workouts, goals with cost planning, and later labs, supplements, mental and cognitive tracking, and AI meal plans and workouts.
 
-Status: **Phase 0** (foundation and risk tests). See [docs/phase0.md](docs/phase0.md) for what's done, what the tests found, and how to run it.
+Status: **Phase 0b** (.NET foundation) has started: the .NET solution is scaffolded ([docs/phase0b.md](docs/phase0b.md)). The Phase 0 TypeScript prototype is still in place; see [docs/phase0.md](docs/phase0.md) for what it proved, what the tests found, and how to run it.
 
 - [Implementation plan](docs/PLAN.md): architecture, data model, phased roadmap, risks, tests, running costs.
 - [Feature catalogue](docs/FEATURES.md)
@@ -11,10 +11,17 @@ Status: **Phase 0** (foundation and risk tests). See [docs/phase0.md](docs/phase
 
 ## Layout
 
-This is the **Phase 0 TypeScript prototype**. [ADR 0002](docs/adr/0002-dotnet-maui-blazor.md) replaces it with a .NET solution in Phase 0b ([PLAN.md §2.2](docs/PLAN.md)); the Supabase migrations, pgTAP tests and PowerSync config carry over.
+The repository holds the new **.NET solution** (Phase 0b, [ADR 0002](docs/adr/0002-dotnet-maui-blazor.md), [PLAN.md §2.2](docs/PLAN.md)) next to the **Phase 0 TypeScript prototype** it replaces. The Supabase migrations, pgTAP tests and PowerSync config carry over.
 
 | Path | What it is |
 |---|---|
+| `Health360.slnx` | The .NET solution. `Health360.Core.slnf` is everything except the MAUI app (builds without MAUI workloads) |
+| `src/Health360.Domain` | Pure C# domain logic (units, ids, calculations); no I/O, enforced by `BannedSymbols.txt` |
+| `src/Health360.Contracts` | Records and validators for API payloads and Claude's structured output |
+| `src/Health360.UI` | Razor Class Library with the app's screens |
+| `src/Health360.Maui` | MAUI Blazor Hybrid app for Android and Windows |
+| `src/Health360.Server` | ASP.NET Core API (replaces Edge Functions) |
+| `tests/` | xUnit and bUnit tests for the .NET projects |
 | `apps/app` | Expo app: Android and web (prototype) |
 | `apps/desktop` | Tauri 2 shell around the web build (prototype; desktop is Windows only, through MAUI) |
 | `packages/domain` | Deterministic health math (units first), shared with Edge Functions |
@@ -27,6 +34,17 @@ This is the **Phase 0 TypeScript prototype**. [ADR 0002](docs/adr/0002-dotnet-ma
 | `tools` | Codegen for Edge Functions, schema drift check, local DB test runner |
 
 ## Quick start
+
+.NET (SDK version pinned in `global.json`):
+
+```sh
+dotnet build Health360.Core.slnf
+dotnet test Health360.Core.slnf
+```
+
+The MAUI app also needs the `maui-android` (any OS) or `maui-windows` (Windows) workload; see [docs/phase0b.md](docs/phase0b.md).
+
+TypeScript prototype:
 
 ```sh
 pnpm install

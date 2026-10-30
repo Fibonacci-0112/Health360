@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Health360.Domain\Health360.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
