@@ -131,6 +131,22 @@ public sealed class AiHelloTests
     }
 
     [Fact]
+    public async Task Never_logs_a_property_name_the_model_made_up()
+    {
+        const string Secret = "do_not_log_this_name";
+        var output = $$"""{"greeting":"Hi","tip":"Walk.","{{Secret}}":1}""";
+        await using var factory = new ServerFactory();
+        factory.Anthropic.Reply(output).Reply(output);
+        using var client = factory.CreateClient(TestTokens.User(UserA));
+
+        using var response = await client.PostAsJsonAsync("/ai/hello", new { weight = 80, weightUnit = "kg" }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Contains(factory.Logs.Messages, m => m.Contains("failed $:Json", StringComparison.Ordinal));
+        Assert.DoesNotContain(factory.Logs.Messages, m => m.Contains(Secret, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Logs_refusals()
     {
         await using var factory = new ServerFactory();

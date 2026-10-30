@@ -153,7 +153,8 @@ public sealed partial class StructuredClaude(
         }
         catch (JsonException exception)
         {
-            return (null, [new(exception.Path ?? "$", "Json", $"The answer is not valid JSON for the schema: {exception.Message}")]);
+            // The path can hold a property name the model made up, so it goes to the model only.
+            return (null, [new("$", "Json", $"The answer is not valid JSON for the schema: {exception.Message}")]);
         }
 
         if (value is null)

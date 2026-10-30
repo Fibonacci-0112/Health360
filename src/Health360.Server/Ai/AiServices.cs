@@ -12,7 +12,9 @@ public static class AiServices
     {
         services.AddOptions<AnthropicOptions>()
             .Bind(configuration.GetSection(AnthropicOptions.Section))
-            .PostConfigure(options => options.ApiKey ??= configuration["ANTHROPIC_API_KEY"]);
+            .PostConfigure(options => options.ApiKey ??= configuration["ANTHROPIC_API_KEY"])
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
 
         // StructuredClaude is a singleton and keeps one HttpClient, so the factory never rotates its
         // handler. The handler recycles its own connections instead, so DNS changes are picked up.
