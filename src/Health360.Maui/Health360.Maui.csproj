@@ -26,6 +26,22 @@
     <TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
   </PropertyGroup>
 
+  <!--
+    Where the app signs in and syncs. Override with -p: or environment variables of the same name
+    (docs/phase0b.md, "Running the app"). The defaults are the local stack; the Android emulator reaches
+    it at 10.0.2.2 (AppEndpoints). The key is the publishable (anon) key, never the service-role key.
+  -->
+  <PropertyGroup>
+    <Health360SupabaseUrl Condition="'$(Health360SupabaseUrl)' == ''">http://127.0.0.1:54321</Health360SupabaseUrl>
+    <Health360PowerSyncUrl Condition="'$(Health360PowerSyncUrl)' == ''">http://127.0.0.1:8080</Health360PowerSyncUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="Health360.SupabaseUrl" Value="$(Health360SupabaseUrl)" />
+    <AssemblyMetadata Include="Health360.SupabaseApiKey" Value="$(Health360SupabaseApiKey)" />
+    <AssemblyMetadata Include="Health360.PowerSyncUrl" Value="$(Health360PowerSyncUrl)" />
+  </ItemGroup>
+
   <ItemGroup>
     <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#512BD4" />
     <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128" />

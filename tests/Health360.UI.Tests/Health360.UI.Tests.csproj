@@ -1,7 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
 
+  <PropertyGroup>
+    <!-- Onboarding's locale defaults (currency, time zone) need ICU culture data, as in the MAUI app. -->
+    <UseCultureData>true</UseCultureData>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="bunit" />
+    <PackageReference Include="FsCheck" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
 
   <ItemGroup>

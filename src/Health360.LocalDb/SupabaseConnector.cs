@@ -22,7 +22,18 @@ public sealed partial class SupabaseConnector(
         var token = await OwnerSession.TokenAsync(session, owner, CancellationToken.None).ConfigureAwait(false);
         // No session, or another user's: PowerSync stays disconnected until the app connects again
         // after sign-in, which rebinds the database first.
-        return token is null ? null : new PowerSyncCredentials(endpoints.PowerSyncUrl.ToString(), token, null);
+        return token is null ? null : new PowerSyncCredentials(Endpoint(endpoints.PowerSyncUrl), token, null);
+    }
+
+    /// <summary>
+    /// The PowerSync URL without a trailing slash. The SDK appends <c>/sync/stream</c>, and <see cref="Uri"/>
+    /// always ends a bare host with <c>/</c>, so passing it as is requests <c>//sync/stream</c>, which the
+    /// service answers with 404: sync then retries forever and never connects.
+    /// </summary>
+    public static string Endpoint(Uri powerSyncUrl)
+    {
+        ArgumentNullException.ThrowIfNull(powerSyncUrl);
+        return powerSyncUrl.ToString().TrimEnd('/');
     }
 
     public Task UploadData(IPowerSyncDatabase database) =>

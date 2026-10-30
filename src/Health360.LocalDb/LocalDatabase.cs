@@ -34,20 +34,29 @@ public sealed class LocalDatabase(PowerSyncDatabase db, IDatabaseOwnerStore owne
 
     public PowerSyncDatabase Db => db;
 
-    /// <summary>Binds the database to <paramref name="userId"/>, then starts syncing as them.</summary>
+    /// <summary>
+    /// Binds the database to <paramref name="userId"/>, then starts syncing as them. Returns once sync has
+    /// started, not once it has connected: PowerSync's <c>Connect</c> waits for the first successful
+    /// connection, which offline may be never (it keeps retrying on its own). Waiting for it here would
+    /// hold the gate, so a sign-out or account switch would wait for the network.
+    /// </summary>
     public async Task ConnectAsync(string userId)
     {
         ArgumentException.ThrowIfNullOrEmpty(userId);
+        Task connecting;
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
             await BindAsync(userId).ConfigureAwait(false);
-            await db.Connect(connector, new PowerSyncConnectionOptions(retryDelayMs: RetryDelayMs)).ConfigureAwait(false);
+            connecting = db.Connect(connector, new PowerSyncConnectionOptions(retryDelayMs: RetryDelayMs));
         }
         finally
         {
             gate.Release();
         }
+
+        // Observe a failure to start so it isn't an unobserved task exception; sync status reports it.
+        _ = connecting.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
     }
 
     /// <summary>

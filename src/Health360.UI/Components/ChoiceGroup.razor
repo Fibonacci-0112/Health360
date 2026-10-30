@@ -1,0 +1,35 @@
+@* A radio group of chips. With AllowNone, choosing the selected option again clears it (optional fields). *@
+<div class="choices" role="radiogroup" aria-labelledby="@LabelledBy">
+    @foreach (var option in Options)
+    {
+        var selected = option == Value;
+        <button type="button" role="radio" aria-checked="@(selected ? "true" : "false")"
+                class="chip @(selected ? "on" : "")" @onclick="() => Choose(option)">
+            @(Labels.TryGetValue(option, out var label) ? label : option)
+        </button>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<string> Options { get; set; } = [];
+
+    [Parameter]
+    public IReadOnlyDictionary<string, string> Labels { get; set; } = new Dictionary<string, string>();
+
+    [Parameter]
+    public string? Value { get; set; }
+
+    [Parameter]
+    public EventCallback<string?> ValueChanged { get; set; }
+
+    [Parameter]
+    public bool AllowNone { get; set; }
+
+    /// <summary>The id of the element that names the group.</summary>
+    [Parameter, EditorRequired]
+    public string LabelledBy { get; set; } = "";
+
+    private Task Choose(string option) =>
+        ValueChanged.InvokeAsync(AllowNone && option == Value ? null : option);
+}

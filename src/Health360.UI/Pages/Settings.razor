@@ -1,0 +1,162 @@
+@page "/settings"
+@implements IDisposable
+@inject ProfileService Profiles
+@inject SyncState Sync
+@inject AuthService Auth
+
+<div class="page narrow">
+    <h1>Settings</h1>
+    <SyncBadge />
+
+    <h2>Units</h2>
+    <UnitPrefsEditor IdPrefix="settings" Value="Profiles.UnitPrefs" ValueChanged="SaveUnitsAsync" />
+    @if (unitsError is not null)
+    {
+        <p class="error" role="alert">@unitsError</p>
+    }
+
+    @if (Sync.Failed.Count > 0)
+    {
+        <h2>Changes the server rejected</h2>
+        <p class="muted">These didn't sync and won't retry on their own. Retry once the cause is fixed, or discard them.</p>
+        @if (retryNotice is not null)
+        {
+            <p class="muted" aria-live="polite">@retryNotice</p>
+        }
+        <ul class="failed-list">
+            @foreach (var failed in Sync.Failed)
+            {
+                <li class="failed">
+                    <span class="strong">@failed.Op @failed.TableName · @(failed.ErrorCode ?? "error")</span>
+                    <span class="muted">@failed.ErrorMessage</span>
+                    <div class="inline">
+                        <button type="button" class="secondary" disabled="@busy" @onclick="() => RetryAsync(failed.Id)">Retry</button>
+                        <button type="button" class="danger" disabled="@busy" @onclick="() => DiscardAsync(failed.Id)">Discard</button>
+                    </div>
+                </li>
+            }
+        </ul>
+    }
+
+    <h2>Account</h2>
+    @if (Auth.Email is not null)
+    {
+        <p class="muted">Signed in as @Auth.Email.</p>
+    }
+    <p class="muted">Signing out removes this account's data from this device.</p>
+    @if (unsynced is null)
+    {
+        <button type="button" class="secondary" disabled="@busy" @onclick="() => SignOutAsync(false)">Sign out</button>
+    }
+    else
+    {
+        <div class="confirm" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+            <p class="strong" id="confirm-title">Sign out and delete unsynced changes?</p>
+            <p id="confirm-body">
+                This device has @Describe(unsynced). Signing out deletes them. To keep them, stay signed in until they sync.
+            </p>
+            <div class="inline">
+                <button type="button" class="danger" disabled="@busy" @onclick="() => SignOutAsync(true)">Sign out</button>
+                <button type="button" class="secondary" disabled="@busy" @onclick="() => unsynced = null">Stay signed in</button>
+            </div>
+        </div>
+    }
+    @if (signOutError is not null)
+    {
+        <p class="error" role="alert">@signOutError</p>
+    }
+</div>
+
+@code {
+    private UnsyncedChanges? unsynced;
+    private string? retryNotice;
+    private string? unitsError;
+    private string? signOutError;
+    private bool busy;
+
+    protected override void OnInitialized()
+    {
+        Profiles.Changed += Refresh;
+        Sync.Changed += Refresh;
+    }
+
+    private async Task SaveUnitsAsync(UnitPrefs prefs)
+    {
+        unitsError = null;
+        try
+        {
+            await Profiles.SetUnitPrefsAsync(prefs);
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            unitsError = "Couldn't save your units on this device. Please try again.";
+        }
+    }
+
+    private async Task RetryAsync(string id)
+    {
+        busy = true;
+        try
+        {
+            retryNotice = await Sync.RetryAsync(id) switch
+            {
+                RetryResult.Offline => "Retry needs a connection to the server. Try again when you're online.",
+                RetryResult.Rejected => "The server refused it again. The reason is updated below; discard it if it can't be fixed.",
+                _ => null,
+            };
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task DiscardAsync(string id)
+    {
+        busy = true;
+        try
+        {
+            await Sync.DiscardAsync(id);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task SignOutAsync(bool discardUnsynced)
+    {
+        busy = true;
+        signOutError = null;
+        try
+        {
+            // Null once signed out: the layout then shows sign-in.
+            unsynced = await Auth.SignOutAsync(discardUnsynced);
+        }
+        catch (AuthException)
+        {
+            signOutError = "Couldn't sign out. Check your connection and try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private static string Describe(UnsyncedChanges changes) =>
+        string.Join(" and ", new[]
+        {
+            changes.Pending > 0 ? $"{Count(changes.Pending)} not synced yet" : null,
+            changes.Rejected > 0 ? $"{Count(changes.Rejected)} the server rejected" : null,
+        }.Where(part => part is not null));
+
+    private static string Count(long n) => n == 1 ? "1 change" : $"{n} changes";
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Profiles.Changed -= Refresh;
+        Sync.Changed -= Refresh;
+    }
+}

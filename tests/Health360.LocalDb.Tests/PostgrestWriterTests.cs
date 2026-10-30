@@ -175,6 +175,14 @@ public class PostgrestWriterTests
         Assert.False(Uploads.IsPermanentError(error.Code));
     }
 
+    [Theory]
+    [InlineData("http://127.0.0.1:8080", "http://127.0.0.1:8080")]
+    [InlineData("http://127.0.0.1:8080/", "http://127.0.0.1:8080")]
+    [InlineData("https://abc.powersync.journeyapps.com/", "https://abc.powersync.journeyapps.com")]
+    [InlineData("https://proxy.example.test/powersync/", "https://proxy.example.test/powersync")]
+    public void TheEndpointHasNoTrailingSlash(string url, string endpoint) =>
+        Assert.Equal(endpoint, SupabaseConnector.Endpoint(new Uri(url)));
+
     [Fact]
     public async Task ConnectorGivesPowerSyncTheUsersToken()
     {
@@ -189,7 +197,8 @@ public class PostgrestWriterTests
             NullLogger<SupabaseConnector>.Instance);
 
         var credentials = await connector.FetchCredentials();
-        Assert.Equal(("https://sync.example.test/", "user-token"), (credentials!.Endpoint, credentials.Token));
+        // No trailing slash: the SDK appends "/sync/stream", and "//sync/stream" is a 404.
+        Assert.Equal(("https://sync.example.test", "user-token"), (credentials!.Endpoint, credentials.Token));
 
         session.Token = new SessionToken("user-b", "b-token");
         Assert.Null(await connector.FetchCredentials());

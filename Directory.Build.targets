@@ -4,7 +4,8 @@
     (Directory.Build.props is read before them).
   -->
   <PropertyGroup Condition="'$(UseMaui)' != 'true'">
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Projects that test locale behaviour (the MAUI app keeps culture data) set UseCultureData. -->
+    <InvariantGlobalization Condition="'$(UseCultureData)' != 'true'">true</InvariantGlobalization>
     <!-- Lock files, like pnpm's frozen lockfile. MAUI is left out: its restore graph differs by OS. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>

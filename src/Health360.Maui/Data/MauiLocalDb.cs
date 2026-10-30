@@ -11,8 +11,8 @@ public static class MauiLocalDb
 
     /// <summary>
     /// Registers the offline database with the platform's SQLite and the PowerSync core extension.
-    /// Sign-in (Phase 0b, next step) registers <see cref="SyncEndpoints"/> and <see cref="ISupabaseSession"/>;
-    /// until then nothing resolves <see cref="LocalDatabase"/>.
+    /// <see cref="SyncEndpoints"/> come from the build (<see cref="AppEndpoints"/>) and
+    /// <see cref="ISupabaseSession"/> from sign-in (<c>Health360.UI</c>'s <c>SessionManager</c>).
     /// </summary>
     public static IServiceCollection AddMauiLocalDatabase(this IServiceCollection services)
     {

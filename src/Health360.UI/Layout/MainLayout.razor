@@ -1,7 +1,77 @@
 @inherits LayoutComponentBase
+@implements IDisposable
+@inject AuthService Auth
+@inject ProfileService Profiles
+@inject SyncState Sync
 
-<div class="page">
-    <main class="content">
-        @Body
-    </main>
-</div>
+@* Sign-in, then onboarding, then the tabs (the prototype's _layout.tsx guards). Deep links stay put:
+   the route renders once the gates pass. *@
+@if (startupFailed)
+{
+    <Waiting Label="Couldn't open this device's data. Restart the app; if it keeps happening, reinstall it." />
+}
+else if (Auth.Status == AuthStatus.Loading)
+{
+    <Waiting Label="Loading" />
+}
+else if (Auth.Status == AuthStatus.SignedOut)
+{
+    <SignIn />
+}
+else if (!Profiles.Loaded)
+{
+    <Waiting Label="Loading" />
+}
+else if (Profiles.Profile is null)
+{
+    @* First sign-in on this device: the profile row the server created hasn't synced yet. *@
+    <Waiting Label="Setting up this device"
+             Detail="@(Sync.Connected ? null : "Waiting for a connection to the server.")" />
+}
+else if (Profiles.Profile.OnboardedAt is null)
+{
+    <Onboarding />
+}
+else
+{
+    <div class="shell">
+        <header class="top-bar">
+            <span class="brand">Health360</span>
+            <SyncBadge />
+            <NavLink class="top-link" href="settings">Settings</NavLink>
+        </header>
+        <main class="content">
+            @Body
+        </main>
+        <TabBar />
+    </div>
+}
+
+@code {
+    private bool startupFailed;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Auth.Changed += Refresh;
+        Profiles.Changed += Refresh;
+        Sync.Changed += Refresh;
+        try
+        {
+            await Auth.InitializeAsync();
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            // Restoring the session binds the local database; if that fails nothing below can work.
+            startupFailed = true;
+        }
+    }
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Auth.Changed -= Refresh;
+        Profiles.Changed -= Refresh;
+        Sync.Changed -= Refresh;
+    }
+}
