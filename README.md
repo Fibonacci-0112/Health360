@@ -40,7 +40,7 @@ The repository holds the new **.NET solution** (Phase 0b, [ADR 0002](docs/adr/00
 
 ```sh
 dotnet build Health360.Core.slnf
-dotnet test Health360.Core.slnf
+dotnet test --solution Health360.Core.slnf
 ```
 
 The MAUI app also needs the `maui-android` (any OS) or `maui-windows` (Windows) workload; see [docs/phase0b.md](docs/phase0b.md).
