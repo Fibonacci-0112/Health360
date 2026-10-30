@@ -120,6 +120,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+      - name: PowerSync .NET schema (AppSchema) matches Postgres
+        run: dotnet run --project tools/drift -c Release -p:ContinuousIntegrationBuild=true
+        env:
+          DOTNET_NOLOGO: '1'
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+          HEALTH360_DRIFT_DATABASE: Host=127.0.0.1;Port=54322;Username=postgres;Password=postgres;Database=postgres
       # The API's database tests: its login role, and RLS as the signed-in user, on Supabase's own Postgres.
       - name: API queries as the signed-in user
         run: dotnet test tests/Health360.Server.Tests -c Release -p:ContinuousIntegrationBuild=true --filter Category=Database

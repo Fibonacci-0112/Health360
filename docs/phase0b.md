@@ -11,7 +11,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 | `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | **Auth and user-scoped queries done** (see [API authentication](#api-authentication)), with `/me` and `/profiles/{id}` as the first endpoints. **Test Claude call started:** `POST /ai/hello` (see [Claude calls](#claude-calls)), tested against recorded responses only; not yet run against the live API |
 | MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | **Built; Android build verified, not yet run on a device** (see [MAUI app](#maui-app)): sign-in by emailed code, onboarding with every unit type and locale defaults, the five tabs and Settings (units, rejected writes with retry and discard, sign-out), syncing over the existing `me`, `household` and `reference` streams. The app's services (everything below the BlazorWebView) were run against `supabase start` and the local PowerSync: emailed-code sign-in, the profile arriving over `me`, onboarding reaching the server, an RLS-rejected write quarantined without blocking the queue, and a second user never receiving the first user's rows. Not yet run in the Android emulator or on Windows |
 | Throwaway `notes` table on Android and Windows | **Built, not yet run on a device** (see [Notes sync test](#notes-sync-test)): the Today tab adds and lists notes through the local database. The two-device, kill-while-offline and two-client checks of the exit criteria are still to do |
-| `tools/drift` against the PowerSync .NET schema | Not started (`tools/codegen/check-drift.mjs` still checks the TypeScript client schema) |
+| `tools/drift` against the PowerSync .NET schema | **Done for `AppSchema`** (see [Schema drift](#schema-drift)): runs in CI's database job next to `tools/codegen/check-drift.mjs`, which still checks the TypeScript client schema. The C# contracts are not compared yet |
 
 ## What the scaffold contains
 
@@ -95,11 +95,28 @@ Tests: `AiHelloTests` runs the real SDK against `FakeAnthropic`, an HTTP handler
 - `SupabaseConnector` gives PowerSync the access token and the PowerSync URL, and logs only the op, table and error code of a quarantined write (no ids, no row data).
 - `LocalDatabase` binds the database to the user who owns it. `ConnectAsync(userId)` clears it first when another user (or nobody known) owned it, including pending uploads and `failed_uploads`; `DisconnectAsync` keeps everything for the same user's return; `ClearAsync` is for a sign-out the user asked for. The owner is kept in MAUI `Preferences` (`PreferencesOwnerStore`). Connections retry every 2 s, as in the prototype.
 
-Not done yet: the two-device and kill-while-offline checks of the gate, and a drift check of `AppSchema` against the migrations (`tools/drift`).
+Not done yet: the two-device and kill-while-offline checks of the gate.
 
 `Profiles` holds the profile queries the app shell and onboarding use: a watched query for the signed-in user's row, the onboarding save and the unit-preference update. PowerSync tables are views with `INSTEAD OF` triggers, whose row counts SQLite reports as 0, so a save first checks that the row exists in the same transaction and throws if it doesn't (a save that changed nothing is never shown as done). `FailedUploads` lists the quarantine for Settings without the row data.
 
 Tests: `tests/Health360.LocalDb.Tests` runs the upload queue and the account binding against a real PowerSync database (the SDK's native core and SQLite, in a temporary file) with a fake writer, and `PostgrestWriter` against a fake PostgREST. No server is involved.
+
+## Schema drift
+
+`tools/drift` (`Health360.Drift`) compares `AppSchema` with the tables a migrated database publishes to PowerSync (the `powersync` publication), and exits non-zero on drift. It ports `tools/codegen/check-drift.mjs`, with the same Postgres-to-SQLite type map:
+
+- every published table is in `AppSchema` with the same columns and storage types, and has an `id` (PowerSync supplies it on the client). Columns left out of a publication column list count as not synced;
+- every jsonb and boolean column is in `ServerColumnTypes` with the right codec, and no other column is, including columns that are no longer synced and `id` (uploads apply every entry, so a stale one would turn text into JSON);
+- every synced client table and every `UploadableTables` entry is published, and every `ServerColumnTypes` table is a synced client table. `failed_uploads` (local only) is skipped.
+
+```sh
+HEALTH360_DRIFT_DATABASE='Host=127.0.0.1;Port=54322;Username=postgres;Password=postgres;Database=postgres' \
+  dotnet run --project tools/drift
+```
+
+Exit codes: 0 matches, 1 drift (or an empty publication: migrations not applied), 2 no connection string, a malformed one, or no connection. The connection string is never printed. `tests/Health360.Drift.Tests` covers the comparison; CI's database job runs the tool against `supabase db start`. It works the same against `tools/db/test-local.sh`'s kind of database (the shim plus the migrations on a plain Postgres 16).
+
+Not covered yet: the C# contracts (PLAN.md §2.2 lists them for `tools/drift`), since no contract mirrors a synced row yet.
 
 ## MAUI app
 
@@ -162,7 +179,7 @@ The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54
 | Job | Runner | What it runs |
 |---|---|---|
 | `.NET build, format, tests` | Linux | locked restore, `dotnet format --verify-no-changes`, Release build, `dotnet test` on `Health360.Core.slnf` |
-| `Database (pgTAP, lint, drift)` | Linux | also the API's database tests (`Category=Database`) against `supabase db start` |
+| `Database (pgTAP, lint, drift)` | Linux | also `tools/drift` (`AppSchema` against the migrations) and the API's database tests (`Category=Database`) against `supabase db start` |
 | `MAUI app (Android build)` | Linux | `maui-android` workload, Android SDK components, Release build |
 | `MAUI app (Windows build)` | Windows | `maui-windows` workload, Release build |
 

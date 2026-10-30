@@ -55,7 +55,7 @@ Key paths:
 - `supabase/functions/_shared` — hand-written Edge Function helpers (`auth.ts`, `http.ts`) plus `generated/`, the codegen copy of `packages/domain` and `packages/schemas`.
 - `powersync` — sync streams (`sync-config.yaml`) and local service configuration.
 - `e2e/sync` — two-client isolation and offline sync tests.
-- `tools/codegen` — Edge Function codegen (`copy-shared.mjs`) and schema-drift check (`check-drift.mjs`); `tools/db` — Docker-free local database test runner.
+- `tools/codegen` — Edge Function codegen (`copy-shared.mjs`) and schema-drift check (`check-drift.mjs`); `tools/drift` — the same drift check for the .NET `AppSchema`; `tools/db` — Docker-free local database test runner.
 
 ## Standard development commands
 
@@ -107,6 +107,7 @@ supabase db start
 supabase test db
 supabase db lint --level warning --fail-on error
 DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres pnpm drift:check
+HEALTH360_DRIFT_DATABASE='Host=127.0.0.1;Port=54322;Username=postgres;Password=postgres;Database=postgres' dotnet run --project tools/drift
 ```
 
 Two-client sync tests require local Supabase and PowerSync services plus the environment variables documented in `docs/phase0.md`. If Docker is unavailable, `pnpm db:test:local` runs the migrations and pgTAP tests against a plain local Postgres. Do not claim a check passed unless it was actually run and passed.
@@ -138,8 +139,8 @@ Two-client sync tests require local Supabase and PowerSync services plus the env
 - Functions in the `private` schema that RLS policies or triggers call must be granted `EXECUTE` to `authenticated` (and never to `anon`). pgTAP setup running as superuser can hide a missing grant, so write behavioural tests as the `authenticated` role; `00_rls_coverage` checks the grants directly.
 - Follow the existing access model and ownership conventions. Personal rows should carry the appropriate `profile_id` and/or `household_id` so authorization and sync filters do not depend on unsafe joins.
 - Keep Postgres authorization and PowerSync stream filters aligned. Never loosen an RLS policy or a sync rule simply to make a test pass. Test that one user's records and pending uploads are not visible to another user.
-- When adding or changing a synced table or column, review all of the related pieces together: migration, RLS policies and tests, `packages/local-db/src/schema.ts`, `powersync/sync-config.yaml`, upload serialization, and schema-drift tests.
-- If a Postgres `json`/`jsonb` or boolean column is added or changed, update `SERVER_COLUMN_TYPES` in `packages/local-db/src/schema.ts` so values are serialized correctly on upload. `pnpm drift:check` (`tools/codegen/check-drift.mjs`) fails if one is missing.
+- When adding or changing a synced table or column, review all of the related pieces together: migration, RLS policies and tests, `packages/local-db/src/schema.ts` and `src/Health360.LocalDb/AppSchema.cs`, `powersync/sync-config.yaml`, upload serialization, and both schema-drift checks (`pnpm drift:check`, `tools/drift`).
+- If a Postgres `json`/`jsonb` or boolean column is added or changed, update `SERVER_COLUMN_TYPES` in `packages/local-db/src/schema.ts` and `ServerColumnTypes` in `AppSchema` so values are serialized correctly on upload. `pnpm drift:check` (`tools/codegen/check-drift.mjs`) and `tools/drift` fail if one is missing.
 - Respect access scopes: user-owned, household-shared, global reference, and server-only data are not interchangeable. Invites, secrets, and other server-only data must not be exposed through client sync streams.
 - Keep the failed-upload quarantine behavior (`failed_uploads`). Permanent upload errors and updates that match no row must not silently block the queue or be reported as successful writes, and retries must not duplicate quarantine entries.
 - Use client-generated UUIDv7 IDs where required by the existing data model. Do not introduce duplicate records during retries or imports.
