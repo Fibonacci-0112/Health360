@@ -10,11 +10,14 @@ public class PostgrestWriterTests
 {
     private static readonly CancellationToken Ct = TestContext.Current.CancellationToken;
 
-    private static (PostgrestWriter Writer, FakePostgrest Server) Create(string? token = "user-token")
+    private static readonly SessionToken UserA = new("user-a", "user-token");
+
+    private static (PostgrestWriter Writer, FakePostgrest Server) Create(SessionToken? token = null, string owner = "user-a", bool signedOut = false)
     {
         var server = new FakePostgrest();
         var http = new HttpClient(server) { BaseAddress = new Uri("http://127.0.0.1:54321/") };
-        return (new PostgrestWriter(http, new FixedSession(token), "anon-key"), server);
+        var session = new FixedSession(signedOut ? null : token ?? UserA);
+        return (new PostgrestWriter(http, session, new MemoryOwnerStore { Owner = owner }, "anon-key"), server);
     }
 
     [Fact]
@@ -141,7 +144,7 @@ public class PostgrestWriterTests
     [Fact]
     public async Task WithoutASessionNothingIsSentAndTheWriteIsRetried()
     {
-        var (writer, server) = Create(token: null);
+        var (writer, server) = Create(signedOut: true);
 
         var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PutAsync("notes", "n1", [], Ct));
 
@@ -150,11 +153,36 @@ public class PostgrestWriterTests
     }
 
     [Fact]
+    public async Task NeverSendsTheOwnersWritesWithAnotherUsersToken()
+    {
+        // User B signed in, but the database still holds user A's queued writes until it is rebound.
+        var (writer, server) = Create(token: new SessionToken("user-b", "b-token"), owner: "user-a");
+
+        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PutAsync("notes", "n1", [], Ct));
+
+        Assert.False(Uploads.IsPermanentError(error.Code));
+        Assert.Empty(server.Requests);
+    }
+
+    [Fact]
+    public async Task ASuccessReplyThatIsNotJsonIsRetried()
+    {
+        var (writer, server) = Create();
+        server.Reply(HttpStatusCode.OK, "<html>Sign in to the Wi-Fi</html>");
+
+        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PatchAsync("notes", "n1", new JsonObject { ["body"] = "x" }, Ct));
+
+        Assert.False(Uploads.IsPermanentError(error.Code));
+    }
+
+    [Fact]
     public async Task ConnectorGivesPowerSyncTheUsersToken()
     {
-        var session = new FixedSession("user-token");
+        var session = new FixedSession(UserA);
+        var owner = new MemoryOwnerStore { Owner = "user-a" };
         var connector = new SupabaseConnector(
             session,
+            owner,
             new FakeWriter(),
             new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", new Uri("https://sync.example.test")),
             new FixedClock(DateTimeOffset.UnixEpoch),
@@ -162,6 +190,9 @@ public class PostgrestWriterTests
 
         var credentials = await connector.FetchCredentials();
         Assert.Equal(("https://sync.example.test/", "user-token"), (credentials!.Endpoint, credentials.Token));
+
+        session.Token = new SessionToken("user-b", "b-token");
+        Assert.Null(await connector.FetchCredentials());
 
         session.Token = null;
         Assert.Null(await connector.FetchCredentials());

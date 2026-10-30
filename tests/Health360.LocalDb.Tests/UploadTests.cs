@@ -247,6 +247,24 @@ public class UploadTests
     }
 
     [Fact]
+    public async Task RetryReportsOfflineWhenTheReplyIsNotJson()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await AddNote(t, "n1", "hello");
+        await Uploads.UploadPendingAsync(t.Db, new FakeWriter { Fail = _ => new RemoteWriteException("no", "23514") }, Clock, cancellationToken: TestContext.Current.CancellationToken);
+        await t.Db.Execute("UPDATE notes SET body = ? WHERE id = ?", ["fixed", "n1"]);
+        await Uploads.UploadPendingAsync(t.Db, new FakeWriter { Fail = w => w.Op == "PATCH" ? new RemoteWriteException("no", "23514") : null }, Clock, cancellationToken: TestContext.Current.CancellationToken);
+        var patchId = (await t.Db.Get<FailedRow>("SELECT id AS Id FROM failed_uploads WHERE op = 'PATCH'")).Id;
+        using var http = new HttpClient(new HtmlPage()) { BaseAddress = new Uri("http://127.0.0.1:54321/") };
+        var writer = new PostgrestWriter(http, new FixedSession(new SessionToken("u", "t")), new MemoryOwnerStore { Owner = "u" }, "anon");
+
+        var result = await Uploads.RetryFailedUploadAsync(t.Db, patchId, writer, Clock, TestContext.Current.CancellationToken);
+
+        Assert.Equal(RetryResult.Offline, result);
+        Assert.Equal(2, await FailedCount(t));
+    }
+
+    [Fact]
     public async Task DiscardDropsTheEntry()
     {
         await using var t = await TestDatabase.OpenAsync();
@@ -270,6 +288,13 @@ public class UploadTests
 
     private static async Task<string> QuarantinedId(TestDatabase t) =>
         (await t.Db.Get<FailedRow>("SELECT id AS Id FROM failed_uploads")).Id;
+
+    /// <summary>Answers every request with 200 and an HTML page, as a captive portal does.</summary>
+    private sealed class HtmlPage : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("<html>Sign in</html>") });
+    }
 
     private sealed class FailedRow
     {

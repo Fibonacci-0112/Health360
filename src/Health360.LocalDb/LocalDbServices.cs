@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using PowerSync.Common.Client;
 
 namespace Health360.LocalDb;
@@ -15,7 +16,7 @@ public static class LocalDbServices
     public static IServiceCollection AddLocalDatabase(this IServiceCollection services, Func<IServiceProvider, IDatabaseSource> source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        services.AddSingleton(TimeProvider.System);
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton(provider => new PowerSyncDatabase(new PowerSyncDatabaseOptions
         {
             Database = source(provider),
@@ -26,7 +27,8 @@ public static class LocalDbServices
             var endpoints = provider.GetRequiredService<SyncEndpoints>();
             // The platform's default handler (AndroidMessageHandler on Android), so the OS trust store applies.
             var http = new HttpClient { BaseAddress = endpoints.SupabaseUrl };
-            return new PostgrestWriter(http, provider.GetRequiredService<ISupabaseSession>(), endpoints.SupabaseApiKey);
+            return new PostgrestWriter(
+                http, provider.GetRequiredService<ISupabaseSession>(), provider.GetRequiredService<IDatabaseOwnerStore>(), endpoints.SupabaseApiKey);
         });
         services.AddSingleton<SupabaseConnector>();
         services.AddSingleton(provider => new LocalDatabase(

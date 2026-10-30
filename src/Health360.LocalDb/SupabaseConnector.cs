@@ -11,6 +11,7 @@ namespace Health360.LocalDb;
 /// </summary>
 public sealed partial class SupabaseConnector(
     ISupabaseSession session,
+    IDatabaseOwnerStore owner,
     IRemoteWriter writer,
     SyncEndpoints endpoints,
     TimeProvider clock,
@@ -18,8 +19,9 @@ public sealed partial class SupabaseConnector(
 {
     public async Task<PowerSyncCredentials?> FetchCredentials()
     {
-        var token = await session.GetAccessTokenAsync(CancellationToken.None).ConfigureAwait(false);
-        // No session: PowerSync stays disconnected until the app connects again after sign-in.
+        var token = await OwnerSession.TokenAsync(session, owner, CancellationToken.None).ConfigureAwait(false);
+        // No session, or another user's: PowerSync stays disconnected until the app connects again
+        // after sign-in, which rebinds the database first.
         return token is null ? null : new PowerSyncCredentials(endpoints.PowerSyncUrl.ToString(), token, null);
     }
 

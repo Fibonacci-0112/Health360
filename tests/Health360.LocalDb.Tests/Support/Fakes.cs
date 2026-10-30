@@ -6,10 +6,10 @@ public sealed class FixedClock(DateTimeOffset now) : TimeProvider
     public override DateTimeOffset GetUtcNow() => now;
 }
 
-/// <summary>A session whose access token is fixed; null means signed out.</summary>
-public sealed class FixedSession(string? token) : ISupabaseSession
+/// <summary>A session whose token is fixed; null means signed out.</summary>
+public sealed class FixedSession(SessionToken? token) : ISupabaseSession
 {
-    public string? Token { get; set; } = token;
+    public SessionToken? Token { get; set; } = token;
 
-    public Task<string?> GetAccessTokenAsync(CancellationToken cancellationToken) => Task.FromResult(Token);
+    public Task<SessionToken?> GetTokenAsync(CancellationToken cancellationToken) => Task.FromResult(Token);
 }

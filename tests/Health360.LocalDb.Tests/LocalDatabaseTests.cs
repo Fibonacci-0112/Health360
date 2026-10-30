@@ -9,6 +9,7 @@ public class LocalDatabaseTests
     private static LocalDatabase Wrap(TestDatabase t, MemoryOwnerStore owner) =>
         new(t.Db, owner, new SupabaseConnector(
             new FixedSession(null),
+            owner,
             new FakeWriter(),
             new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", new Uri("http://127.0.0.1:8080")),
             new FixedClock(DateTimeOffset.UnixEpoch),

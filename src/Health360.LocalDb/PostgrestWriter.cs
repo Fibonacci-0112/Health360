@@ -12,8 +12,9 @@ namespace Health360.LocalDb;
 /// </summary>
 /// <param name="http">A client whose base address is the Supabase project URL.</param>
 /// <param name="session">The signed-in session whose access token every request carries.</param>
+/// <param name="owner">The local database's owner; requests are sent only with their token.</param>
 /// <param name="apiKey">The publishable (anon) key, sent as the <c>apikey</c> header.</param>
-public sealed class PostgrestWriter(HttpClient http, ISupabaseSession session, string apiKey) : IRemoteWriter
+public sealed class PostgrestWriter(HttpClient http, ISupabaseSession session, IDatabaseOwnerStore owner, string apiKey) : IRemoteWriter
 {
     /// <summary>PostgREST's code for "no rows"; <see cref="Uploads.IsPermanentError"/> treats it as permanent.</summary>
     public const string NoRow = "PGRST116";
@@ -77,9 +78,10 @@ public sealed class PostgrestWriter(HttpClient http, ISupabaseSession session, s
 
     private async Task<HttpRequestMessage> RequestAsync(HttpMethod method, string path, CancellationToken cancellationToken)
     {
-        // No session means nobody to write as. Not permanent: PowerSync retries once the user is back.
-        var token = await session.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false)
-            ?? throw new RemoteWriteException("Not signed in.", (string?)null);
+        // No session (or another user's) means nobody to write as. Not permanent: PowerSync retries once
+        // the owner is back, or finds the queue empty once the database has been rebound and cleared.
+        var token = await OwnerSession.TokenAsync(session, owner, cancellationToken).ConfigureAwait(false)
+            ?? throw new RemoteWriteException("Not signed in as the local database's owner.", (string?)null);
         var request = new HttpRequestMessage(method, path);
         request.Headers.Add("apikey", apiKey);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -97,9 +99,19 @@ public sealed class PostgrestWriter(HttpClient http, ISupabaseSession session, s
         using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         await ThrowIfFailedAsync(response, cancellationToken).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return JsonNode.Parse(body) is JsonArray rows
-            ? rows.Count
-            : throw new RemoteWriteException("PostgREST returned something other than a list of rows.", (string?)null);
+        try
+        {
+            if (JsonNode.Parse(body) is JsonArray rows)
+            {
+                return rows.Count;
+            }
+        }
+        catch (JsonException)
+        {
+            // A proxy or captive portal page served with 200: retried, not quarantined.
+        }
+
+        throw new RemoteWriteException("PostgREST returned something other than a list of rows.", (string?)null);
     }
 
     /// <summary>
