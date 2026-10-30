@@ -62,8 +62,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      # The workload version is pinned by global.json (workloadVersion).
-      - run: dotnet workload install maui-android
+      # Workload set pinned here, not in global.json: a global.json workloadVersion makes every build,
+      # even ones without workloads, fail unless that workload set is installed.
+      - run: dotnet workload install maui-android --version 10.0.403
       - name: Android SDK components the project needs
         run: dotnet build src/Health360.Maui -t:InstallAndroidDependencies -f net10.0-android -p:AndroidSdkDirectory="$ANDROID_HOME" -p:AcceptAndroidSDKLicenses=True
       - run: dotnet build src/Health360.Maui -c Release -f net10.0-android -p:AndroidSdkDirectory="$ANDROID_HOME" -p:ContinuousIntegrationBuild=true
@@ -79,7 +80,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      - run: dotnet workload install maui-windows
+      - run: dotnet workload install maui-windows --version 10.0.403
       - run: dotnet build src/Health360.Maui -c Release -f net10.0-windows10.0.19041.0 -p:ContinuousIntegrationBuild=true
 
   functions:

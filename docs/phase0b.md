@@ -15,7 +15,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 
 ## What the scaffold contains
 
-- `global.json` pins the .NET SDK (10.0.403, the current LTS line) and the MAUI workload set (`workloadVersion`).
+- `global.json` pins the .NET SDK (10.0.403, the current LTS line). The MAUI workload set is pinned where it's installed (`dotnet workload install ... --version 10.0.403`), not with `workloadVersion` in `global.json`.
 - `Directory.Build.props`: nullable, implicit usings, warnings as errors, `latest-recommended` analyzers, code style enforced in the build, and NuGet lock files (`packages.lock.json`, locked restore in CI). The MAUI project has no lock file, because its restore graph differs between Linux and Windows.
 - `Directory.Packages.props`: central package versions.
 - `src/Health360.Domain/BannedSymbols.txt`: the banned-API analyzer fails the build on file, network, console or environment access, and on reading the clock or ambient randomness (`DateTime.UtcNow`, `Guid.NewGuid`, `Random.Shared`, ...). Pass a `TimeProvider` or a random source in instead. `tests/Health360.Domain.Tests/PurityTests.cs` also fails if Domain gains a package or project reference.
@@ -31,16 +31,16 @@ dotnet format Health360.Core.slnf --verify-no-changes
 dotnet run --project src/Health360.Server      # http://localhost:5080/health
 ```
 
-The MAUI app needs a workload. Run these from the repository root so `global.json` picks the workload version:
+The MAUI app needs a workload:
 
 ```sh
-dotnet workload install maui-android
+dotnet workload install maui-android --version 10.0.403
 # Installs the Android SDK platform and build tools the project needs (needs a JDK 17+):
 dotnet build src/Health360.Maui -t:InstallAndroidDependencies -f net10.0-android -p:AndroidSdkDirectory=$HOME/android-sdk -p:AcceptAndroidSDKLicenses=True
 dotnet build src/Health360.Maui -f net10.0-android -p:AndroidSdkDirectory=$HOME/android-sdk
 ```
 
-On Windows, install `maui-windows` and build with `-f net10.0-windows10.0.19041.0`.
+On Windows, install `maui-windows` (same `--version`) and build with `-f net10.0-windows10.0.19041.0`.
 
 ## CI
 
@@ -54,5 +54,6 @@ On Windows, install `maui-windows` and build with `-f net10.0-windows10.0.19041.
 
 ## Findings
 
+- A `workloadVersion` in `global.json` makes every build fail ("Workload version ... was not found") unless that workload set is installed, including builds that use no workloads. That's why the version is pinned on `dotnet workload install` instead.
 - The Android SDK installer (`InstallAndroidDependencies`) fails with "CommonUtilities.Helpers.UserName must have a valid value" when `USER` isn't set, as in some containers. Set `USER` before running it.
 - `using` directives needed only in `#if DEBUG` code must sit inside the same `#if`. Otherwise the Release build fails on IDE0005 (unnecessary using), because warnings are errors.

@@ -60,7 +60,7 @@ Key paths:
 
 ### .NET
 
-The SDK and MAUI workload versions are pinned in `global.json`; package versions are central in `Directory.Packages.props`, with lock files. `Health360.Core.slnf` is everything except the MAUI app, so it builds without workloads. Warnings are errors.
+The SDK version is pinned in `global.json` (the MAUI workload set via `dotnet workload install --version`, see `docs/phase0b.md`); package versions are central in `Directory.Packages.props`, with lock files. `Health360.Core.slnf` is everything except the MAUI app, so it builds without workloads. Warnings are errors.
 
 ```sh
 dotnet restore Health360.Core.slnf
