@@ -45,7 +45,7 @@ jobs:
       - run: dotnet restore Health360.Core.slnf -p:ContinuousIntegrationBuild=true
       - run: dotnet format Health360.Core.slnf --verify-no-changes --no-restore
       - run: dotnet build Health360.Core.slnf -c Release --no-restore -p:ContinuousIntegrationBuild=true
-      - run: dotnet test Health360.Core.slnf -c Release --no-build
+      - run: dotnet test --solution Health360.Core.slnf -c Release --no-build
 
   maui-android:
     name: MAUI app (Android build)
@@ -128,7 +128,7 @@ jobs:
           HEALTH360_DRIFT_DATABASE: Host=127.0.0.1;Port=54322;Username=postgres;Password=postgres;Database=postgres
       # The API's database tests: its login role, and RLS as the signed-in user, on Supabase's own Postgres.
       - name: API queries as the signed-in user
-        run: dotnet test tests/Health360.Server.Tests -c Release -p:ContinuousIntegrationBuild=true --filter Category=Database
+        run: dotnet test --project tests/Health360.Server.Tests -c Release -p:ContinuousIntegrationBuild=true --filter-trait "Category=Database"
         env:
           DOTNET_NOLOGO: '1'
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'

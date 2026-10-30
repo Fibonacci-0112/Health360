@@ -64,7 +64,7 @@ Tests: `AuthenticationTests` covers the token rules against a fake Auth and need
 
 ```sh
 HEALTH360_TEST_DATABASE="Host=127.0.0.1;Port=54322;Username=postgres;Password=postgres;Database=postgres" \
-  dotnet test tests/Health360.Server.Tests --filter Category=Database
+  dotnet test --project tests/Health360.Server.Tests --filter-trait "Category=Database"
 ```
 
 Not yet tested against a real Auth server: the `/auth/v1/user` check and the JWKS format are tested with a fake that follows Supabase's documented responses.
@@ -148,7 +148,7 @@ Tests: `NotesTests` in `Health360.LocalDb.Tests` (id, local date across midnight
 
 ```sh
 dotnet build Health360.Core.slnf
-dotnet test Health360.Core.slnf
+dotnet test --solution Health360.Core.slnf
 dotnet format Health360.Core.slnf --verify-no-changes
 dotnet run --project src/Health360.Server      # http://localhost:5080/health; needs the settings in "API authentication"
 ```
@@ -187,7 +187,7 @@ The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54
 
 ## Findings
 
-- `PowerSync.Common` 1.0.0 depends on `SQLitePCLRaw.bundle_e_sqlite3` 2.1.10, which has a high-severity advisory (GHSA-2m69-gcr7-jv3q). NuGet's audit warning fails the restore because warnings are errors. `Health360.LocalDb` references 2.1.14 directly.
+- `PowerSync.Common` 1.0.0 depends on `SQLitePCLRaw.bundle_e_sqlite3` 2.1.10, which has a high-severity advisory (GHSA-2m69-gcr7-jv3q). NuGet's audit warning fails the restore because warnings are errors. `Health360.LocalDb` references the bundle directly, now 3.0.5, which also lifts `SQLitePCLRaw.core` under `Microsoft.Data.Sqlite.Core` 9.0.1 (built against 2.x) to 3.x. The LocalDb and UI tests open a real PowerSync database on it; Android and Windows rely on the MAUI CI builds and are not yet run on a device.
 - The SDK parses each queued write's data (`CrudEntry.OpData`) with Newtonsoft, which turns any text that looks like an ISO date-time into a `DateTime`: `created_at` (or a note that reads like a timestamp) loses its text and UTC offset. `Uploads` reads the op's JSON from `ps_crud` instead; `SendsTimestampsExactlyAsStored` guards it.
 - `PowerSync.Common` ships its native core for Linux, macOS and Windows desktop as content files, so a plain `net10.0` test project can open a real PowerSync database on the Linux CI runner.
 - PowerSync .NET 1.0.0 builds the sync URL as the credentials' endpoint plus `/sync/stream`, and `Uri.ToString()` ends a bare host with `/`, so `http://127.0.0.1:8080/` requested `//sync/stream`, which the service answers with 404. Sync then retried forever and never connected; unit tests with fakes couldn't see it. `SupabaseConnector.Endpoint` trims the trailing slash.
@@ -200,6 +200,7 @@ The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54
 - A `workloadVersion` in `global.json` makes every build fail ("Workload version ... was not found") unless that workload set is installed, including builds that use no workloads. That's why the version is pinned on `dotnet workload install` instead.
 - The Android SDK installer (`InstallAndroidDependencies`) fails with "CommonUtilities.Helpers.UserName must have a valid value" when `USER` isn't set, as in some containers. Set `USER` before running it.
 - JavaScript's `Number.EPSILON` (2^-52) is not C#'s `double.Epsilon` (the smallest subnormal). `Rounding.RoundTo` spells out 2^-52 for its half-up nudge.
+- xunit.v3 4 runs only on Microsoft.Testing.Platform: with the .NET 10 SDK, the old VSTest `dotnet test` fails with "Testing with VSTest target is no longer supported". `global.json` opts in (`"test": {"runner": "Microsoft.Testing.Platform"}`), so `dotnet test` takes `--solution` or `--project`, and trait filters are `--filter-trait "Category=Database"` instead of `--filter Category=Database`.
 - FsCheck 3's C# API (`FsCheck.Fluent`) has `Gen.Zip` for two generators only; nest it for three.
 - `using` directives needed only in `#if DEBUG` code must sit inside the same `#if`. Otherwise the Release build fails on IDE0005 (unnecessary using), because warnings are errors.
 - JwtBearer fetches signing keys with its own `HttpClient`, which tests can't redirect. The API builds its configuration manager on the named client `supabase-auth` instead, and tests point that client at a fake Auth. Give the factory a new handler each time (`ConfigurePrimaryHttpMessageHandler`), because the HTTP client factory disposes the handlers it is given.

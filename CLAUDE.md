@@ -67,7 +67,7 @@ The SDK version is pinned in `global.json` (the MAUI workload set via `dotnet wo
 dotnet restore Health360.Core.slnf
 dotnet format Health360.Core.slnf --verify-no-changes
 dotnet build Health360.Core.slnf -c Release
-dotnet test Health360.Core.slnf
+dotnet test --solution Health360.Core.slnf
 ```
 
 After changing a package reference, run `dotnet restore` and commit the updated `packages.lock.json` files (CI restores in locked mode). Building `src/Health360.Maui` needs the `maui-android` or `maui-windows` workload; see `docs/phase0b.md`. Don't weaken `src/Health360.Domain/BannedSymbols.txt` or the purity tests to make Domain code compile; pass a `TimeProvider` or random source in instead.

@@ -12,7 +12,7 @@
 
   <ItemGroup>
     <PackageReference Include="PowerSync.Common" />
-    <!-- PowerSync.Common 1.0.0 brings in 2.1.10, which has a high-severity advisory (GHSA-2m69-gcr7-jv3q). -->
+    <!-- PowerSync.Common 1.0.0 brings in 2.1.10, which has a high-severity advisory (GHSA-2m69-gcr7-jv3q); see docs/phase0b.md. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
