@@ -26,8 +26,14 @@ public enum ClaudeOutcome
     UpstreamError,
 }
 
-public sealed record ClaudeResult<T>(ClaudeOutcome Outcome, T? Value, string? Model, AiUsage Usage, IReadOnlyList<string> Errors)
+public sealed record ClaudeResult<T>(ClaudeOutcome Outcome, T? Value, string? Model, AiUsage Usage, IReadOnlyList<OutputError> Errors)
     where T : class;
+
+/// <summary>
+/// Why an output was rejected. <see cref="Message"/> goes back to the model in the repair round and may
+/// quote the output; logs get <see cref="Property"/> and <see cref="Code"/> only.
+/// </summary>
+public sealed record OutputError(string Property, string Code, string Message);
 
 /// <summary>
 /// One structured-output call (PLAN.md §2.4). The JSON schema comes from the <c>Health360.Contracts</c>
@@ -67,8 +73,9 @@ public sealed partial class StructuredClaude(
         var schema = schemaDocument.RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
 
         var prompt = request.Prompt;
-        IReadOnlyList<string> errors = [];
-        for (var attempt = 0; attempt < 2; attempt++)
+        IReadOnlyList<OutputError> errors = [];
+        string? model = null;
+        for (var attempt = 1; attempt <= 2; attempt++)
         {
             BetaMessage response;
             try
@@ -103,32 +110,40 @@ public sealed partial class StructuredClaude(
             }
 
             usage = new AiUsage(usage.InputTokens + response.Usage.InputTokens, usage.OutputTokens + response.Usage.OutputTokens);
+            model = response.Model;
             if (response.StopReason == BetaStopReason.Refusal)
             {
-                return Fail<T>(ClaudeOutcome.Refused, response.Model, usage);
+                // The category says which classifier declined; it carries nothing from the request.
+                LogRefused(logger, model, attempt, response.StopDetails?.Category?.ToString(), usage.InputTokens, usage.OutputTokens);
+                return Fail<T>(ClaudeOutcome.Refused, model, usage);
             }
 
             if (response.StopReason == BetaStopReason.MaxTokens)
             {
-                return Fail<T>(ClaudeOutcome.Truncated, response.Model, usage);
+                LogTruncated(logger, model, attempt, usage.InputTokens, usage.OutputTokens);
+                return Fail<T>(ClaudeOutcome.Truncated, model, usage);
             }
 
             var text = string.Concat(response.Content.Select(b => b.TryPickText(out var t) ? t.Text : ""));
             (var value, errors) = ParseAndValidate(text, outputType, validator);
             if (value is not null)
             {
-                return new ClaudeResult<T>(ClaudeOutcome.Ok, value, response.Model, usage, []);
+                return new ClaudeResult<T>(ClaudeOutcome.Ok, value, model, usage, []);
             }
+
+            var failedRules = string.Join(", ", errors.Select(e => $"{e.Property}:{e.Code}"));
+            LogRejected(logger, model, attempt, failedRules);
 
             // One repair: the same request again, told what was wrong with the last answer. A fresh
             // conversation, not a reply, so no earlier assistant turn (or its thinking) is resent.
             prompt = RepairPrompt(request.Prompt, text, errors);
         }
 
-        return Fail<T>(ClaudeOutcome.Invalid, null, usage, errors);
+        LogInvalid(logger, model, usage.InputTokens, usage.OutputTokens);
+        return Fail<T>(ClaudeOutcome.Invalid, model, usage, errors);
     }
 
-    internal static (T? Value, IReadOnlyList<string> Errors) ParseAndValidate<T>(string text, JsonTypeInfo<T> type, IValidator<T> validator)
+    internal static (T? Value, IReadOnlyList<OutputError> Errors) ParseAndValidate<T>(string text, JsonTypeInfo<T> type, IValidator<T> validator)
         where T : class
     {
         T? value;
@@ -138,20 +153,21 @@ public sealed partial class StructuredClaude(
         }
         catch (JsonException exception)
         {
-            // JsonException messages name the path and the problem, not the value.
-            return (null, [$"The answer is not valid JSON for the schema: {exception.Message}"]);
+            return (null, [new(exception.Path ?? "$", "Json", $"The answer is not valid JSON for the schema: {exception.Message}")]);
         }
 
         if (value is null)
         {
-            return (null, ["The answer is null."]);
+            return (null, [new("$", "Json", "The answer is null.")]);
         }
 
         var validation = validator.Validate(value);
-        return validation.IsValid ? (value, []) : (null, [.. validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}")]);
+        return validation.IsValid
+            ? (value, [])
+            : (null, [.. validation.Errors.Select(e => new OutputError(e.PropertyName, e.ErrorCode, $"{e.PropertyName}: {e.ErrorMessage}"))]);
     }
 
-    private static string RepairPrompt(string prompt, string previous, IReadOnlyList<string> errors)
+    private static string RepairPrompt(string prompt, string previous, IReadOnlyList<OutputError> errors)
     {
         var builder = new StringBuilder(prompt)
             .Append("\n\nAn earlier answer to this request was rejected:\n")
@@ -159,13 +175,13 @@ public sealed partial class StructuredClaude(
             .Append("\n\nProblems:\n");
         foreach (var error in errors)
         {
-            builder.Append("- ").Append(error).Append('\n');
+            builder.Append("- ").Append(error.Message).Append('\n');
         }
 
         return builder.Append("Answer again, fixing these problems.").ToString();
     }
 
-    private static ClaudeResult<T> Fail<T>(ClaudeOutcome outcome, string? model, AiUsage usage, IReadOnlyList<string>? errors = null)
+    private static ClaudeResult<T> Fail<T>(ClaudeOutcome outcome, string? model, AiUsage usage, IReadOnlyList<OutputError>? errors = null)
         where T : class => new(outcome, null, model, usage, errors ?? []);
 
     private static AnthropicClient? CreateClient(AnthropicOptions options, IHttpClientFactory httpFactory) =>
@@ -178,6 +194,19 @@ public sealed partial class StructuredClaude(
                 Timeout = options.Timeout,
             }
             : null;
+
+    // Logs name the outcome, model, attempt, token counts and failed rules. Never the prompt or the output.
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Claude refused: model {Model}, attempt {Attempt}, category {Category}, tokens {InputTokens}/{OutputTokens}")]
+    private static partial void LogRefused(ILogger logger, string model, int attempt, string? category, long inputTokens, long outputTokens);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Claude output truncated at max_tokens: model {Model}, attempt {Attempt}, tokens {InputTokens}/{OutputTokens}")]
+    private static partial void LogTruncated(ILogger logger, string model, int attempt, long inputTokens, long outputTokens);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Claude output rejected: model {Model}, attempt {Attempt}, failed {Rules}")]
+    private static partial void LogRejected(ILogger logger, string model, int attempt, string rules);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Claude output still invalid after repair: model {Model}, tokens {InputTokens}/{OutputTokens}")]
+    private static partial void LogInvalid(ILogger logger, string? model, long inputTokens, long outputTokens);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Claude call failed: {ExceptionType} {StatusCode}")]
     private static partial void LogUpstreamError(ILogger logger, string exceptionType, System.Net.HttpStatusCode? statusCode);

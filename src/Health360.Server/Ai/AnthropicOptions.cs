@@ -19,5 +19,11 @@ public sealed class AnthropicOptions
 
     public TimeSpan Timeout { get; set; } = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// AI requests each signed-in user may make per hour, across all AI endpoints, before getting 429.
+    /// Held in memory per API process: a cost backstop until per-profile quotas land in <c>ai_generations</c>.
+    /// </summary>
+    public int RequestsPerUserPerHour { get; set; } = 20;
+
     internal bool IsConfigured => !string.IsNullOrWhiteSpace(ApiKey);
 }

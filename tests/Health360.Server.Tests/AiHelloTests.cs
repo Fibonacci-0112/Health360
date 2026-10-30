@@ -109,6 +109,66 @@ public sealed class AiHelloTests
         Assert.Contains("Greeting: The length of 'Greeting' must be 200 characters or fewer", content, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Logs_which_rules_failed_but_never_the_output()
+    {
+        const string Secret = "do-not-log-this-output";
+        await using var factory = new ServerFactory();
+        factory.Anthropic
+            .ReplyJson(new { greeting = Secret + new string('x', 201), tip = "Sleep well." })
+            .Reply(Secret);
+        using var client = factory.CreateClient(TestTokens.User(UserA));
+
+        using var response = await client.PostAsJsonAsync("/ai/hello", new { weight = 80, weightUnit = "kg" }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        var logs = factory.Logs.Messages.ToArray();
+        Assert.Contains(logs, m => m.Contains("attempt 1, failed Greeting:MaximumLengthValidator", StringComparison.Ordinal));
+        Assert.Contains(logs, m => m.Contains("attempt 2, failed $:Json", StringComparison.Ordinal));
+        Assert.Contains(logs, m => m.Contains("still invalid after repair", StringComparison.Ordinal));
+        Assert.DoesNotContain(logs, m => m.Contains(Secret, StringComparison.Ordinal));
+        Assert.DoesNotContain(logs, m => m.Contains("health tracker", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Logs_refusals()
+    {
+        await using var factory = new ServerFactory();
+        factory.Anthropic.Reply("", "refusal");
+        using var client = factory.CreateClient(TestTokens.User(UserA));
+
+        using var response = await client.PostAsJsonAsync("/ai/hello", new { weight = 80, weightUnit = "kg" }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Contains(factory.Logs.Messages, m => m.StartsWith("Claude refused: model claude-opus-5-5, attempt 1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Limits_each_user_to_their_hourly_AI_requests()
+    {
+        await using var factory = new ServerFactory { AiRequestsPerUserPerHour = 2 };
+        factory.Anthropic.ReplyJson(ValidOutput).ReplyJson(ValidOutput).ReplyJson(ValidOutput);
+        using var userA = factory.CreateClient(TestTokens.User(UserA));
+        using var userB = factory.CreateClient(TestTokens.User(Guid.Parse("018f0000-0000-7000-8000-00000000000b")));
+        var body = new { weight = 80, weightUnit = "kg" };
+        var ct = TestContext.Current.CancellationToken;
+
+        for (var i = 0; i < 2; i++)
+        {
+            using var ok = await userA.PostAsJsonAsync("/ai/hello", body, ct);
+            Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+        }
+
+        using var limited = await userA.PostAsJsonAsync("/ai/hello", body, ct);
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.Equal("rate_limited", await ErrorCode(limited));
+        Assert.Equal(2, factory.Anthropic.Requests.Count);
+
+        // Another user has their own allowance.
+        using var other = await userB.PostAsJsonAsync("/ai/hello", body, ct);
+        Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+    }
+
     [Theory]
     [InlineData("not json")]
     [InlineData("""{"greeting":"Hi","tip":"Walk."}""" + "trailing")]

@@ -21,7 +21,7 @@ public static class AiEndpoints
 
     public static IEndpointRouteBuilder MapAiEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/ai/hello", HelloAsync);
+        app.MapPost("/ai/hello", HelloAsync).RequireRateLimiting(AiServices.RateLimitPolicy);
         return app;
     }
 

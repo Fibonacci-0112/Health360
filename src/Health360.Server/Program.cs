@@ -13,6 +13,7 @@ var app = builder.Build();
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 // Liveness only: no data, no auth. Every other endpoint requires a signed-in user (the fallback
 // policy in SupabaseAuthentication) and queries Postgres as that user so RLS applies.
