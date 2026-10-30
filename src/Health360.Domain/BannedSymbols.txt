@@ -6,6 +6,7 @@ T:System.IO.DirectoryInfo;Domain code is pure: no file I/O
 T:System.Net.Http.HttpClient;Domain code is pure: no network I/O
 T:System.Net.Sockets.Socket;Domain code is pure: no network I/O
 T:System.Console;Domain code is pure: no console I/O
+T:System.Diagnostics.Process;Domain code is pure: no subprocesses
 T:System.Environment;Domain code must not read the environment
 P:System.DateTime.Now;Pass a TimeProvider instead of reading the clock
 P:System.DateTime.UtcNow;Pass a TimeProvider instead of reading the clock
