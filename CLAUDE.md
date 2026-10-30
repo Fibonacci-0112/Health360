@@ -6,7 +6,7 @@ Instructions for Claude Code working in the Health360 repository. Keep this file
 
 Health360 is a household-oriented health and fitness app for nutrition, workouts, body metrics, physiology, and goals. It targets Android and Windows desktop, with offline logging on both. A web (browser) app, Apple (iOS, macOS) and Linux desktop are out of scope ([ADR 0002](docs/adr/0002-dotnet-maui-blazor.md)). Health and fitness values are sensitive personal data.
 
-The repository is currently in **Phase 0: foundation and risk tests**. The implementation plan describes later phases; do not assume a planned feature is already implemented. Treat the current source, package manifests, migrations, tests, and CI as the facts on the ground. The `notes` table and the `ai-hello` Edge Function are throwaway Phase 0 scaffolding; do not build features on them.
+The repository is in **Phase 0b: .NET foundation**. The .NET solution is scaffolded (`docs/phase0b.md` tracks what is and isn't done), and the Phase 0 TypeScript prototype is still in place. The implementation plan describes later phases; do not assume a planned feature is already implemented. Treat the current source, package manifests, migrations, tests, and CI as the facts on the ground. The `notes` table and the `ai-hello` Edge Function are throwaway Phase 0 scaffolding; do not build features on them.
 
 **Stack transition.** ADR 0002 replaces the TypeScript stack (Expo, Tauri, Edge Functions) with .NET: MAUI Blazor Hybrid for Android and Windows, and an ASP.NET Core API (PLAN.md §2.1–2.2). The TypeScript code in `apps/`, `packages/`, `supabase/functions/` and `tools/codegen/` is the Phase 0 prototype, and Phase 0b replaces it. Keep it working and follow the rules below while it exists, but don't add product features to it. `supabase/migrations`, `supabase/tests` and `powersync/` carry over to the .NET stack unchanged.
 
@@ -16,13 +16,14 @@ Before significant work, read the relevant parts of:
 - `docs/PLAN.md` — architecture, data model, privacy, unit conventions, roadmap, and risks.
 - `docs/FEATURES.md` — feature requirements.
 - `docs/adr/0002-dotnet-maui-blazor.md` — accepted stack and platform decision (supersedes ADR 0001).
-- `docs/phase0.md` — current implementation status, local setup, and "What the tests found" (bugs and platform limits already hit; don't reintroduce them).
+- `docs/phase0.md` — prototype status, local setup, and "What the tests found" (bugs and platform limits already hit; don't reintroduce them).
+- `docs/phase0b.md` — .NET foundation status, setup and findings.
 
 ## Stack and repository layout
 
 The target stack is fixed by ADR 0002. **Don't change it, or add web, Apple or Linux desktop targets, unless the user explicitly asks and the change is recorded as a new ADR.**
 
-Target (.NET, from Phase 0b; see PLAN.md §2.2 for the layout):
+Target (.NET, scaffolded in Phase 0b; see PLAN.md §2.2 for the layout):
 
 - `Health360.Domain`: pure C# calculations, units and UUIDv7 ids. It replaces `packages/domain`, and the same purity rules apply.
 - `Health360.Contracts`: records and validators for API payloads and Claude's structured output. It replaces `packages/schemas`.
@@ -56,6 +57,21 @@ Key paths:
 - `tools/codegen` — Edge Function codegen (`copy-shared.mjs`) and schema-drift check (`check-drift.mjs`); `tools/db` — Docker-free local database test runner.
 
 ## Standard development commands
+
+### .NET
+
+The SDK version is pinned in `global.json` (the MAUI workload set via `dotnet workload install --version`, see `docs/phase0b.md`); package versions are central in `Directory.Packages.props`, with lock files. `Health360.Core.slnf` is everything except the MAUI app, so it builds without workloads. Warnings are errors.
+
+```sh
+dotnet restore Health360.Core.slnf
+dotnet format Health360.Core.slnf --verify-no-changes
+dotnet build Health360.Core.slnf -c Release
+dotnet test Health360.Core.slnf
+```
+
+After changing a package reference, run `dotnet restore` and commit the updated `packages.lock.json` files (CI restores in locked mode). Building `src/Health360.Maui` needs the `maui-android` or `maui-windows` workload; see `docs/phase0b.md`. Don't weaken `src/Health360.Domain/BannedSymbols.txt` or the purity tests to make Domain code compile; pass a `TimeProvider` or random source in instead.
+
+### TypeScript prototype
 
 Install dependencies with the lockfile respected:
 

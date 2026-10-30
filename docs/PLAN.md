@@ -41,7 +41,7 @@ Section 1 (the feature catalogue) is in [FEATURES.md](FEATURES.md), and section 
 ### 2.2 Repository layout
 ```
 Health360/
-  Health360.sln
+  Health360.slnx            Health360.Core.slnf: everything except the MAUI app
   src/
     Health360.Domain/       pure C#, no I/O: units, ids (UUIDv7), energy/TDEE (formula + adaptive),
                             macros, recipe math, portion solver, DRI/UL checks, e1RM, progression,
@@ -73,7 +73,7 @@ Health360/
   e2e/                      maestro/ windows/
   docs/                     PLAN.md FEATURES.md adr/
 ```
-The repository still holds the Phase 0 TypeScript prototype (`apps/`, `packages/`, `supabase/functions/`, `tools/codegen/`, `e2e/sync/`). Phase 0b (§3) replaces it with this layout; `supabase/migrations`, `supabase/tests` and `powersync/` carry over unchanged.
+The repository still holds the Phase 0 TypeScript prototype (`apps/`, `packages/`, `supabase/functions/`, `tools/codegen/`, `e2e/sync/`). Phase 0b (§3) replaces it with this layout (the solution and `src/`/`tests/` projects are scaffolded; status in [phase0b.md](phase0b.md)); `supabase/migrations`, `supabase/tests` and `powersync/` carry over unchanged.
 
 ### 2.3 Data model (Postgres; compact)
 

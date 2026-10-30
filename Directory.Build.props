@@ -1,0 +1,15 @@
+<Project>
+  <!-- Settings shared by every .NET project. Package versions live in Directory.Packages.props. -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- CS1591: public members without XML docs. Docs are written where they help, not everywhere. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Settings that depend on UseMaui are in Directory.Build.targets: this file is read before the project sets it. -->
+  </PropertyGroup>
+</Project>

@@ -21,3 +21,10 @@ apps/desktop/src-tauri/gen/
 # Supabase
 supabase/.branches/
 supabase/.temp/
+
+# .NET
+bin/
+obj/
+.vs/
+*.user
+TestResults/

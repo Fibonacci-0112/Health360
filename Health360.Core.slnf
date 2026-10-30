@@ -1,0 +1,14 @@
+{
+  "solution": {
+    "path": "Health360.slnx",
+    "projects": [
+      "src/Health360.Contracts/Health360.Contracts.csproj",
+      "src/Health360.Domain/Health360.Domain.csproj",
+      "src/Health360.Server/Health360.Server.csproj",
+      "src/Health360.UI/Health360.UI.csproj",
+      "tests/Health360.Domain.Tests/Health360.Domain.Tests.csproj",
+      "tests/Health360.Server.Tests/Health360.Server.Tests.csproj",
+      "tests/Health360.UI.Tests/Health360.UI.Tests.csproj"
+    ]
+  }
+}

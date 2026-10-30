@@ -30,6 +30,59 @@ jobs:
       - name: Edge Functions use an up-to-date copy of packages/domain and packages/schemas
         run: pnpm codegen:check
 
+  dotnet:
+    name: .NET build, format, tests
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      # Health360.Core.slnf is everything except the MAUI app, which the maui-* jobs build.
+      - run: dotnet restore Health360.Core.slnf -p:ContinuousIntegrationBuild=true
+      - run: dotnet format Health360.Core.slnf --verify-no-changes --no-restore
+      - run: dotnet build Health360.Core.slnf -c Release --no-restore -p:ContinuousIntegrationBuild=true
+      - run: dotnet test Health360.Core.slnf -c Release --no-build
+
+  maui-android:
+    name: MAUI app (Android build)
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      # Workload set pinned here, not in global.json: a global.json workloadVersion makes every build,
+      # even ones without workloads, fail unless that workload set is installed.
+      - run: dotnet workload install maui-android --version 10.0.403
+      - name: Android SDK components the project needs
+        run: dotnet build src/Health360.Maui -t:InstallAndroidDependencies -f net10.0-android -p:AndroidSdkDirectory="$ANDROID_HOME" -p:AcceptAndroidSDKLicenses=True
+      - run: dotnet build src/Health360.Maui -c Release -f net10.0-android -p:AndroidSdkDirectory="$ANDROID_HOME" -p:ContinuousIntegrationBuild=true
+
+  maui-windows:
+    name: MAUI app (Windows build)
+    runs-on: windows-latest
+    env:
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet workload install maui-windows --version 10.0.403
+      - run: dotnet build src/Health360.Maui -c Release -f net10.0-windows10.0.19041.0 -p:ContinuousIntegrationBuild=true
+
   functions:
     name: Edge Functions (Deno)
     runs-on: ubuntu-latest
