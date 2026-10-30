@@ -9,8 +9,12 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Health360.Domain.Tests/Health360.Domain.Tests.csproj" />
+    <Project Path="tests/Health360.Drift.Tests/Health360.Drift.Tests.csproj" />
     <Project Path="tests/Health360.LocalDb.Tests/Health360.LocalDb.Tests.csproj" />
     <Project Path="tests/Health360.Server.Tests/Health360.Server.Tests.csproj" />
     <Project Path="tests/Health360.UI.Tests/Health360.UI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/drift/Health360.Drift.csproj" />
   </Folder>
 </Solution>

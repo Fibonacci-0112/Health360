@@ -8,9 +8,11 @@
       "src/Health360.Server/Health360.Server.csproj",
       "src/Health360.UI/Health360.UI.csproj",
       "tests/Health360.Domain.Tests/Health360.Domain.Tests.csproj",
+      "tests/Health360.Drift.Tests/Health360.Drift.Tests.csproj",
       "tests/Health360.LocalDb.Tests/Health360.LocalDb.Tests.csproj",
       "tests/Health360.Server.Tests/Health360.Server.Tests.csproj",
-      "tests/Health360.UI.Tests/Health360.UI.Tests.csproj"
+      "tests/Health360.UI.Tests/Health360.UI.Tests.csproj",
+      "tools/drift/Health360.Drift.csproj"
     ]
   }
 }
