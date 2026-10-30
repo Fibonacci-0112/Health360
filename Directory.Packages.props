@@ -3,6 +3,9 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
+  <ItemGroup Label="Contracts">
+    <PackageVersion Include="FluentValidation" Version="12.1.1" />
+  </ItemGroup>
   <ItemGroup Label="Analyzers">
     <PackageVersion Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="5.6.0" />
   </ItemGroup>
@@ -12,6 +15,7 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Debug" Version="10.0.14" />
   </ItemGroup>
   <ItemGroup Label="Server">
+    <PackageVersion Include="Anthropic" Version="13.3.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.14" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
   </ItemGroup>

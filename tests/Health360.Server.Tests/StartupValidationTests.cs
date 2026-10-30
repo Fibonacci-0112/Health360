@@ -1,3 +1,4 @@
+using Health360.Server.Ai;
 using Health360.Server.Auth;
 using Health360.Server.Data;
 using Health360.Server.Tests.Support;
@@ -38,12 +39,26 @@ public class StartupValidationTests
         Assert.Contains($"'{member}'", error.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("Anthropic:RequestsPerUserPerHour", "0", "RequestsPerUserPerHour")]
+    [InlineData("Anthropic:RequestsPerUserPerHour", "-1", "RequestsPerUserPerHour")]
+    [InlineData("Anthropic:MaxRetries", "-1", "MaxRetries")]
+    public void Refuses_to_start_with_an_invalid_AI_setting(string setting, string value, string member)
+    {
+        var settings = new Dictionary<string, string?>(ValidSettings) { [setting] = value };
+
+        var error = Assert.Throws<OptionsValidationException>(() => Validate(settings));
+
+        Assert.Contains(member, error.Message, StringComparison.Ordinal);
+    }
+
     private static void Validate(Dictionary<string, string?> settings)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var services = new ServiceCollection().AddLogging();
         services.AddSupabaseAuthentication(configuration);
         services.AddUserDatabase(configuration);
+        services.AddClaude(configuration);
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IStartupValidator>().Validate();
