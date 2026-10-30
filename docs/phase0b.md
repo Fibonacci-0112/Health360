@@ -10,7 +10,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 | `Health360.Domain` units and UUIDv7 ids, with FsCheck property tests | **Done.** `Units/` and `Ids/UuidV7` port `packages/domain`, with the same factors and property tests (FsCheck) |
 | `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | **Auth and user-scoped queries done** (see [API authentication](#api-authentication)), with `/me` and `/profiles/{id}` as the first endpoints. **Test Claude call started:** `POST /ai/hello` (see [Claude calls](#claude-calls)), tested against recorded responses only; not yet run against the live API |
 | MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | **Built; Android build verified, not yet run on a device** (see [MAUI app](#maui-app)): sign-in by emailed code, onboarding with every unit type and locale defaults, the five tabs and Settings (units, rejected writes with retry and discard, sign-out), syncing over the existing `me`, `household` and `reference` streams. The app's services (everything below the BlazorWebView) were run against `supabase start` and the local PowerSync: emailed-code sign-in, the profile arriving over `me`, onboarding reaching the server, an RLS-rejected write quarantined without blocking the queue, and a second user never receiving the first user's rows. Not yet run in the Android emulator or on Windows |
-| Throwaway `notes` table on Android and Windows | Not started |
+| Throwaway `notes` table on Android and Windows | **Built, not yet run on a device** (see [Notes sync test](#notes-sync-test)): the Today tab adds and lists notes through the local database. The two-device, kill-while-offline and two-client checks of the exit criteria are still to do |
 | `tools/drift` against the PowerSync .NET schema | Not started (`tools/codegen/check-drift.mjs` still checks the TypeScript client schema) |
 
 ## What the scaffold contains
@@ -95,7 +95,7 @@ Tests: `AiHelloTests` runs the real SDK against `FakeAnthropic`, an HTTP handler
 - `SupabaseConnector` gives PowerSync the access token and the PowerSync URL, and logs only the op, table and error code of a quarantined write (no ids, no row data).
 - `LocalDatabase` binds the database to the user who owns it. `ConnectAsync(userId)` clears it first when another user (or nobody known) owned it, including pending uploads and `failed_uploads`; `DisconnectAsync` keeps everything for the same user's return; `ClearAsync` is for a sign-out the user asked for. The owner is kept in MAUI `Preferences` (`PreferencesOwnerStore`). Connections retry every 2 s, as in the prototype.
 
-Not done yet: the `notes` screens, the two-device and kill-while-offline checks of the gate, and a drift check of `AppSchema` against the migrations (`tools/drift`).
+Not done yet: the two-device and kill-while-offline checks of the gate, and a drift check of `AppSchema` against the migrations (`tools/drift`).
 
 `Profiles` holds the profile queries the app shell and onboarding use: a watched query for the signed-in user's row, the onboarding save and the unit-preference update. PowerSync tables are views with `INSTEAD OF` triggers, whose row counts SQLite reports as 0, so a save first checks that the row exists in the same transaction and throws if it doesn't (a save that changed nothing is never shown as done). `FailedUploads` lists the quarantine for Settings without the row data.
 
@@ -116,6 +116,16 @@ The screens and their services are in `src/Health360.UI` (no MAUI dependency, so
 Deviations from the prototype: sign-out ends only this device's session (`scope=local`; supabase-js signs out every device by default), the sign-out confirmation is shown in the page rather than a system dialog, and the currency check is the table's (`^[A-Z]{3}$`) rather than zod's length-only one.
 
 Tests: `tests/Health360.UI.Tests` runs the Auth client, the session and `AuthService` against a fake Auth server (Supabase's documented responses), and the profile, sync state and screens (bUnit) against a real PowerSync database in a temporary file. The project keeps culture data (`UseCultureData`), as the MAUI app does, so the locale defaults are tested with real ICU data. `ServicesTests` resolves the host's whole service graph.
+
+## Notes sync test
+
+The throwaway `notes` table (PLAN.md §3) ports the prototype's `NotesTest`; don't build features on it. The table, its RLS and the `me` stream already existed, so this is client code only:
+
+- `Health360.Contracts/Notes`: `NoteInput` and its validator (ports `noteInputSchema`: 1 to 2000 characters after trimming, the table's constraint).
+- `Health360.LocalDb/Notes`: `AddAsync` writes the note with a UUIDv7 id made on the device, the signed-in profile, today's date in the device's time zone (`TimeProvider.GetLocalNow`) and `created_at`/`updated_at`; it uploads through the usual queue. `Watch` lists every note the device has, newest first. It doesn't filter by profile, so a row the streams shouldn't have delivered would show up rather than be hidden.
+- `Health360.UI/Components/NotesTest.razor`, on the Today tab: the text box (disabled Add for a blank note), the list, and its loading, empty and error states. A failed save keeps the text and says so.
+
+Tests: `NotesTests` in `Health360.LocalDb.Tests` (id, local date across midnight UTC, trimming, the queued PUT, empty notes write nothing, order) and in `Health360.UI.Tests` (adding, the disabled Add, a synced note appearing). Not yet done: running it on Android and Windows against a real stack, and the exit criteria's two-device, kill-while-offline and two-client isolation checks.
 
 ## Running it
 

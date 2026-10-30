@@ -1,0 +1,116 @@
+@using Health360.Contracts.Notes
+@using PowerSync.Common.Client
+@implements IDisposable
+@inject PowerSyncDatabase Db
+@inject ProfileService Profiles
+@inject TimeProvider Clock
+
+@* Phase 0b sync test (PLAN.md §3): a note written here, even offline, should reach the user's other
+   devices within about 5 seconds of both being online. Throwaway; ports the prototype's NotesTest. *@
+<section class="notes" aria-labelledby="notes-title">
+    <h2 id="notes-title">Sync test</h2>
+    <p class="muted">Notes written here, even offline, should reach your other devices.</p>
+    <form class="note-form" @onsubmit="AddAsync">
+        <input id="note-body" aria-label="New note" placeholder="Write a note" maxlength="@NoteInputValidator.MaxLength"
+               @bind="body" @bind:event="oninput" />
+        <button type="submit" class="primary" disabled="@(busy || string.IsNullOrWhiteSpace(body) || Profiles.Profile is null)"
+                aria-busy="@(busy ? "true" : "false")">Add</button>
+    </form>
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+
+    @if (notes is null)
+    {
+        <p class="muted">@(watchFailed ? "Couldn't read notes on this device." : "Loading notes")</p>
+    }
+    else if (notes.Length == 0)
+    {
+        <p class="muted">No notes yet.</p>
+    }
+    else
+    {
+        <ul class="note-list">
+            @foreach (var note in notes)
+            {
+                <li @key="note.Id" class="note">
+                    <span>@note.Body</span>
+                    <span class="muted small">@note.LocalDate</span>
+                </li>
+            }
+        </ul>
+    }
+</section>
+
+@code {
+    private static readonly NoteInputValidator Validator = new();
+    private readonly CancellationTokenSource stop = new();
+    private NoteRow[]? notes;
+    private bool watchFailed;
+    private string body = "";
+    private bool busy;
+    private string? error;
+
+    protected override void OnInitialized()
+    {
+        Profiles.Changed += Refresh;
+        var token = stop.Token;
+        _ = Task.Run(() => WatchAsync(token), CancellationToken.None);
+    }
+
+    private async Task WatchAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var rows in Notes.Watch(Db, cancellationToken))
+            {
+                notes = rows;
+                Refresh();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception failure) when (failure is not ObjectDisposedException)
+        {
+            watchFailed = true;
+            Refresh();
+        }
+    }
+
+    private async Task AddAsync()
+    {
+        var note = new NoteInput(body);
+        if (busy || Profiles.Profile is not { } profile || !Validator.Validate(note).IsValid)
+        {
+            return;
+        }
+
+        busy = true;
+        error = null;
+        try
+        {
+            await Notes.AddAsync(Db, profile.Id, note, Clock);
+            body = "";
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            // The note stays in the box so nothing typed is lost.
+            error = "Couldn't save the note on this device. Please try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Profiles.Changed -= Refresh;
+        stop.Cancel();
+        stop.Dispose();
+    }
+}

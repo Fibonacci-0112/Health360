@@ -15,6 +15,11 @@ public sealed class TestClock(DateTimeOffset now) : TimeProvider
     {
     }
 
+    /// <summary>The device's time zone; UTC unless a test sets one.</summary>
+    public TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Utc;
+
+    public override TimeZoneInfo LocalTimeZone => Zone;
+
     public override DateTimeOffset GetUtcNow() => Now;
 }
 
