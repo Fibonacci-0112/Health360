@@ -172,10 +172,11 @@ Against the local stack (`supabase start`, then `docker compose -f powersync/doc
 dotnet build src/Health360.Maui -t:Run -f net10.0-android -p:AndroidSdkDirectory=$HOME/android-sdk -p:Health360SupabaseApiKey=<publishable key>
 ```
 
-On Windows, build the Windows target instead (no Android SDK needed). The key is baked in per build, so an app built without it, including one started from Visual Studio, shows "This build isn't connected to a server yet". To run from Visual Studio, set `Health360SupabaseApiKey` as an environment variable and start Visual Studio from that shell.
+On Windows, build the Windows target instead (no Android SDK needed), then start the app. For the Windows target, `-t:Run` only launches the app and doesn't build it, so a first build with `-t:Run` fails with exit code 3 (the app doesn't exist yet). The key is baked in per build, so an app built without it, including one started from Visual Studio, shows "This build isn't connected to a server yet". To run from Visual Studio, set `Health360SupabaseApiKey` as an environment variable and start Visual Studio from that shell.
 
 ```sh
-dotnet build src/Health360.Maui -t:Run -f net10.0-windows10.0.19041.0 -p:Health360SupabaseApiKey=<publishable key>
+dotnet build src/Health360.Maui -f net10.0-windows10.0.19041.0 -p:Health360SupabaseApiKey=<publishable key>
+src/Health360.Maui/bin/Debug/net10.0-windows10.0.19041.0/win-x64/Health360.Maui.exe
 ```
 
 The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54324). For a cloud project, also set `Health360SupabaseUrl` and `Health360PowerSyncUrl`. Never pass the service-role key.
