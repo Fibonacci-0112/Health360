@@ -1,0 +1,25 @@
+@implements IDisposable
+@inject SyncState Sync
+
+@* Online or not, writes not yet uploaded, and writes the server rejected (PLAN.md §2.7). *@
+<div class="badge @(Sync.Connected ? "" : "offline") @(Sync.Failed.Count > 0 ? "has-rejected" : "")"
+     role="status" aria-label="Sync status: @Label">
+    <span class="dot" aria-hidden="true"></span>
+    <span>@Label</span>
+</div>
+
+@code {
+    public string Label =>
+        string.Join(" · ", new[]
+        {
+            Sync.Connected ? "Online" : "Offline",
+            Sync.Pending > 0 ? $"{Sync.Pending} unsynced" : Sync.HasSynced ? "all synced" : "not synced yet",
+            Sync.Failed.Count > 0 ? $"{Sync.Failed.Count} rejected" : null,
+        }.Where(part => part is not null));
+
+    protected override void OnInitialized() => Sync.Changed += Refresh;
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Sync.Changed -= Refresh;
+}

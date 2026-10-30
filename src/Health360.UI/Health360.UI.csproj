@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
 
-  <!-- Razor Class Library with the app's screens, hosted by Health360.Maui's BlazorWebView. -->
+  <!--
+    Razor Class Library with the app's screens and their services (sign-in, session, profile, sync state),
+    hosted by Health360.Maui's BlazorWebView. No MAUI dependency, so it builds and is tested on every OS;
+    the host supplies the platform pieces (secure session storage, SQLite, endpoints).
+  -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
-
-  <ItemGroup>
-    <SupportedPlatform Include="browser" />
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
@@ -16,6 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Health360.Contracts\Health360.Contracts.csproj" />
     <ProjectReference Include="..\Health360.Domain\Health360.Domain.csproj" />
+    <ProjectReference Include="..\Health360.LocalDb\Health360.LocalDb.csproj" />
   </ItemGroup>
 
 </Project>

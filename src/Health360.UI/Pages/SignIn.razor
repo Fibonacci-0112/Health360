@@ -1,0 +1,102 @@
+@using Health360.Contracts.Account
+@inject AuthService Auth
+
+@* Sign-in by emailed 6-digit code (PLAN.md §2.1). The same flow creates an account the first time. *@
+<div class="auth">
+    <h1 class="title">Health360</h1>
+
+    @if (!codeSent)
+    {
+        <form class="form" @onsubmit="SendCodeAsync">
+            <label for="email" class="label">Email</label>
+            <input id="email" type="email" autocomplete="email" inputmode="email" autocapitalize="none"
+                   placeholder="you@example.com" @bind="email" @bind:event="oninput" />
+            <button type="submit" class="primary" disabled="@busy" aria-busy="@(busy ? "true" : "false")">Email me a code</button>
+        </form>
+    }
+    else
+    {
+        <form class="form" @onsubmit="VerifyAsync">
+            <label for="code" class="label">Enter the 6-digit code sent to @email.Trim()</label>
+            <input id="code" class="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+                   @bind="code" @bind:event="oninput" />
+            <button type="submit" class="primary" disabled="@busy" aria-busy="@(busy ? "true" : "false")">Sign in</button>
+            <button type="button" class="secondary" disabled="@busy" @onclick="UseDifferentEmail">Use a different email</button>
+        </form>
+    }
+
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+</div>
+
+@code {
+    private string email = "";
+    private string code = "";
+    private bool codeSent;
+    private bool busy;
+    private string? error;
+
+    private async Task SendCodeAsync()
+    {
+        if (!SignInRules.IsEmail(email))
+        {
+            error = "Enter a valid email address.";
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            await Auth.SendCodeAsync(email);
+            code = "";
+            codeSent = true;
+        });
+    }
+
+    // On success the layout switches screens; nothing else to do here.
+    private Task VerifyAsync()
+    {
+        if (!SignInRules.IsCode(code))
+        {
+            error = "The code is 6 digits.";
+            return Task.CompletedTask;
+        }
+
+        return RunAsync(() => Auth.VerifyCodeAsync(email, code));
+    }
+
+    private void UseDifferentEmail()
+    {
+        codeSent = false;
+        error = null;
+    }
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        busy = true;
+        error = null;
+        try
+        {
+            await action();
+        }
+        catch (AuthException failure)
+        {
+            error = Describe(failure);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private string Describe(AuthException failure) => failure.Kind switch
+    {
+        AuthErrorKind.NotConfigured => "This build isn't connected to a server yet (see docs/phase0b.md, \"Running the app\").",
+        AuthErrorKind.Unavailable => "Couldn't reach the server. Check your connection and try again.",
+        AuthErrorKind.RateLimited => "Too many attempts. Wait a minute, then try again.",
+        _ when codeSent && failure.Code is "otp_expired" or null =>
+            "That code is wrong or has expired. Check it, or use a different email to request a new one.",
+        _ => failure.Message,
+    };
+}

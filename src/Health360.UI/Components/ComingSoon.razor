@@ -1,0 +1,13 @@
+@* Placeholder for a tab whose module lands in Phase 1. *@
+<div class="center">
+    <h1>@Title</h1>
+    <p class="muted">Arrives in Phase 1 (FEATURES.md §@Section).</p>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = "";
+
+    [Parameter, EditorRequired]
+    public string Section { get; set; } = "";
+}

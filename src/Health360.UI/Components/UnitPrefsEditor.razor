@@ -1,0 +1,27 @@
+@* One row per measurement type (PLAN.md §2.6); each can be metric or imperial on its own. *@
+<div class="unit-prefs">
+    @foreach (var field in UnitPrefsJson.Fields)
+    {
+        var labelId = $"{IdPrefix}-unit-{field.Key}";
+        <div class="field">
+            <span class="label" id="@labelId">@UnitLabels.Types[field.Key]</span>
+            <ChoiceGroup LabelledBy="@labelId" Options="field.Codes" Labels="UnitLabels.Options"
+                         Value="@field.CodeOf(Value)" ValueChanged="code => Choose(field, code)" />
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public UnitPrefs Value { get; set; } = UnitPrefs.Metric;
+
+    [Parameter]
+    public EventCallback<UnitPrefs> ValueChanged { get; set; }
+
+    /// <summary>Keeps label ids unique when two editors could be on one page.</summary>
+    [Parameter]
+    public string IdPrefix { get; set; } = "prefs";
+
+    private Task Choose(UnitPrefField field, string? code) =>
+        code is null ? Task.CompletedTask : ValueChanged.InvokeAsync(UnitPrefsJson.Choose(Value, field, code));
+}

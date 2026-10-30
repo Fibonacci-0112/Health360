@@ -9,7 +9,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 | Solution layout (§2.2) and CI: build, format and analyzers, tests | **Scaffolded.** Projects compile, with placeholder tests only |
 | `Health360.Domain` units and UUIDv7 ids, with FsCheck property tests | **Done.** `Units/` and `Ids/UuidV7` port `packages/domain`, with the same factors and property tests (FsCheck) |
 | `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | **Auth and user-scoped queries done** (see [API authentication](#api-authentication)), with `/me` and `/profiles/{id}` as the first endpoints. **Test Claude call started:** `POST /ai/hello` (see [Claude calls](#claude-calls)), tested against recorded responses only; not yet run against the live API |
-| MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | **Local database started** (see [Local database](#local-database)): PowerSync .NET schema, upload connector, `failed_uploads` quarantine and account binding in `Health360.LocalDb`, registered in the MAUI app. Not yet connected to a server: that needs sign-in, which isn't started. Tabs and onboarding not started; the app shows one placeholder page |
+| MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | **Built; Android build verified, not yet run on a device** (see [MAUI app](#maui-app)): sign-in by emailed code, onboarding with every unit type and locale defaults, the five tabs and Settings (units, rejected writes with retry and discard, sign-out), syncing over the existing `me`, `household` and `reference` streams. The app's services (everything below the BlazorWebView) were run against `supabase start` and the local PowerSync: emailed-code sign-in, the profile arriving over `me`, onboarding reaching the server, an RLS-rejected write quarantined without blocking the queue, and a second user never receiving the first user's rows. Not yet run in the Android emulator or on Windows |
 | Throwaway `notes` table on Android and Windows | Not started |
 | `tools/drift` against the PowerSync .NET schema | Not started (`tools/codegen/check-drift.mjs` still checks the TypeScript client schema) |
 
@@ -95,9 +95,27 @@ Tests: `AiHelloTests` runs the real SDK against `FakeAnthropic`, an HTTP handler
 - `SupabaseConnector` gives PowerSync the access token and the PowerSync URL, and logs only the op, table and error code of a quarantined write (no ids, no row data).
 - `LocalDatabase` binds the database to the user who owns it. `ConnectAsync(userId)` clears it first when another user (or nobody known) owned it, including pending uploads and `failed_uploads`; `DisconnectAsync` keeps everything for the same user's return; `ClearAsync` is for a sign-out the user asked for. The owner is kept in MAUI `Preferences` (`PreferencesOwnerStore`). Connections retry every 2 s, as in the prototype.
 
-Not done yet: sign-in (it provides `ISupabaseSession` and `SyncEndpoints`, which the MAUI app doesn't register yet, so nothing connects), the `notes` screens, the two-device and kill-while-offline checks of the gate, and a drift check of `AppSchema` against the migrations (`tools/drift`).
+Not done yet: the `notes` screens, the two-device and kill-while-offline checks of the gate, and a drift check of `AppSchema` against the migrations (`tools/drift`).
+
+`Profiles` holds the profile queries the app shell and onboarding use: a watched query for the signed-in user's row, the onboarding save and the unit-preference update. PowerSync tables are views with `INSTEAD OF` triggers, whose row counts SQLite reports as 0, so a save first checks that the row exists in the same transaction and throws if it doesn't (a save that changed nothing is never shown as done). `FailedUploads` lists the quarantine for Settings without the row data.
 
 Tests: `tests/Health360.LocalDb.Tests` runs the upload queue and the account binding against a real PowerSync database (the SDK's native core and SQLite, in a temporary file) with a fake writer, and `PostgrestWriter` against a fake PostgREST. No server is involved.
+
+## MAUI app
+
+The screens and their services are in `src/Health360.UI` (no MAUI dependency, so they build and are tested on Linux); `src/Health360.Maui` supplies secure session storage, the platform SQLite and the endpoints. The flow ports the prototype's `_layout.tsx`, `(auth)`, `onboarding.tsx`, `(tabs)` and `settings.tsx`.
+
+- **Sign-in** (`Health360.UI/Auth`): `SupabaseAuthClient` calls Supabase Auth directly: `POST /auth/v1/otp` (creates the account the first time), `/verify` with the 6-digit code, `/token?grant_type=refresh_token` and `/logout?scope=local`. Errors are sorted into rejected (wrong or expired code, a refused refresh token), rate limited, and unavailable (offline, 5xx, a gateway or captive-portal page), so the app never signs someone out because the network failed. Nothing logs a token, code or email address.
+- **Session**: `SessionManager` is the `ISupabaseSession` the sync connector and uploads ask for tokens. It refreshes a token within 60 s of expiry, one refresh at a time (Auth rotates refresh tokens, so a second refresh with the old one would be refused), and saves the rotated session straight away. Offline, it keeps the session and hands out the token while it is still valid. The session is kept in MAUI `SecureStorage` (`SecureSessionStore`): Android Keystore-encrypted preferences, and on Windows (unpackaged) a DPAPI-encrypted `securestorage.dat` in the app's data folder.
+- **Account binding** (`AuthService`): every session binds the local database to its user before any screen sees it. Restoring a saved session at launch binds and connects without going online. Only a sign-out the user asks for clears the device; it first counts pending and rejected writes and asks before deleting them, and if Auth can't be reached nothing is cleared. A refresh token Auth refuses ends the session but keeps the data for the same user's return (the next user to sign in gets a cleared database through `LocalDatabase`).
+- **Shell** (`Layout/MainLayout.razor`): loading, then sign-in, then "Setting up this device" until the profile row the server created at sign-up has synced, then onboarding until `onboarded_at` is set, then the tabs. Today, Food, Train, Body and Plan are a bottom bar on phones and a side rail in windows at least 840 px wide; Settings is in the top bar, next to the sync badge (online or offline, unsynced writes, rejected writes).
+- **Onboarding**: name, all 14 unit types (`UnitPrefsEditor`; defaults from the device locale by `UnitPrefs.DefaultFor`, and the protein ratio follows body weight while it is on its default), height in cm or feet and inches, birth date, sex for calculations and activity level. The time zone (IANA; Windows ids are converted) and currency come from the device (`DeviceLocale`). `Health360.Contracts/Profiles` holds `UnitPrefsJson` (the prototype's `unit_prefs` format, byte for byte), `OnboardingForm` with its validator (it also checks the table's constraints, such as the height pair and a three-letter uppercase currency, so a valid form is never quarantined) and `HeightEntry` (ports `height.ts`). The save goes to the local database and uploads when online.
+- **Settings**: unit preferences, the rejected writes with retry and discard, and sign-out.
+- **Endpoints**: set at build time as `Health360SupabaseUrl`, `Health360SupabaseApiKey` (the publishable key) and `Health360PowerSyncUrl`, as `-p:` properties or environment variables. They default to the local stack; the Android emulator reaches it at 10.0.2.2, and a network security config allows plain HTTP only to 10.0.2.2, 127.0.0.1 and localhost. Without a key the sign-in screen says the build isn't connected.
+
+Deviations from the prototype: sign-out ends only this device's session (`scope=local`; supabase-js signs out every device by default), the sign-out confirmation is shown in the page rather than a system dialog, and the currency check is the table's (`^[A-Z]{3}$`) rather than zod's length-only one.
+
+Tests: `tests/Health360.UI.Tests` runs the Auth client, the session and `AuthService` against a fake Auth server (Supabase's documented responses), and the profile, sync state and screens (bUnit) against a real PowerSync database in a temporary file. The project keeps culture data (`UseCultureData`), as the MAUI app does, so the locale defaults are tested with real ICU data. `ServicesTests` resolves the host's whole service graph.
 
 ## Running it
 
@@ -119,6 +137,16 @@ dotnet build src/Health360.Maui -f net10.0-android -p:AndroidSdkDirectory=$HOME/
 
 On Windows, install `maui-windows` (same `--version`) and build with `-f net10.0-windows10.0.19041.0`.
 
+### Running the app
+
+Against the local stack (`supabase start`, then `docker compose -f powersync/docker-compose.yml up -d`), pass the publishable key that `supabase status` prints; the URLs default to the local stack:
+
+```sh
+dotnet build src/Health360.Maui -t:Run -f net10.0-android -p:AndroidSdkDirectory=$HOME/android-sdk -p:Health360SupabaseApiKey=<publishable key>
+```
+
+The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54324). For a cloud project, also set `Health360SupabaseUrl` and `Health360PowerSyncUrl`. Never pass the service-role key.
+
 ## CI
 
 | Job | Runner | What it runs |
@@ -135,6 +163,11 @@ On Windows, install `maui-windows` (same `--version`) and build with `-f net10.0
 - `PowerSync.Common` 1.0.0 depends on `SQLitePCLRaw.bundle_e_sqlite3` 2.1.10, which has a high-severity advisory (GHSA-2m69-gcr7-jv3q). NuGet's audit warning fails the restore because warnings are errors. `Health360.LocalDb` references 2.1.14 directly.
 - The SDK parses each queued write's data (`CrudEntry.OpData`) with Newtonsoft, which turns any text that looks like an ISO date-time into a `DateTime`: `created_at` (or a note that reads like a timestamp) loses its text and UTC offset. `Uploads` reads the op's JSON from `ps_crud` instead; `SendsTimestampsExactlyAsStored` guards it.
 - `PowerSync.Common` ships its native core for Linux, macOS and Windows desktop as content files, so a plain `net10.0` test project can open a real PowerSync database on the Linux CI runner.
+- PowerSync .NET 1.0.0 builds the sync URL as the credentials' endpoint plus `/sync/stream`, and `Uri.ToString()` ends a bare host with `/`, so `http://127.0.0.1:8080/` requested `//sync/stream`, which the service answers with 404. Sync then retried forever and never connected; unit tests with fakes couldn't see it. `SupabaseConnector.Endpoint` trims the trailing slash.
+- `PowerSyncDatabase.Connect` returns only after the first successful connection, so offline (or with that 404) it never returns. `LocalDatabase.ConnectAsync` used to await it while holding its gate, which would have blocked sign-out and account switches until the network came back; it now returns once sync has started.
+- PowerSync tables are views with `INSTEAD OF` triggers, so `Execute` reports 0 rows affected for an UPDATE that did change a row. Check that the row exists instead (`Profiles`).
+- PowerSync reads rows with Dapper, which emits IL at run time. .NET 10 file-based apps (`dotnet run app.cs`) default to `PublishAot`, which turns dynamic code off, so a scratch harness needs `#:property PublishAot=false`. The MAUI app runs on Mono (Android) and CoreCLR (Windows) and is unaffected.
+- bUnit's synchronous `Click()`, `Change()` and `Submit()` can race the app's background re-renders (sync status, watched queries): an event lands on a handler a concurrent render just replaced and is lost, which made about half the component-test runs fail. The UI tests await `ClickAsync`, `SubmitAsync` and `TriggerEventAsync` instead (`AppTestContext`).
 - `Directory.Build.props` is read before the project file, so a condition there on a property the project sets (such as `UseMaui`) is always false. Put such settings in `Directory.Build.targets`.
 - A `workloadVersion` in `global.json` makes every build fail ("Workload version ... was not found") unless that workload set is installed, including builds that use no workloads. That's why the version is pinned on `dotnet workload install` instead.
 - The Android SDK installer (`InstallAndroidDependencies`) fails with "CommonUtilities.Helpers.UserName must have a valid value" when `USER` isn't set, as in some containers. Set `USER` before running it.

@@ -18,7 +18,7 @@ The repository holds the new **.NET solution** (Phase 0b, [ADR 0002](docs/adr/00
 | `Health360.slnx` | The .NET solution. `Health360.Core.slnf` is everything except the MAUI app (builds without MAUI workloads) |
 | `src/Health360.Domain` | Pure C# domain logic (units, ids, calculations); no I/O, enforced by `BannedSymbols.txt` |
 | `src/Health360.Contracts` | Records and validators for API payloads and Claude's structured output |
-| `src/Health360.UI` | Razor Class Library with the app's screens |
+| `src/Health360.UI` | Razor Class Library with the app's screens, sign-in and session, and the profile and sync-state services |
 | `src/Health360.LocalDb` | The app's offline database: PowerSync schema, uploads and the `failed_uploads` quarantine |
 | `src/Health360.Maui` | MAUI Blazor Hybrid app for Android and Windows |
 | `src/Health360.Server` | ASP.NET Core API (replaces Edge Functions) |

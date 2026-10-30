@@ -1,14 +1,393 @@
+/* Phase 0b styling, ported from the prototype's theme. The component library is chosen in Phase 0b (PLAN.md §2.1). */
 :root {
     color-scheme: light dark;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --primary: #0f766e;
+    --on-primary: #ffffff;
+    --text: #0f172a;
+    --muted: #64748b;
+    --border: #cbd5e1;
+    --surface: #f8fafc;
+    --background: #ffffff;
+    --danger: #b91c1c;
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 12px;
+    --space-lg: 16px;
+    --space-xl: 24px;
+    --tab-height: 56px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --primary: #2dd4bf;
+        --on-primary: #042f2e;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --border: #334155;
+        --surface: #1e293b;
+        --background: #0f172a;
+        --danger: #f87171;
+    }
+}
+
+* {
+    box-sizing: border-box;
 }
 
 body {
     margin: 0;
+    background: var(--background);
+    color: var(--text);
+}
+
+h1 {
+    font-size: 26px;
+    margin: 0;
+}
+
+h2 {
+    font-size: 18px;
+    margin: var(--space-md) 0 0;
+}
+
+.muted {
+    color: var(--muted);
+}
+
+.small {
+    font-size: 13px;
+}
+
+.strong {
+    font-weight: 600;
+}
+
+.error {
+    color: var(--danger);
+}
+
+/* Shell: top bar, content, tabs. Safe-area insets keep it clear of Android's status and navigation bars. */
+.shell {
+    min-height: 100vh;
+    padding-top: env(safe-area-inset-top);
+}
+
+.top-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-sm) var(--space-lg);
+    border-bottom: 1px solid var(--border);
+}
+
+.brand {
+    font-weight: 700;
+    color: var(--primary);
+    margin-right: auto;
+}
+
+.top-link {
+    color: var(--primary);
+    font-weight: 600;
+    text-decoration: none;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
 }
 
 .content {
-    padding: 1rem;
+    padding: var(--space-lg);
+    padding-bottom: calc(var(--tab-height) + env(safe-area-inset-bottom) + var(--space-lg));
+}
+
+.tabs {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    background: var(--background);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+.tab {
+    flex: 1;
+    min-height: var(--tab-height);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.tab.active {
+    color: var(--primary);
+    box-shadow: inset 0 3px 0 var(--primary);
+}
+
+/* Wide windows (Windows desktop, tablets): tabs become a side rail. */
+@media (min-width: 840px) {
+    .shell {
+        display: grid;
+        grid-template-columns: 160px 1fr;
+        grid-template-rows: auto 1fr;
+    }
+
+    .top-bar {
+        grid-column: 1 / -1;
+    }
+
+    .tabs {
+        position: static;
+        flex-direction: column;
+        border-top: none;
+        border-right: 1px solid var(--border);
+        padding: var(--space-sm) 0;
+    }
+
+    .tab {
+        flex: none;
+        justify-content: flex-start;
+        padding: 0 var(--space-lg);
+        min-height: 44px;
+    }
+
+    .tab.active {
+        box-shadow: inset 3px 0 0 var(--primary);
+    }
+
+    .content {
+        padding-bottom: var(--space-lg);
+    }
+}
+
+/* Pages */
+.page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    width: 100%;
+    max-width: 960px;
+    margin: 0 auto;
+}
+
+.page.narrow {
+    max-width: 640px;
+    padding: calc(env(safe-area-inset-top) + var(--space-xl)) var(--space-xl) var(--space-xl);
+}
+
+.content .page.narrow {
+    padding: 0;
+}
+
+.center {
+    min-height: 60vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-sm);
+    padding: var(--space-xl);
+    text-align: center;
+}
+
+.spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--border);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spinner {
+        animation-duration: 3s;
+    }
+}
+
+/* Sign-in */
+.auth {
+    min-height: 100vh;
+    max-width: 480px;
+    margin: 0 auto;
+    padding: var(--space-xl);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--space-xl);
+}
+
+.title {
+    font-size: 32px;
+    color: var(--primary);
+}
+
+/* Forms */
+.form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-lg);
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.label {
+    font-weight: 600;
+}
+
+input {
+    font: inherit;
+    font-size: 16px;
+    color: var(--text);
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: var(--space-md);
+    min-height: 44px;
+}
+
+input:focus-visible,
+button:focus-visible,
+a:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+input.short {
+    width: 120px;
+}
+
+input.code {
+    font-size: 24px;
+    letter-spacing: 8px;
+    text-align: center;
+}
+
+.inline,
+.choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+}
+
+button {
+    font: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    min-height: 44px;
+    padding: var(--space-md) var(--space-lg);
+    border-radius: 8px;
+    border: 1px solid var(--primary);
+    cursor: pointer;
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+button.primary {
+    background: var(--primary);
+    color: var(--on-primary);
+}
+
+button.secondary {
+    background: var(--background);
+    color: var(--primary);
+}
+
+button.danger {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--background);
+}
+
+.chip {
+    font-weight: 400;
+    min-height: 36px;
+    padding: var(--space-sm) var(--space-md);
+    border-radius: 6px;
+    border-color: var(--border);
+    background: var(--background);
+    color: var(--text);
+}
+
+.chip.on {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--on-primary);
+    font-weight: 600;
+}
+
+.unit-prefs {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+/* Sync badge and the quarantine list */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-xs) var(--space-md);
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 13px;
+    align-self: flex-start;
+}
+
+.badge .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--primary);
+}
+
+.badge.offline .dot {
+    background: var(--muted);
+}
+
+.badge.has-rejected {
+    border-color: var(--danger);
+}
+
+.failed-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.failed,
+.confirm {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    padding: var(--space-md);
+    border: 1px solid var(--danger);
+    border-radius: 8px;
+}
+
+.confirm p {
+    margin: 0;
 }
 
 #blazor-error-ui {

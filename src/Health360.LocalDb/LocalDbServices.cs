@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using PowerSync.Common.Client;
 
 namespace Health360.LocalDb;
@@ -34,7 +35,8 @@ public static class LocalDbServices
         services.AddSingleton(provider => new LocalDatabase(
             provider.GetRequiredService<PowerSyncDatabase>(),
             provider.GetRequiredService<IDatabaseOwnerStore>(),
-            provider.GetRequiredService<SupabaseConnector>()));
+            provider.GetRequiredService<SupabaseConnector>(),
+            provider.GetService<ILogger<LocalDatabase>>()));
         return services;
     }
 }

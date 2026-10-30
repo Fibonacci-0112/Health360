@@ -91,6 +91,32 @@ public class LocalDatabaseTests
         Assert.Equal("user-a", owner.Owner);
     }
 
+    [Fact]
+    public async Task ConnectingWhileTheServerIsUnreachableReturnsAndLeavesSignOutUnblocked()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        var owner = new MemoryOwnerStore();
+        // A session and a PowerSync URL nothing listens on: the first connection never succeeds.
+        var local = new LocalDatabase(t.Db, owner, new SupabaseConnector(
+            new FixedSession(new SessionToken("user-a", "a-token")),
+            owner,
+            new FakeWriter(),
+            new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", new Uri("http://127.0.0.1:9")),
+            new FixedClock(DateTimeOffset.UnixEpoch),
+            NullLogger<SupabaseConnector>.Instance));
+        var timeout = TimeSpan.FromSeconds(10);
+        var ct = TestContext.Current.CancellationToken;
+
+        await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
+        Assert.Equal("user-a", owner.Owner);
+
+        // Neither waits for a connection that may never come (offline sign-out, account switch).
+        await local.DisconnectAsync().WaitAsync(timeout, ct);
+        await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
+        await local.ClearAsync().WaitAsync(timeout, ct);
+        Assert.Null(owner.Owner);
+    }
+
     private sealed class Count
     {
         public long N { get; set; }

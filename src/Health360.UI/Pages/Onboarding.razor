@@ -1,0 +1,147 @@
+@inject ProfileService Profiles
+@inject IDeviceLocale Locale
+
+@* First-run setup, ported from the prototype's onboarding.tsx. Writes go to the local database and sync
+   when online, like every other write. Unit defaults come from the device locale and every type can be
+   changed (PLAN.md §2.6). *@
+<div class="page narrow">
+    <h1>Set up your profile</h1>
+    <p class="muted">
+        Health360 is a wellness app, not a medical device. Calculations need only a few details, and you can
+        change everything later.
+    </p>
+
+    <form class="form" @onsubmit="SaveAsync">
+        <div class="field">
+            <label for="name" class="label">Name</label>
+            <input id="name" maxlength="80" autocomplete="given-name" @bind="name" @bind:event="oninput" />
+        </div>
+
+        <h2>Units</h2>
+        <UnitPrefsEditor IdPrefix="onboarding" @bind-Value="prefs" />
+
+        <h2>About you (optional)</h2>
+        @if (prefs.Height == HeightUnit.Centimetre)
+        {
+            <div class="field">
+                <label for="height-cm" class="label">Height (cm)</label>
+                <input id="height-cm" inputmode="decimal" class="short" @bind="heightCm" />
+            </div>
+        }
+        else
+        {
+            <div class="field">
+                <span class="label" id="height-label">Height (ft, in)</span>
+                <div class="inline" role="group" aria-labelledby="height-label">
+                    <input aria-label="Feet" inputmode="numeric" placeholder="ft" class="short" @bind="heightFeet" />
+                    <input aria-label="Inches" inputmode="decimal" placeholder="in" class="short" @bind="heightInches" />
+                </div>
+            </div>
+        }
+
+        <div class="field">
+            <label for="birth" class="label">Birth date (YYYY-MM-DD)</label>
+            <input id="birth" placeholder="1990-04-02" inputmode="numeric" class="short" @bind="birthDate" />
+        </div>
+
+        <div class="field">
+            <span class="label" id="sex-label">Sex used for calculations</span>
+            <ChoiceGroup LabelledBy="sex-label" Options="SexForCalcs.All" Labels="SexLabels" AllowNone @bind-Value="sex" />
+        </div>
+
+        <div class="field">
+            <span class="label" id="activity-label">Activity level</span>
+            <ChoiceGroup LabelledBy="activity-label" Options="ActivityLevels.All" Labels="ActivityLabels" AllowNone @bind-Value="activity" />
+        </div>
+
+        @if (error is not null)
+        {
+            <p class="error" role="alert">@error</p>
+        }
+        <button type="submit" class="primary" disabled="@(busy || string.IsNullOrWhiteSpace(name))"
+                aria-busy="@(busy ? "true" : "false")">Continue</button>
+    </form>
+</div>
+
+@code {
+    private static readonly OnboardingFormValidator Validator = new();
+
+    private static readonly Dictionary<string, string> SexLabels = new() { ["female"] = "Female", ["male"] = "Male" };
+
+    private static readonly Dictionary<string, string> ActivityLabels = new()
+    {
+        ["sedentary"] = "Mostly sitting",
+        ["light"] = "Light",
+        ["moderate"] = "Moderate",
+        ["active"] = "Active",
+        ["very_active"] = "Very active",
+    };
+
+    private string name = "";
+    private UnitPrefs prefs = UnitPrefs.Metric;
+    private string? heightCm;
+    private string? heightFeet;
+    private string? heightInches;
+    private string? birthDate;
+    private string? sex;
+    private string? activity;
+    private string? error;
+    private bool busy;
+
+    protected override void OnInitialized()
+    {
+        // The layout shows onboarding only once the profile row is here, so the form starts from it.
+        name = Profiles.Profile?.DisplayName ?? "";
+        prefs = Profiles.UnitPrefs;
+    }
+
+    private async Task SaveAsync()
+    {
+        error = null;
+        HeightValue? height;
+        try
+        {
+            height = new HeightEntry(heightCm, heightFeet, heightInches).Parse(prefs.Height);
+        }
+        catch (FormatException invalid)
+        {
+            error = invalid.Message;
+            return;
+        }
+
+        var form = new OnboardingForm(
+            DisplayName: name,
+            BirthDate: string.IsNullOrWhiteSpace(birthDate) ? null : birthDate.Trim(),
+            SexForCalcs: sex,
+            Height: height?.Height,
+            HeightUnit: height?.HeightUnit,
+            Timezone: Locale.TimeZone,
+            Currency: Locale.Currency,
+            ActivityLevel: activity,
+            UnitPrefs: prefs);
+        var result = Validator.Validate(form);
+        if (!result.IsValid)
+        {
+            error = result.Errors[0].PropertyName == nameof(OnboardingForm.BirthDate)
+                ? "Birth date must look like 1990-04-02."
+                : "Please check your details.";
+            return;
+        }
+
+        busy = true;
+        try
+        {
+            // The layout moves on to the tabs once the saved row comes back through the watched query.
+            await Profiles.CompleteOnboardingAsync(form, height?.HeightCm);
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            // A local write failing is rare (storage full, database closed), but the user must be able to try again.
+            error = "Couldn't save your profile on this device. Please try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}

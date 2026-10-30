@@ -153,7 +153,7 @@ Two-client sync tests require local Supabase and PowerSync services plus the env
 - Do not log health values, prompts containing health data, auth tokens, signed URLs, or private identifiers. If telemetry is introduced, scrub PII and sensitive payloads.
 - Do not send photos to AI without the required `photo_ai` consent. Consents are append-only (users may insert, not update or delete). Strip photo EXIF/location metadata on-device where applicable.
 - Sharing grants are read-only for now; write access arrives with the shared-profile stream.
-- Preserve account-switch isolation: a local database and its pending uploads must remain bound to the owning user and must be cleared or safely replaced before another user's session is used. Only an explicit, user-requested sign-out clears the device; Supabase's own `SIGNED_OUT` event (e.g. a dead refresh token) must not (see `apps/app/src/lib/auth.tsx`).
+- Preserve account-switch isolation: a local database and its pending uploads must remain bound to the owning user and must be cleared or safely replaced before another user's session is used. Only an explicit, user-requested sign-out clears the device; Supabase's own `SIGNED_OUT` event (e.g. a dead refresh token) must not (see `apps/app/src/lib/auth.tsx`, and `AuthService` in `src/Health360.UI/Auth` for the MAUI app).
 - Add or update authorization tests whenever access boundaries change. For database work, include negative tests proving another user cannot read or mutate the data.
 
 ### Claude and other AI features
