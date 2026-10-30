@@ -62,7 +62,7 @@ Tags: **[MVP]** means Phase 1; **[P2]**, **[P3]** and **[P4]** are later phases.
 - **[MVP]** Templates with supersets, rep ranges and rest times. A weekly schedule and calendar.
 - **[MVP]** ★ Live logger (Hevy, Strong):
   - Last session's values pre-filled, so accepting a set takes one tap.
-  - Set types, RPE or RIR, and a rest timer with a notification. In the web app the timer only alerts while the app is open ([PLAN.md §2.7](PLAN.md)).
+  - Set types, RPE or RIR, and a rest timer with a notification.
   - Exercise swap and a plate calculator. Suggested loads round to weights you can actually load (5 lb or 2.5 kg steps, depending on the plates).
   - Survives the app being killed mid-workout, and works fully offline.
 - **[MVP]** ★ PRs: estimated 1RM (Epley/Brzycki), heaviest weight, best reps at a given weight, and volume. Plus weekly sets per muscle and e1RM history.

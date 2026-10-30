@@ -1,6 +1,6 @@
 # Phase 0: foundation and risk tests
 
-> **Stack change (2026-10-30):** [ADR 0002](adr/0002-dotnet-maui-blazor.md) moves Health360 to .NET MAUI (Android, Windows), a Blazor Web App and an ASP.NET Core API, and drops Apple and Linux desktop. This page records the **TypeScript prototype**. Its database, RLS and sync results still apply: the migrations, pgTAP tests and `powersync/sync-config.yaml` carry over. The Expo and Tauri findings are history. The .NET foundation is Phase 0b in [PLAN.md §3](PLAN.md).
+> **Stack change (2026-10-30):** [ADR 0002](adr/0002-dotnet-maui-blazor.md) moves Health360 to .NET MAUI (Android, Windows) and an ASP.NET Core API, and drops the web app, Apple and Linux desktop. This page records the **TypeScript prototype**. Its database, RLS and sync results still apply: the migrations, pgTAP tests and `powersync/sync-config.yaml` carry over. The Expo and Tauri findings are history. The .NET foundation is Phase 0b in [PLAN.md §3](PLAN.md).
 
 Status of [PLAN.md §3 Phase 0](PLAN.md). The code is done and tested in CI and locally. What's left needs your accounts and devices: cloud projects, the Android dev build, and the six-target check.
 
