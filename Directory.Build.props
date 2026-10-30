@@ -10,9 +10,6 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- CS1591: public members without XML docs. Docs are written where they help, not everywhere. -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>
-    <InvariantGlobalization Condition="'$(UseMaui)' != 'true'">true</InvariantGlobalization>
-    <!-- Lock files, like pnpm's frozen lockfile. MAUI is left out: its restore graph differs by OS. -->
-    <RestorePackagesWithLockFile Condition="'$(UseMaui)' != 'true'">true</RestorePackagesWithLockFile>
-    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true' And '$(UseMaui)' != 'true'">true</RestoreLockedMode>
+    <!-- Settings that depend on UseMaui are in Directory.Build.targets: this file is read before the project sets it. -->
   </PropertyGroup>
 </Project>

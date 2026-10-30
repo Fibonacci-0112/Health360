@@ -1,0 +1,12 @@
+<Project>
+  <!--
+    Read after each project file, so project properties such as UseMaui are already set here
+    (Directory.Build.props is read before them).
+  -->
+  <PropertyGroup Condition="'$(UseMaui)' != 'true'">
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Lock files, like pnpm's frozen lockfile. MAUI is left out: its restore graph differs by OS. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
+</Project>

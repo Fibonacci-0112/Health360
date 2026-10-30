@@ -16,7 +16,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 ## What the scaffold contains
 
 - `global.json` pins the .NET SDK (10.0.403, the current LTS line). The MAUI workload set is pinned where it's installed (`dotnet workload install ... --version 10.0.403`), not with `workloadVersion` in `global.json`.
-- `Directory.Build.props`: nullable, implicit usings, warnings as errors, `latest-recommended` analyzers, code style enforced in the build, and NuGet lock files (`packages.lock.json`, locked restore in CI). The MAUI project has no lock file, because its restore graph differs between Linux and Windows.
+- `Directory.Build.props`: nullable, implicit usings, warnings as errors, `latest-recommended` analyzers and code style enforced in the build. `Directory.Build.targets`: NuGet lock files (`packages.lock.json`, locked restore in CI) and invariant globalization for every project except the MAUI app. The MAUI app has no lock file, because its restore graph differs between Linux and Windows, and it keeps culture data for locale defaults.
 - `Directory.Packages.props`: central package versions.
 - `src/Health360.Domain/BannedSymbols.txt`: the banned-API analyzer fails the build on file, network, console or environment access, and on reading the clock or ambient randomness (`DateTime.UtcNow`, `Guid.NewGuid`, `Random.Shared`, ...). Pass a `TimeProvider` or a random source in instead. `tests/Health360.Domain.Tests/PurityTests.cs` also fails if Domain gains a package or project reference.
 - `Health360.Maui` targets `net10.0-android` on every OS and adds `net10.0-windows10.0.19041.0` on Windows. It is an unpackaged WinUI 3 app (`WindowsPackageType=None`). The Android manifest sets `allowBackup="false"` so the local health database and its pending uploads are not copied to cloud backups.
@@ -54,6 +54,7 @@ On Windows, install `maui-windows` (same `--version`) and build with `-f net10.0
 
 ## Findings
 
+- `Directory.Build.props` is read before the project file, so a condition there on a property the project sets (such as `UseMaui`) is always false. Put such settings in `Directory.Build.targets`.
 - A `workloadVersion` in `global.json` makes every build fail ("Workload version ... was not found") unless that workload set is installed, including builds that use no workloads. That's why the version is pinned on `dotnet workload install` instead.
 - The Android SDK installer (`InstallAndroidDependencies`) fails with "CommonUtilities.Helpers.UserName must have a valid value" when `USER` isn't set, as in some containers. Set `USER` before running it.
 - `using` directives needed only in `#if DEBUG` code must sit inside the same `#if`. Otherwise the Release build fails on IDE0005 (unnecessary using), because warnings are errors.
