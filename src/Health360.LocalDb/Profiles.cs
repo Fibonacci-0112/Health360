@@ -1,4 +1,3 @@
-using System.Globalization;
 using Health360.Contracts.Profiles;
 using PowerSync.Common.Client;
 
@@ -72,7 +71,7 @@ public static class Profiles
                 form.Currency,
                 form.ActivityLevel,
                 UnitPrefsJson.Serialize(form.UnitPrefs),
-                clock.GetUtcNow().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture),
+                Timestamps.UtcNow(clock),
                 profileId,
             ]);
     }
