@@ -2,12 +2,14 @@
   <Folder Name="/src/">
     <Project Path="src/Health360.Contracts/Health360.Contracts.csproj" />
     <Project Path="src/Health360.Domain/Health360.Domain.csproj" />
+    <Project Path="src/Health360.LocalDb/Health360.LocalDb.csproj" />
     <Project Path="src/Health360.Maui/Health360.Maui.csproj" />
     <Project Path="src/Health360.Server/Health360.Server.csproj" />
     <Project Path="src/Health360.UI/Health360.UI.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Health360.Domain.Tests/Health360.Domain.Tests.csproj" />
+    <Project Path="tests/Health360.LocalDb.Tests/Health360.LocalDb.Tests.csproj" />
     <Project Path="tests/Health360.Server.Tests/Health360.Server.Tests.csproj" />
     <Project Path="tests/Health360.UI.Tests/Health360.UI.Tests.csproj" />
   </Folder>

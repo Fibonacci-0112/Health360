@@ -52,9 +52,12 @@ Health360/
     Health360.UI/           Razor Class Library: pages (today, food, train, body, plan, settings),
                             features (nutrition, workouts, body, physiology, goals, costs, shopping,
                             labs, mental), charts, theme, i18n, platform interfaces
-    Health360.Maui/         MAUI Blazor Hybrid (Android, Windows): PowerSync database, upload
-                            connector with permanent-error quarantine, attachments, platform
-                            services (health, camera, files, secure storage, notifications)
+    Health360.LocalDb/      offline database: PowerSync client schema, upload connector with
+                            permanent-error quarantine, account binding (no MAUI dependency, so
+                            it is tested on every OS)
+    Health360.Maui/         MAUI Blazor Hybrid (Android, Windows): the platform SQLite for LocalDb,
+                            attachments, platform services (health, camera, files, secure storage,
+                            notifications)
     Health360.Server/       ASP.NET Core host for the API: endpoints, auth, Claude client, quotas, jobs: food-search,
                             barcode-lookup, ai-label-ocr, ai-meal-plan, ai-workout-program,
                             ai-weekly-checkin, ai-meal-photo, ai-lab-parse, ai-receipt,
@@ -387,7 +390,7 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
 | Database rules (RLS) and sync rules drift apart, so data leaks between users | Ownership columns on every row (no joins in rules). Grant checks in parameterized streams. Two-client leak tests and pgTAP in CI on every migration |
 | One bad upload blocks PowerSync's write queue | Sort errors by Postgres code. Permanent failures go to `failed_uploads`, with a retry/discard screen and a Sentry alert |
 | Schema drift between Postgres, the PowerSync client schema and the C# contracts | Migrations are additive only. `tools/drift` compares them against the migrated database in CI |
-| The PowerSync .NET SDK is beta (v0.1.x) | Phase 0b gate on Android and Windows (offline write, kill, reconnect, leak test); pinned version; fallback design (SQLite outbox through the API) recorded in an ADR if it fails |
+| The PowerSync .NET SDK is beta (1.0.0, still labelled beta) | Phase 0b gate on Android and Windows (offline write, kill, reconnect, leak test); pinned version; fallback design (SQLite outbox through the API) recorded in an ADR if it fails |
 | .NET MAUI quality issues on Android or Windows | Pinned .NET and MAUI workload versions, upgrades in their own PRs, smoke tests on both platforms on every main-branch build |
 | The ASP.NET Core API is a new attack surface between clients and the database | JWT validated against Supabase's keys and the signed-in user checked on every request; queries run as that user so RLS applies; the service role only in admin jobs; rate limits and quotas; negative tests for anon keys, expired tokens and other users' ids |
 | Health Connect needs a Play health-permissions declaration and a privacy policy | Dev builds from day 1; sign Phase 3 off on a physical Android phone |
@@ -500,7 +503,7 @@ These are rough planning numbers. Phase 1 replaces them with real figures from t
 Already in place and carried over: `supabase/migrations/` (identity, households, sharing grants, `private.*` helpers and the RLS pattern later tables copy), `supabase/tests/database/` and `powersync/sync-config.yaml`.
 - `src/Health360.Domain/Units/`: the exact conversion factors and their property tests, ported first.
 - `src/Health360.Server/Auth/`: Supabase JWT and signed-in-user validation, and a database connection that runs as that user.
-- `src/Health360.Maui/Data/`: the PowerSync .NET schema (mirroring the synced Postgres tables), the upload connector and the `failed_uploads` quarantine.
+- `src/Health360.LocalDb/` (with the platform SQLite in `src/Health360.Maui/Data/`): the PowerSync .NET schema (mirroring the synced Postgres tables), the upload connector and the `failed_uploads` quarantine.
 - `src/Health360.UI/`: the shared shell, tabs and sign-in flow.
 - `tools/drift/`: the schema-drift check against a migrated database.
 

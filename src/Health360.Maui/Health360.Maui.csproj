@@ -35,9 +35,12 @@
     <PackageReference Include="Microsoft.Maui.Controls" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Maui" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
+    <PackageReference Include="PowerSync.Common" />
+    <PackageReference Include="PowerSync.Maui" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Health360.LocalDb\Health360.LocalDb.csproj" />
     <ProjectReference Include="..\Health360.UI\Health360.UI.csproj" />
   </ItemGroup>
 

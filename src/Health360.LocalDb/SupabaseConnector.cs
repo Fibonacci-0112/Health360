@@ -1,0 +1,32 @@
+using Microsoft.Extensions.Logging;
+using PowerSync.Common.Client;
+using PowerSync.Common.Client.Connection;
+
+namespace Health360.LocalDb;
+
+/// <summary>
+/// Downloads authenticate with the Supabase access token; uploads go through PostgREST with the same
+/// session, so RLS checks every write. A write the server rejects for good (RLS, a constraint) is moved
+/// to <c>failed_uploads</c> instead of blocking the queue (PLAN.md §4).
+/// </summary>
+public sealed partial class SupabaseConnector(
+    ISupabaseSession session,
+    IRemoteWriter writer,
+    SyncEndpoints endpoints,
+    TimeProvider clock,
+    ILogger<SupabaseConnector> logger) : IPowerSyncBackendConnector
+{
+    public async Task<PowerSyncCredentials?> FetchCredentials()
+    {
+        var token = await session.GetAccessTokenAsync(CancellationToken.None).ConfigureAwait(false);
+        // No session: PowerSync stays disconnected until the app connects again after sign-in.
+        return token is null ? null : new PowerSyncCredentials(endpoints.PowerSyncUrl.ToString(), token, null);
+    }
+
+    public Task UploadData(IPowerSyncDatabase database) =>
+        Uploads.UploadPendingAsync(database, writer, clock, op => LogQuarantined(logger, op.Op.ToString(), op.Table, op.Code ?? "no code"));
+
+    // Sentry (with PII scrubbing) replaces this in Phase 1. Never log row data or ids: it is health data.
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Upload quarantined: {Op} {Table} ({Code})")]
+    private static partial void LogQuarantined(ILogger logger, string op, string table, string code);
+}

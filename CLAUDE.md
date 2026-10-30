@@ -28,7 +28,8 @@ Target (.NET, scaffolded in Phase 0b; see PLAN.md §2.2 for the layout):
 - `Health360.Domain`: pure C# calculations, units and UUIDv7 ids. It replaces `packages/domain`, and the same purity rules apply.
 - `Health360.Contracts`: records and validators for API payloads and Claude's structured output. It replaces `packages/schemas`.
 - `Health360.UI`: a Razor Class Library with the MAUI app's screens.
-- `Health360.Maui` (Android, Windows; PowerSync .NET) and `Health360.Server` (the ASP.NET Core API, its own host).
+- `Health360.LocalDb`: the PowerSync client schema, uploads and the `failed_uploads` quarantine. It replaces `packages/local-db` and the upload writer in `packages/api`; keep the two identical while both exist.
+- `Health360.Maui` (Android, Windows; supplies the platform SQLite to `Health360.LocalDb`) and `Health360.Server` (the ASP.NET Core API, its own host).
 - The API replaces Edge Functions. It must validate the Supabase JWT and the signed-in user on every request, and query Postgres as that user so RLS applies. The service-role key is used only for admin jobs. `src/Health360.Server/Auth` does this for every endpoint not marked `AllowAnonymous`: endpoints take a `SignedInUser` and query only through `IUserDatabase` (`Data/`), never a connection of their own. Don't weaken the fallback policy or the token checks to make a test pass (see `docs/phase0b.md`, "API authentication").
 
 Current prototype (TypeScript), described below:
