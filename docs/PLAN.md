@@ -4,14 +4,15 @@ Health360 is one app for planning and reaching health and fitness goals. It cove
 
 **Related docs**
 - [FEATURES.md](FEATURES.md): the feature catalogue, module by module, with competitor sources.
-- [adr/0001-language-and-stack.md](adr/0001-language-and-stack.md): why TypeScript and Expo, compared with C#/.NET, Flutter, Kotlin Multiplatform, Capacitor and a web-only PWA.
+- [adr/0002-dotnet-maui-blazor.md](adr/0002-dotnet-maui-blazor.md): the current stack, .NET MAUI + Blazor + ASP.NET Core, and the platform scope.
+- [adr/0001-language-and-stack.md](adr/0001-language-and-stack.md): the earlier TypeScript/Expo decision (superseded) and the full language comparison.
 
 ## Decisions
-- **Platforms:** Android, web (installable as an app), and Windows and Linux desktop. **Apple is deferred** (§2.7): iPhone and Mac users use the web app until a native iPhone app is added later for $99/yr. The code stays iPhone-ready.
+- **Platforms:** Android and Windows desktop (.NET MAUI), and the web (Blazor). **Apple (iPhone, Mac) and Linux desktop are out of scope** (§2.7).
 - **Audience:** a household of 2–4 people first. It is built so it could go public later, so compliance and billing stay light for now.
 - **MVP:** all four core modules: Nutrition with label OCR, Workouts with progression, Body metrics with photos, and Goals with cost planning.
 - **Backend:** Supabase.
-- **Stack:** TypeScript with Expo, Tauri, PowerSync and Supabase ([ADR 0001](adr/0001-language-and-stack.md)).
+- **Stack:** C#/.NET: .NET MAUI Blazor Hybrid, a Blazor Web App and an ASP.NET Core API, with PowerSync and Supabase ([ADR 0002](adr/0002-dotnet-maui-blazor.md)).
 - **Units:** metric and imperial, stored as entered (§2.6).
 - **Measured beats estimated:** lab and test values you enter (RMR, DEXA, VO₂max, LTHR, max HR, HR zones) replace formula estimates everywhere they are used, and every derived number shows which inputs it used (§2.8).
 
@@ -19,60 +20,63 @@ Health360 is one app for planning and reaching health and fitness goals. It cove
 
 ## 2. Architecture
 
-Section 1 (the feature catalogue) is in [FEATURES.md](FEATURES.md), and section 2.0 (the language choice) is in [ADR 0001](adr/0001-language-and-stack.md).
+Section 1 (the feature catalogue) is in [FEATURES.md](FEATURES.md), and section 2.0 (the language choice) is in [ADR 0002](adr/0002-dotnet-maui-blazor.md).
 
 ### 2.1 Stack
 | Layer | Choice | Why |
 |---|---|---|
-| App | **Expo** (current SDK), expo-router, TypeScript strict, **EAS dev builds from day 1** (not Expo Go) | One codebase for Android and web now. iOS is added later with no rewrite. Native modules (SQLite, Health Connect) need dev builds |
-| Web | Expo web export as an **installable PWA**: manifest + service worker, persistent-storage request, Web Push | Gives iPhone and Mac users a home-screen or Dock app until the native iPhone app exists |
-| Desktop | **Tauri 2** wrapping `expo export -p web` (single-page output) for **Windows and Linux**; macOS is deferred. Electron is the fallback if the Phase 0 test fails | Small installers, native menus, auto-update, file drag-and-drop for lab PDFs |
-| Offline sync | **PowerSync** (Sync Streams) + `@powersync/drizzle-driver`. The Drizzle schema generates the client schema | Gives SQLite on iOS, Android and web. Writes go through supabase-js, so database permissions still apply. Has a Node SDK for headless tests, and can be self-hosted |
-| Backend | **Supabase**: Postgres + RLS, Auth (emailed 6-digit code in the MVP; Google later; Sign in with Apple when the iPhone app is added), Storage, Edge Functions (Deno), pg_cron | Fits relational health data, per-user and per-household security, and private files |
-| UI | NativeWind + react-native-reusables, FlashList, **react-native-gifted-charts** (SVG) | Works on native and web. SVG charts avoid the ~3 MB WebAssembly download that Skia needs on web |
-| State | PowerSync live queries for local data; TanStack Query for online-only calls (search, AI); Zustand for in-session UI state such as the active workout | Each tool does one job |
-| Forms and validation | react-hook-form + **zod** in a shared package | The same schemas check forms, API payloads and the JSON Claude returns |
-| Device | expo-camera (barcodes on Android), a WebAssembly barcode reader on the web (Safari has no built-in one), expo-image-manipulator (resize, strip EXIF), expo-notifications (on-device scheduling), expo-local-authentication | |
-| Health (P3) | `react-native-health-connect`; `@kingstinct/react-native-healthkit` when the iPhone app is added | Reads directly on the device |
-| AI | `npm:@anthropic-ai/sdk` in Edge Functions only | The API key never reaches the client |
-| Ops | Sentry with PII scrubbing; GitHub Actions + EAS; Supabase Pro (backups) or a nightly `pg_dump` | Health values must never land in error reports |
+| App | **.NET MAUI Blazor Hybrid** (current .NET LTS) for **Android and Windows**. Screens are Razor components in a shared Razor Class Library (`Health360.UI`) | One UI codebase for phone, desktop and web. Native APIs (camera, SQLite, Health Connect, notifications) through MAUI |
+| Web | **Blazor Web App** on ASP.NET Core, Interactive Auto render mode (server first, then WebAssembly), using the same Razor Class Library. **Online-first** (§2.7); a service worker is registered only for Web Push | Shares one host with the API; fast first paint |
+| Desktop | MAUI on **WinUI 3**, unpackaged, with a **Velopack** installer and auto-updater | Native Windows app with no wrapper; a signing certificate stays optional; file drag-and-drop for lab PDFs |
+| Offline sync | **PowerSync .NET SDK** (Sync Streams, SQLite) in the MAUI app. Its client schema mirrors the Postgres tables | Offline logging on Android and Windows. Uploads go through the API or the Supabase C# client with the signed-in user's JWT, so database permissions still apply. Beta, so gated in Phase 0b (§4) |
+| Backend | **Supabase**: Postgres + RLS, Auth (emailed 6-digit code in the MVP; Google later), Storage, pg_cron | Fits relational health data, per-user and per-household security, and private files |
+| Server | **ASP.NET Core** minimal API (`Health360.Server`), hosted in the same app as the Blazor Web App. Validates the Supabase JWT (JWKS) and the signed-in user on every request and queries Postgres as that user | One C# domain library on client and server; the service role is used only for admin jobs |
+| UI | A Razor component library and a Blazor chart library that both work in Hybrid and WebAssembly, chosen in Phase 0b; virtualized lists (`Virtualize`) | Works on all three targets from one codebase |
+| State | PowerSync live queries for local data (MAUI); typed `HttpClient` calls to the API for online-only work (search, AI) and for the web app; scoped services for in-session UI state such as the active workout | Each tool does one job |
+| Forms and validation | C# records + **FluentValidation** in `Health360.Contracts` | The same contracts check forms, API payloads and the JSON Claude returns; Claude's JSON Schemas are generated from the same types |
+| Device | `BarcodeScanning.Native.Maui` (barcodes on Android and Windows), a WebAssembly barcode reader through JS interop on the web, MAUI MediaPicker, on-device resize and EXIF stripping, local notifications on Android and Windows, biometric app lock | |
+| Health (P3) | Health Connect through **Shiny.Health** | Reads directly on the device |
+| AI | The official `Anthropic` NuGet package, in the API only | The API key never reaches a client |
+| Ops | Sentry .NET with PII scrubbing; GitHub Actions (Linux runners, plus a Windows runner for the Windows build); Supabase Pro (backups) or a nightly `pg_dump` | Health values must never land in error reports |
 
-### 2.2 Monorepo layout (pnpm + Turborepo)
+### 2.2 Repository layout
 ```
 Health360/
-  apps/
-    app/                 Expo (Android + web/PWA now; iOS-ready)
-      app/               expo-router: (auth)/ (tabs)/today|food|train|body|plan settings/
-      src/features/      nutrition/ workouts/ body/ physiology/ goals/ costs/ shopping/ labs/ mental/
-      src/db/            powersync.ts, connector.ts (upload + permanent-error quarantine), attachments.ts
-      src/platform/      *.native.ts / *.web.ts adapters (health, camera, files, secure storage)
-    desktop/             Tauri 2 shell (frontendDist -> ../app/dist)
-  packages/
-    domain/              pure TS, no I/O: units, energy/TDEE (formula + adaptive), macros, recipe
-                         math, portion solver, DRI/UL checks, e1RM, progression, plates, volume,
-                         cost math, milestones, goal feasibility, streaks, physiology (estimators,
-                         best-value resolver, zones), exercise energy (kcal, fat/carb, aerobic/anaerobic)
-    schemas/             zod: entities, edge-function contracts, AI output schemas
-    local-db/            Drizzle SQLite tables -> DrizzleAppSchema; typed queries
-    api/                 typed edge-function client (supabase-js)
-    ui/                  design system, charts, theme, i18n
-    config/              tsconfig, eslint, tailwind preset
+  Health360.sln
+  src/
+    Health360.Domain/       pure C#, no I/O: units, ids (UUIDv7), energy/TDEE (formula + adaptive),
+                            macros, recipe math, portion solver, DRI/UL checks, e1RM, progression,
+                            plates, volume, cost math, milestones, goal feasibility, streaks,
+                            physiology (estimators, best-value resolver, zones), exercise energy
+                            (kcal, fat/carb, aerobic/anaerobic), validators for AI output
+    Health360.Contracts/    records + validators: entities, API contracts, AI output schemas
+    Health360.UI/           Razor Class Library: pages (today, food, train, body, plan, settings),
+                            features (nutrition, workouts, body, physiology, goals, costs, shopping,
+                            labs, mental), charts, theme, i18n, platform interfaces
+    Health360.Maui/         MAUI Blazor Hybrid (Android, Windows): PowerSync database, upload
+                            connector with permanent-error quarantine, attachments, platform
+                            services (health, camera, files, secure storage, notifications)
+    Health360.Web/          ASP.NET Core host: Blazor Web App + the API
+    Health360.Web.Client/   WebAssembly render-mode project
+    Health360.Server/       API endpoints, auth, Claude client, quotas, jobs: food-search,
+                            barcode-lookup, ai-label-ocr, ai-meal-plan, ai-workout-program,
+                            ai-weekly-checkin, ai-meal-photo, ai-lab-parse, ai-receipt,
+                            household-invite, account-delete, data-export
+  tests/                    xUnit + FsCheck (domain), bUnit (components), API integration,
+                            two-client sync, Playwright (web)
   supabase/
-    migrations/          SQL schema, RLS, helper functions, triggers, storage policies
-    functions/           _shared/ (auth, anthropic client, quota, generated copy of domain+schemas),
-                         food-search, barcode-lookup, ai-label-ocr, ai-meal-plan, ai-workout-program,
-                         ai-weekly-checkin, ai-meal-photo, ai-lab-parse, ai-receipt,
-                         household-invite, account-delete, data-export
-    tests/               pgTAP RLS + storage tests, RLS-coverage test
-  powersync/             sync-config.yaml (Sync Streams), docker-compose.yml (local)
-  tools/importers/       USDA FDC, free-exercise-db, DRI tables, biomarkers, NIH DSLD,
-                         Compendium METs, population RER-by-intensity table
-  tools/codegen/         copy domain/schemas into functions/_shared; schema-drift check
-  evals/                 label-ocr/ lab-parse/ (incl. DEXA, RMR, metabolic tests) meal-plan/
-                         workout-program/ (fixtures + runners)
-  e2e/                   playwright/ maestro/
-  docs/                  PLAN.md FEATURES.md adr/
+    migrations/             SQL schema, RLS, helper functions, triggers, storage policies
+    tests/                  pgTAP RLS + storage tests, RLS-coverage test
+  powersync/                sync-config.yaml (Sync Streams), docker-compose.yml (local)
+  tools/importers/          USDA FDC, free-exercise-db, DRI tables, biomarkers, NIH DSLD,
+                            Compendium METs, population RER-by-intensity table
+  tools/drift/              schema-drift check (Postgres vs the PowerSync client schema and contracts)
+  evals/                    label-ocr/ lab-parse/ (incl. DEXA, RMR, metabolic tests) meal-plan/
+                            workout-program/ (fixtures + runners)
+  e2e/                      playwright/ maestro/ windows/
+  docs/                     PLAN.md FEATURES.md adr/
 ```
+The repository still holds the Phase 0 TypeScript prototype (`apps/`, `packages/`, `supabase/functions/`, `tools/codegen/`, `e2e/sync/`). Phase 0b (§3) replaces it with this layout; `supabase/migrations`, `supabase/tests` and `powersync/` carry over unchanged.
 
 ### 2.3 Data model (Postgres; compact)
 
@@ -117,26 +121,26 @@ Health360/
 - Delete triggers or functions remove the matching Storage files.
 
 ### 2.4 AI layer
-- **Where it runs:** Edge Functions only. `ANTHROPIC_API_KEY` is kept in Supabase secrets.
+- **Where it runs:** the ASP.NET Core API only. `ANTHROPIC_API_KEY` is kept in the host's secret store and never reaches the MAUI app or the browser.
 - **Model:** `claude-opus-5-5` ($4 / $20 per million input/output tokens), configurable per function. You can trial cheaper models (`claude-sonnet-5-5`, `claude-haiku-5-5`) for high-volume OCR. Switch only if the eval set shows no accuracy drop.
 - **Effort:**
   - `low` for extraction (labels, labs, receipts).
   - `medium` or `high` for meal plans and programs.
   - Effort is the only control on Opus 5.5, because thinking can't be turned off.
 - **Request rules:**
-  - Structured output through `messages.parse` with JSON schemas generated from `packages/schemas`.
+  - Structured output with JSON schemas generated from the `Health360.Contracts` types; the result is deserialized and validated again on the server.
   - Don't send `temperature`, `top_p` or `top_k`.
   - Check `stop_reason` for `refusal` and `max_tokens` before parsing.
   - Turn on server-side refusal fallback: `fallbacks: "default"` with beta header `server-side-fallback-2026-07-01`.
   - Send lab PDFs as `document` blocks.
 - **The model proposes, code checks.**
-  - Every result goes through a validator in `packages/domain`: label arithmetic, macro tolerances, budget, exercise IDs and equipment, sets per muscle.
+  - Every result goes through a validator in `Health360.Domain`: label arithmetic, macro tolerances, budget, exercise IDs and equipment, sets per muscle.
   - If validation fails, the errors go back to the model for one repair round; after that the request fails and you get a manual fallback.
   - The AI never writes numbers that code can compute. For example, the weekly check-in only describes the computed TDEE.
   - Prompts get each physiology value with its source (lab, field test, device, manual or estimate, §2.8), so the model never presents an estimate as a measurement.
 - **Cost:**
   - Resize images on the device and cache the fixed prompt prefix.
-  - Run weekly jobs through the **Batches API** (50% cheaper) on a pg_cron schedule.
+  - Run weekly jobs through the **Batches API** (50% cheaper) from a hosted background service in the API (or pg_cron calling an API endpoint).
   - Per-profile daily quota; usage and cost logged in `ai_generations`.
 
 ### 2.5 Privacy and safety
@@ -176,7 +180,7 @@ Health360/
 - **Store what was typed.** Every quantity column is a trio: `value`, `unit`, and a canonical value (`*_kg`, `*_cm`, `*_m`, `*_g`, `*_ml`, `value_canonical`).
   - The original value is shown when you view it in the same unit, so 225 lb never turns into 224.99 lb.
   - The canonical value drives TDEE, trends, PRs, charts and AI prompts.
-- **One conversion module.** `packages/domain/units` uses exact factors:
+- **One conversion module.** `Health360.Domain/Units` uses exact factors:
   - 1 lb = 0.45359237 kg
   - 1 in = 2.54 cm
   - 1 mi = 1609.344 m
@@ -197,39 +201,20 @@ Health360/
 - **AI:** prompts get values in your display units with the units spelled out, and structured outputs must include units. Validators convert to canonical values before checking.
 - **Physiology values** (§2.8) use fixed scientific units, not preferences: HR in bpm, VO₂max in ml/kg/min (the absolute L/min and the test-day weight are kept too when a report gives them), lactate in mmol/L, BMD in g/cm². RMR and exercise energy follow your energy unit, and DEXA masses follow your body-weight unit.
 
-### 2.7 Apple devices: deferred, not dropped
-**Now:** iPhone and Mac users use the web app.
-- On iPhone, Safari's "Add to Home Screen" installs it.
-- On Mac, Safari's "Add to Dock" (macOS 14+) does the same, or they use any browser.
+### 2.7 Supported platforms
+| Platform | App | Offline | Notes |
+|---|---|---|---|
+| **Android** | .NET MAUI (Blazor Hybrid) | **Yes**: PowerSync .NET + SQLite; logging survives the app being killed | Health Connect (P3), camera and barcodes, local notifications, Google Play internal testing or a direct APK |
+| **Windows** | .NET MAUI on WinUI 3 | **Yes**: same as Android | Velopack installer with auto-update; drag-and-drop for lab PDFs; signing optional for family use |
+| **Web** | Blazor Web App on ASP.NET Core | **Online-first** | Any modern browser (tested on Chromium and Firefox). Label photos and barcodes through the browser camera, server Web Push for reminders |
 
-**What works for them:** food logging, label photos (camera capture), barcode scanning (WebAssembly reader), workouts, body metrics, progress photos, goals, costs and shopping lists. Offline logging also works, through PowerSync's web SDK.
+**Not supported:** iPhone, iPad and Mac apps, HealthKit and Apple Watch data, Sign in with Apple, Linux desktop, and Safari/WebKit testing. The web app may open in other browsers but isn't tested there. Adding any of these needs a new ADR.
 
-**What they don't get until the iPhone app exists, and how the web app softens it:**
-- **No Apple Health or Apple Watch data.** Browsers can't read HealthKit. Weight, sleep and other values can still be entered by hand.
-- **Rest timer and reminders don't fire while the app is closed.**
-  - Supplement and workout reminders are sent as server Web Push (iOS 16.4+ home-screen apps; pg_cron + an Edge Function, VAPID keys, free).
-  - The rest timer alerts only while the app is open.
-- **iPhone can clear website storage.** Mitigations:
-  - Ask for persistent storage (`navigator.storage.persist()`).
-  - Sync the moment the app is back online.
-  - Show an "unsynced entries" badge.
-  - Keep a short offline window.
-- **No native Mac desktop app.** An unsigned Tauri Mac build is possible for family members willing to override Gatekeeper.
-
-**Keeping the code iPhone-ready (costs nothing):**
-- Use only libraries that support both Android and iOS.
-- Keep platform code behind the `src/platform/` adapters.
-- **Run a monthly EAS iOS *simulator* build** to catch iOS compile breaks. It's covered by the free tier and needs no Apple account.
-
-**Adding the iPhone app later (the "Apple add-on" in §3):**
-1. Apple Developer account ($99/yr).
-2. EAS iOS build profile and TestFlight.
-3. HealthKit adapter (`src/platform/health.ios.ts`).
-4. Sign in with Apple (required by the App Store when Google sign-in is offered).
-5. Signed and notarized Tauri Mac build.
-6. Maestro iOS flows and the device checklist.
-
-The screens and logic are already shared, so this is mostly setup and testing.
+**The web app while it is online-first**
+- Every feature in FEATURES.md is available on the web while online. What the web lacks is offline logging: on Android and Windows, entries are written locally and sync later.
+- When the connection drops, the web app shows an offline banner, blocks new writes with a clear message (never a silent failure), and keeps unsaved form input on the page until it can be submitted.
+- Reminders reach web users through server Web Push. The rest timer alerts only while the page is open.
+- **Upgrade path (Phase 4, optional):** render the logging screens in WebAssembly mode and use PowerSync's GA JavaScript web SDK through JS interop, so the web app can queue writes offline like the native apps.
 
 ### 2.8 Physiology profile: measured values first, estimates otherwise
 You can enter values from lab tests, field tests or a device. Anything you haven't entered is estimated where a published method exists (BMD, VAT, FTP, threshold pace, LT1 and per-stage test values are not), and the app always shows which one it is using.
@@ -249,7 +234,7 @@ You can enter values from lab tests, field tests or a device. Anything you haven
 | HR zones (per sport) | Your own boundaries, or a lab report | Derived, best basis first: lab thresholds, a measured or test-derived LTHR (Friel), HR reserve (Karvonen), % of max HR. The LTHR estimate never sets zones |
 | Metabolic test: VO₂, VCO₂, RER, lactate per stage; FatMax and crossover point | Gas-exchange test with stages | Per-stage values are not estimated. Without a test, the fat/carb split uses the population curve (§2.9), and FatMax and the crossover point are shown only from a test |
 
-**How the app picks a value** (`packages/domain/physiology`)
+**How the app picks a value** (`Health360.Domain/Physiology`)
 - A resolver returns, for each value, the number in use plus its source, method, date, confidence and the alternatives it passed over.
 - Order: a source you pinned, then lab, then field test, then a device or manual reading, then estimate. Within a tier, the newest value wins.
 - Old measured values still beat formulas (a year-old lab VO₂max is usually closer than an age formula), but they get a "retest?" flag. VO₂max, LTHR and DEXA are flagged after 12 months, and measured RMR after 12 months or a 5% change in body weight. In Phase 3 these flags become `retest_reminders`.
@@ -269,7 +254,7 @@ You can enter values from lab tests, field tests or a device. Anything you haven
 **Entry by phase:** by hand in the MVP. Guided field tests come in Phase 2. In Phase 3, DEXA, RMR and metabolic-test PDFs go through `ai-lab-parse` with the same confirm screen as labs, and Health Connect adds VO₂max, resting HR and HR samples as device values.
 
 ### 2.9 Exercise energy: aerobic vs anaerobic, fat vs carbs
-For each cardio session, `packages/domain` estimates the energy used, how much of it came from fat and how much from carbohydrate, and how much time was aerobic or anaerobic. It uses the session's heart rate and the physiology profile (§2.8). The result is stored on `workout_sessions.energy_estimate` as a snapshot that records its inputs and method version.
+For each cardio session, `Health360.Domain` estimates the energy used, how much of it came from fat and how much from carbohydrate, and how much time was aerobic or anaerobic. It uses the session's heart rate and the physiology profile (§2.8). The result is stored on `workout_sessions.energy_estimate` as a snapshot that records its inputs and method version.
 
 **Session inputs, best first**
 1. HR samples (Phase 3, from Health Connect), giving time in each zone second by second.
@@ -306,28 +291,26 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
 
 ## 3. Phased roadmap (each phase has an exit criterion)
 
-### Phase 0: Foundation and risk tests
-**Deliverables**
-- Monorepo setup and CI: typecheck, lint, Vitest, `supabase test db`.
-- Supabase local and cloud projects, with identity and household migrations, RLS helpers, and a pgTAP RLS-coverage test.
-- PowerSync running locally (Docker) and in the cloud, with the `me`, `household` and `reference` streams. Permanent upload errors go to a `failed_uploads` table instead of blocking the queue.
-- Expo dev clients, tab navigation, login by emailed code, and onboarding, including per-type unit preferences with locale defaults.
-- `packages/domain/units` with exact conversion factors and property tests. It comes first because every module depends on it.
-- A throwaway `notes` table synced on **all six targets**:
-  - The Android app.
-  - Chrome and Firefox.
-  - The web app installed on an iPhone (Safari) and in the Mac Dock (Safari).
-  - Tauri on Windows and on Linux.
+### Phase 0: Foundation and risk tests (TypeScript prototype)
+Done on the earlier TypeScript stack; status and findings are in [phase0.md](phase0.md). What carries over to .NET: the Supabase identity and household migrations, RLS helpers and pgTAP RLS-coverage test, the PowerSync `me`, `household` and `reference` streams, the `failed_uploads` quarantine design, client-generated UUIDv7 ids, the exact unit factors and their property tests (as a specification to port), and the two-client leak test design.
 
-  This checks the web workers, PWA install and persistent storage, the Tauri content security policy, and reloading on a deep link.
-- PWA basics: web app manifest, service worker, and an "unsynced entries" indicator.
-- One test Claude call with structured output from an Edge Function, plus a check that `packages/domain` can be imported there (with a codegen copy as the fallback).
+### Phase 0b: .NET foundation
+**Deliverables**
+- The solution in §2.2, with CI: `dotnet build`, `dotnet test`, formatting and analyzers, `supabase test db`, and the schema-drift check.
+- `Health360.Domain/Units` and UUIDv7 ids ported, with the same exact factors and FsCheck property tests. It comes first because every module depends on it.
+- `Health360.Server`: Supabase JWT and signed-in-user validation on every endpoint, queries as the signed-in user, and one test Claude call with structured output validated against `Health360.Contracts`.
+- MAUI app on Android and Windows: tab navigation, login by emailed code, onboarding with per-type unit preferences and locale defaults, PowerSync .NET with the existing streams, and the `failed_uploads` quarantine.
+- Blazor Web App: the same screens from `Health360.UI`, online, with an offline banner.
+- A throwaway `notes` table on **all three targets**: the Android app, Chrome and Firefox, and the Windows app.
 
 **Exit criteria**
-- On all six targets: sign in, create a note offline, reconnect, and see it on a second device within about 5 seconds.
-- User B never receives it; pgTAP and a two-client `@powersync/node` test both prove this.
+- Android and Windows: sign in, create a note offline, reconnect, and see it on the other device within about 5 seconds; the note survives killing the app while offline.
+- Web: sign in, create a note online, see it on Android and Windows; going offline shows the banner and no write is reported as saved.
+- User B never receives A's note; pgTAP and a two-client sync test both prove this.
+- An API request with the anon key, an expired token or another user's ids is rejected or sees no data (integration tests).
 - CI is green.
-- If Tauri fails, the Electron decision is recorded in an ADR.
+- **PowerSync .NET gate:** if the beta SDK fails these criteria, the fallback (a SQLite outbox uploaded through the API plus a pull of changed rows) is recorded in an ADR before Phase 1.
+- The TypeScript prototype is removed once the gate passes.
 
 ### Phase 1: MVP
 1. **Body and photos**
@@ -335,14 +318,14 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
    - Also delivers the physiology profile (§2.8): RMR, DEXA, VO₂max, max and resting HR, LTHR, lab thresholds, FTP and HR zones entered by hand with source and date, and estimates for anything missing.
    - **Exit:**
      - The trend matches a test fixture.
-     - A photo taken in airplane mode uploads later and only its owner can see it; another member gets a 403.
+     - A photo taken in airplane mode (Android or Windows) uploads later and only its owner can see it; another member gets a 403.
      - Entering a lab RMR or max HR changes calorie targets and zones at once, and deleting it falls back to the estimate.
      - Every estimator matches values computed by hand from its published equation.
 2. **Workouts and progression**
    - Delivers: exercise import, locations, templates, schedule, live logger, PRs and e1RM, volume per muscle, cardio with HR zones, and progression suggestions.
    - Also delivers per-session and weekly aerobic/anaerobic and fat/carb estimates (§2.9).
    - **Exit:**
-     - A 60-minute session logged offline, with the app killed mid-session, loses nothing and syncs.
+     - A 60-minute session logged offline on Android or Windows, with the app killed mid-session, loses nothing and syncs.
      - Load suggestions match the progression tests.
      - Session energy estimates match golden fixtures for time-in-zone, average-HR and no-HR inputs, and editing zones later leaves past sessions unchanged.
 3. **Nutrition and label OCR**
@@ -350,7 +333,7 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
    - **Exit:**
      - ≥90% exact match on serving size, kcal, protein, carbs and fat across a **50+ photo eval set from your own pantry**, measured before any user edits.
      - 18 of 20 common barcodes resolve without OCR.
-     - A full day logged offline syncs.
+     - A full day logged offline on Android syncs.
      - Recipe nutrition matches a hand calculation.
 4. **Goals and cost planning**
    - Delivers: the goal wizard (feasibility, milestones, targets), price book, cost items, supplement cost entries, per-goal and monthly estimates, budgets, shared shopping lists, and the Today dashboard.
@@ -359,9 +342,9 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
      - The monthly estimate matches a spreadsheet to the cent.
      - Milestones tick off automatically.
 5. **Ship to the household**
-   - Desktop: Tauri builds for Windows (signing optional) and AppImage/deb for Linux, plus the auto-updater.
-   - Phones: Android through the Play internal testing track (or a direct APK); iPhone users install the web app to the home screen.
-   - Web: hosted on Cloudflare Pages, plus server Web Push for reminders.
+   - Desktop: the Windows app as a Velopack installer (signing optional), plus the auto-updater.
+   - Phones: Android through the Play internal testing track (or a direct APK).
+   - Web: the ASP.NET Core host (Blazor Web App + API) deployed, plus server Web Push for reminders.
    - Also: consent screens, export, account deletion, Sentry with scrubbing, and backups.
    - **Phase 1 exit:** 2–3 household members use it daily for 2 weeks on phone, web and desktop, with zero lost entries, zero leaks between users, and every suite green.
 
@@ -386,7 +369,7 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
 
 ### Phase 3: Health depth
 **Deliverables**
-- Health Connect sync (HealthKit comes with the Apple add-on), including HR samples for exact time in zone, and VO₂max and resting HR as device values.
+- Health Connect sync, including HR samples for exact time in zone, and VO₂max and resting HR as device values.
 - Vitals baselines and sleep.
 - Labs: parse, confirm, trends, optimal ranges, retest reminders.
 - DEXA, RMR and metabolic-test reports through the same parser. A metabolic test gives your own fat/carb curve, FatMax and crossover point (§2.9).
@@ -407,18 +390,7 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
 - Pantry, Instacart and Kroger, CSV import, ICS feed.
 - RevenueCat and Stripe billing; GDPR and FTC Health Breach Notification Rule review.
 - OFF attribution and share-alike compliance, SQLCipher local database encryption, and an accessibility audit.
-
-### Apple add-on (whenever someone needs Apple Health or Apple Watch data, or before going public)
-**Deliverables** (from §2.7)
-- Apple Developer account, EAS iOS builds and TestFlight.
-- HealthKit adapter.
-- Sign in with Apple.
-- Signed and notarized Tauri Mac build.
-- Maestro iOS flows.
-
-**Exit criteria**
-- The iPhone app passes the same Phase 1 offline and leak tests.
-- Importing 30 days of HealthKit data twice gives zero duplicates.
+- Optional: offline logging in the web app (WebAssembly render mode + PowerSync's JavaScript web SDK, §2.7).
 
 ---
 
@@ -427,11 +399,13 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
 |---|---|
 | Database rules (RLS) and sync rules drift apart, so data leaks between users | Ownership columns on every row (no joins in rules). Grant checks in parameterized streams. Two-client leak tests and pgTAP in CI on every migration |
 | One bad upload blocks PowerSync's write queue | Sort errors by Postgres code. Permanent failures go to `failed_uploads`, with a retry/discard screen and a Sentry alert |
-| Schema drift between Postgres, Drizzle and zod | Migrations are additive only. `tools/codegen` compares the schemas against `supabase gen types` in CI |
-| Expo web + PowerSync web workers inside Tauri's WebKit (macOS/Linux) | Phase 0 test on every OS, IndexedDB storage mode as the default, Electron fallback |
+| Schema drift between Postgres, the PowerSync client schema and the C# contracts | Migrations are additive only. `tools/drift` compares them against the migrated database in CI |
+| The PowerSync .NET SDK is beta (v0.1.x) | Phase 0b gate on Android and Windows (offline write, kill, reconnect, leak test); pinned version; fallback design (SQLite outbox through the API) recorded in an ADR if it fails |
+| .NET MAUI quality issues on Android or Windows | Pinned .NET and MAUI workload versions, upgrades in their own PRs, smoke tests on both platforms on every main-branch build |
+| The ASP.NET Core API is a new attack surface between clients and the database | JWT validated against Supabase's keys and the signed-in user checked on every request; queries run as that user so RLS applies; the service role only in admin jobs; rate limits and quotas; negative tests for anon keys, expired tokens and other users' ids |
 | Health Connect needs a Play health-permissions declaration and a privacy policy | Dev builds from day 1; sign Phase 3 off on a physical Android phone |
-| iPhone web app limits: storage can be cleared, no background alerts, no Apple Health | Persistent-storage request, immediate sync, unsynced badge, server Web Push. The Apple add-on removes these limits when needed |
-| The code quietly stops building for iOS while Apple is deferred | Libraries that support both platforms only, platform adapters, and a monthly free EAS iOS simulator build in CI |
+| The web app is online-first, so a dropped connection could lose an entry | Offline banner, writes blocked with a clear message instead of failing silently, form input kept until submitted; Android and Windows for offline logging; optional web offline upgrade (§2.7) |
+| No over-the-air hot-fixes | Small releases; Windows auto-update; Play internal track for fast Android rollout; web fixes ship by redeploying the host |
 | OCR accuracy (EU vs US label formats, glare, curved packs) | Framing guide, empty-when-unreadable fields, arithmetic checks, required confirmation, original image kept for re-processing, eval gate on every prompt or model change |
 | Meal-photo calories are underestimated | Range plus estimate badge, never the default entry method, prompt to weigh food |
 | Progress-photo privacy | Private bucket keyed by profile id, signed URLs, EXIF stripped on device, not shared by default, consent required before any AI sees a photo |
@@ -446,7 +420,7 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
 | Scope creep | Phase gates tied to exit criteria |
 
 ## 5. Verification strategy
-1. **`packages/domain`:** Vitest plus fast-check property tests, including:
+1. **`Health360.Domain`:** xUnit plus FsCheck property tests, including:
    - Every unit pair round-trips. A value entered in lb or in is shown exactly as typed.
    - A protein ratio round-trips between g/kg and g/lb, and switching units doesn't change the daily gram target beyond rounding.
    - Switching units never creates a PR.
@@ -463,47 +437,45 @@ For each cardio session, `packages/domain` estimates the energy used, how much o
    - Editing zones or physiology values never changes a stored session estimate.
    - Golden CSV fixtures for trends, progression and session energy estimates.
 2. **Database:** pgTAP through `supabase test db`. Tests cover A vs B access, member vs non-member, sharing grants, storage policies and RLS coverage. CI also runs Supabase advisors and `db lint`.
-3. **Sync integration (Docker in CI):** local Supabase + PowerSync with two to three `@powersync/node` clients. Covers leak tests, offline write then reconnect, concurrent shopping-list check-offs, and quarantined errors.
-4. **Edge Functions:** Deno tests with recorded Claude responses (no live calls in CI). Zod contract tests; validator and repair-loop tests with deliberately bad outputs.
+3. **Sync integration (Docker in CI):** local Supabase + PowerSync with two to three PowerSync .NET clients (the existing `@powersync/node` test stays until they replace it). Covers leak tests, offline write then reconnect, concurrent shopping-list check-offs, and quarantined errors.
+4. **API:** integration tests (`WebApplicationFactory`) against local Supabase with recorded Claude responses (no live calls in CI). Contract tests; auth tests (anon key, expired token, another user's ids); validator and repair-loop tests with deliberately bad outputs.
 5. **AI evals (`evals/`, nightly or manual):** label OCR per-field accuracy, lab-parse accuracy (including DEXA, RMR and metabolic-test reports), meal-plan tolerance pass rate, workout-program constraint violations. No regression allowed on prompt or model changes.
-6. **Components:** jest-expo + React Native Testing Library for the set logger, food entry, OCR confirm screen, goal wizard and physiology entry form.
-7. **Web E2E:** Playwright against the exported web build with seeded local Supabase, on Chromium, Firefox and **WebKit** (standing in for iPhone and Mac Safari users):
+6. **Components:** bUnit for the set logger, food entry, OCR confirm screen, goal wizard and physiology entry form.
+7. **Web E2E:** Playwright for .NET against the Blazor Web App with seeded local Supabase, on Chromium and Firefox:
    - Log food.
    - Build a template and log sets.
    - Add weight → create a goal → check the cost estimate.
    - Enter a lab RMR and max HR → check the calorie target and zones change.
-   - Go offline → log → go online → check the database.
-8. **Mobile E2E:** Maestro on the Android emulator, nightly. The same flows plus airplane mode and killing the app mid-workout. iOS flows come with the Apple add-on.
-9. **Desktop:** smoke tests via `tauri-driver` on Windows and Linux.
+   - Go offline → check the offline banner and that no write is reported as saved.
+8. **Mobile E2E:** Maestro on the Android emulator, nightly. The same flows plus airplane mode (offline log, then sync) and killing the app mid-workout.
+9. **Desktop:** Windows smoke tests (Appium with the Windows driver, or FlaUI) on a Windows runner: install, sign in, offline write then sync, auto-update.
 10. **Manual device checklist each phase:**
     - Android: Health Connect permissions, barcode and label capture in poor light, notifications.
-    - A real iPhone running the web app: install, offline logging, Web Push reminder, camera.
+    - A Windows PC: installer and auto-update, offline logging, drag-and-drop of a lab PDF, notifications.
+    - The web app in Chrome and Firefox: Web Push reminder, camera capture for labels, offline banner.
 11. **CI order:**
-    - Every PR: typecheck, lint, unit tests, pgTAP, drift check, sync tests, Playwright.
-    - Main branch: EAS and Tauri builds.
+    - Every PR: `dotnet build` with analyzers, `dotnet format --verify-no-changes`, unit and component tests, API tests, pgTAP, drift check, sync tests, Playwright.
+    - Main branch: Android (AAB/APK) and Windows (Velopack) builds, Windows smoke tests, web host deploy.
     - Nightly: Maestro and AI evals.
-    - Monthly: an EAS iOS simulator build to keep the code iPhone-ready.
 
 ## 6. Running costs (list prices checked Oct 2026; USD)
 
 ### 6.1 Price list per service
 | Service | What it's for | Free tier | Paid tier that matters |
 |---|---|---|---|
-| **Supabase** | Postgres, Auth, Storage, Edge Functions | $0. Paused after 1 week inactive, **no backups**, 500 MB database, 1 GB files | **Pro $25/mo**: never paused, daily backups (7 days), 8 GB database, 100 GB files, 250 GB egress, 2M function calls, and $10 compute credit covering one Micro instance. Each extra project ~$10/mo compute. Small compute $15, Medium $60. PITR $100/mo (not needed) |
+| **Supabase** | Postgres, Auth, Storage, pg_cron | $0. Paused after 1 week inactive, **no backups**, 500 MB database, 1 GB files | **Pro $25/mo**: never paused, daily backups (7 days), 8 GB database, 100 GB files, 250 GB egress, 2M function calls, and $10 compute credit covering one Micro instance. Each extra project ~$10/mo compute. Small compute $15, Medium $60. PITR $100/mo (not needed) |
 | **PowerSync** | Offline sync | $0. 2 GB synced/mo, 50 concurrent clients, 500 MB hosted; **deactivated after about 1–2 weeks unused** | **Pro $49/mo**: 30 GB synced, 1,000 clients. Or **self-host the free Open Edition** on a ~$5–10/mo VPS (you run it yourself) |
 | **Claude API** (`claude-opus-5-5`) | OCR, meal plans, programs, coach | none | $4 / $20 per million input/output tokens, cache reads $0.20/M, Batches 50% off (see 6.2) |
-| **Expo EAS** | Android cloud builds, the monthly iOS simulator check, over-the-air updates | $0. 15 iOS + 15 Android builds/mo (slow queue), 1,000 update users | Starter $19/mo (fast queue, $45 build credit, 3,000 update users) |
-| **Apple Developer** | iOS distribution, TestFlight, HealthKit, macOS notarization | none | **Deferred: $0 now**, $99/yr once the Apple add-on starts |
+| **ASP.NET Core host** | The Blazor Web App and the API (one app) | Runs locally while building | A small always-on container or VPS, **~$5–15/mo**. Blazor's server mode keeps a live connection per user, so pick a host that doesn't scale to zero |
 | **Google Play** | Android distribution | none | **$25 one-time** |
 | **Windows code signing** | No SmartScreen warning on install | skip it for family use (click through the warning) | Azure Artifact Signing Basic **$9.99/mo** (optional) |
-| Web hosting (Expo web build) | The web app | Cloudflare Pages: $0 | — |
 | Login emails | Emailed sign-in codes (Supabase's built-in email is rate-limited and meant for testing) | Free tier of a transactional email service | AWS SES ~$0.10 per 1,000 emails |
 | Sentry | Error reports | Developer plan: $0 | Team ~$26/mo (public launch only) |
 | USDA FoodData Central, Open Food Facts | Food data | $0 (API key, rate limits) | — |
-| GitHub Actions | CI | 2,000 private-repo minutes/mo; Linux runners are enough while Apple is deferred | macOS minutes count 10×, which only matters once the Apple add-on starts |
-| Web Push | Reminders in the installed web app | $0 (VAPID keys; sent from an Edge Function) | — |
+| GitHub Actions | CI and the Android and Windows builds | 2,000 private-repo minutes/mo; Linux runners for most jobs | Windows runner minutes count 2× (Windows build and smoke tests, main branch only) |
+| Web Push | Reminders in the web app | $0 (VAPID keys; sent from the API) | — |
 | Domain | `health360.<tld>` | — | ~$10–20/yr |
-| Terra (wearables) | Garmin, Oura, WHOOP | — | **$499/mo, so skipped.** Most wearables already sync into Health Connect (and Apple Health, once the iPhone app exists), which the app reads for free. Open Wearables (MIT) is the free self-hosted fallback |
+| Terra (wearables) | Garmin, Oura, WHOOP | — | **$499/mo, so skipped.** Most wearables already sync into Health Connect, which the app reads for free. Open Wearables (MIT) is the free self-hosted fallback |
 
 ### 6.2 Claude cost per action (estimates on Opus 5.5)
 These are rough planning numbers. Phase 1 replaces them with real figures from the `ai_generations` table.
@@ -526,12 +498,11 @@ These are rough planning numbers. Phase 1 replaces them with real figures from t
 ### 6.3 Monthly totals by stage
 | Stage | Setup | ≈ Monthly |
 |---|---|---|
-| **Building (Phases 0–1)** | Supabase Free (plus `supabase start` locally), PowerSync Free, EAS Free, Google $25 once, no Apple | **~$10–30/mo**, which is Claude for development and OCR eval runs. Also $25 one-time for Google, and roughly $25 once for repeated runs of the 50-photo eval |
-| **Household in daily use (2–4 people), recommended** | Supabase Pro, PowerSync Free, EAS Free, domain, no Apple, no Windows signing | **~$35–55/mo** (~$400–650/yr): Supabase $25 + domain ~$1 + Claude ~$8–25 (Opus 5.5) |
-| Same, after the Apple add-on | + Apple $99/yr | +~$8/mo |
+| **Building (Phases 0–1)** | Supabase Free (plus `supabase start` locally), PowerSync Free, the ASP.NET Core host run locally, Google $25 once | **~$10–30/mo**, which is Claude for development and OCR eval runs. Also $25 one-time for Google, and roughly $25 once for repeated runs of the 50-photo eval |
+| **Household in daily use (2–4 people), recommended** | Supabase Pro, PowerSync Free, a small host, domain, no Windows signing | **~$40–70/mo** (~$480–840/yr): Supabase $25 + host ~$5–15 + domain ~$1 + Claude ~$8–25 (Opus 5.5) |
 | Same, with sync that's never deactivated | + PowerSync Pro $49, or self-hosted ~$5–10 | ~$50–115/mo |
 | Same, with signed Windows installer | + $9.99 | +$10/mo |
-| **Public launch (~1,000 monthly users)** | Supabase Pro + Small compute, PowerSync Pro, EAS Starter, Sentry Team, Windows signing | **~$150–200/mo infrastructure, plus Claude at $1–6 per AI-active user** (~$500–3,000+/mo). AI becomes the main cost, so it needs a paywall or per-user quotas. Also: RevenueCat is free under $2.5k monthly revenue, then 1%; Apple and Google take 15% on small-business subscriptions; privacy policy and terms cost $0–500 one-time |
+| **Public launch (~1,000 monthly users)** | Supabase Pro + Small compute, PowerSync Pro, a larger host (~$30–60), Sentry Team, Windows signing | **~$170–230/mo infrastructure, plus Claude at $1–6 per AI-active user** (~$500–3,000+/mo). AI becomes the main cost, so it needs a paywall or per-user quotas. Also: RevenueCat is free under $2.5k monthly revenue, then 1%; Google takes 15% on small-business subscriptions in the Android app; privacy policy and terms cost $0–500 one-time |
 
 **Cost levers, in order of savings:**
 1. Per-user AI quotas, already in the plan.
@@ -539,18 +510,20 @@ These are rough planning numbers. Phase 1 replaces them with real figures from t
 3. Batches API for anything not urgent.
 4. Prompt caching and image resizing.
 5. Self-hosting PowerSync.
-6. Skipping Windows signing for family use, and deferring Apple.
+6. Skipping Windows signing for family use.
 7. One production Supabase project, with development on local Docker or a free organization.
 
-## 7. First files to create (Phase 0)
-- `supabase/migrations/0001_identity_households_rls.sql`: profiles, households, sharing grants, `private.*` helpers, and the RLS pattern later tables copy.
-- `powersync/sync-config.yaml`: Sync Streams that mirror the RLS.
-- `packages/local-db/src/schema.ts`: the Drizzle client schema, which generates the PowerSync schema.
-- `apps/app/src/db/connector.ts`: the upload connector and error quarantine.
-- `packages/domain/src/index.ts`: the deterministic math, shared with Edge Functions through `supabase/functions/_shared/`.
+## 7. First files to create (Phase 0b)
+Already in place and carried over: `supabase/migrations/` (identity, households, sharing grants, `private.*` helpers and the RLS pattern later tables copy), `supabase/tests/database/` and `powersync/sync-config.yaml`.
+- `src/Health360.Domain/Units/`: the exact conversion factors and their property tests, ported first.
+- `src/Health360.Server/Auth/`: Supabase JWT and signed-in-user validation, and a database connection that runs as that user.
+- `src/Health360.Maui/Data/`: the PowerSync .NET schema (mirroring the synced Postgres tables), the upload connector and the `failed_uploads` quarantine.
+- `src/Health360.UI/`: the shared shell, tabs and sign-in flow.
+- `tools/drift/`: the schema-drift check against a migrated database.
 
 
 ## Sources
 - Physiology estimates (§2.8): [Mifflin-St Jeor RMR (Mifflin et al., 1990)](https://doi.org/10.1093/ajcn/51.2.241) · Katch-McArdle RMR (McArdle, Katch & Katch, *Exercise Physiology*) · [Age-predicted max HR (Tanaka et al., 2001)](https://doi.org/10.1016/s0735-1097(00)01054-8) · [Non-exercise VO₂max, HUNT study (Nes et al., 2011)](https://doi.org/10.1249/MSS.0b013e31821d3f6f) · [Non-exercise VO₂max without resting HR (Jackson et al., 1990)](https://doi.org/10.1249/00005768-199012000-00021) · [Cooper 12-minute test (1968)](https://pubmed.ncbi.nlm.nih.gov/5694044/) · [Rockport 1-mile walk (Kline et al., 1987)](https://pubmed.ncbi.nlm.nih.gov/3600239/) · [HR reserve (Karvonen et al., 1957)](https://pubmed.ncbi.nlm.nih.gov/13470504/) · [Friel's LTHR zones](https://www.trainingpeaks.com/blog/joe-friel-s-quick-guide-to-setting-zones/) · [PAR-Q+](https://eparmedx.com/)
 - Exercise energy (§2.9): [HR-based energy expenditure (Keytel et al., 2005)](https://doi.org/10.1080/02640410470001730089) · [2024 Adult Compendium of Physical Activities](https://doi.org/10.1016/j.jshs.2023.10.010) ([pacompendium.com](https://pacompendium.com/)) · [%HRR ≈ %VO₂R (Swain & Leutholtz, 1997)](https://doi.org/10.1097/00005768-199703000-00018) · [Non-protein RQ table (Péronnet & Massicotte, 1991)](https://pubmed.ncbi.nlm.nih.gov/1645211/) · [Substrate oxidation from gas exchange (Frayn, 1983)](https://doi.org/10.1152/jappl.1983.55.2.628) · [Substrate oxidation during exercise (Jeukendrup & Wallis, 2005)](https://doi.org/10.1055/s-2004-830512) · [FatMax (Achten et al., 2002)](https://doi.org/10.1097/00005768-200201000-00015) · [Crossover concept (Brooks & Mercier, 1994)](https://doi.org/10.1152/jappl.1994.76.6.2253) · [Polarized training (Seiler, 2010)](https://doi.org/10.1123/ijspp.5.3.276)
-- Costs: [Supabase pricing](https://supabase.com/pricing) · [PowerSync pricing](https://www.powersync.com/pricing) · [Expo EAS pricing](https://expo.dev/pricing) · [Azure Artifact Signing pricing](https://azure.microsoft.com/en-ca/pricing/details/artifact-signing/) · [Terra pricing](https://tryterra.co/pricing) · [Claude vision token math](https://platform.claude.com/docs/en/build-with-claude/vision-coordinates)
+- Platforms and stack: [ADR 0002](adr/0002-dotnet-maui-blazor.md) and its sources.
+- Costs: [Supabase pricing](https://supabase.com/pricing) · [PowerSync pricing](https://www.powersync.com/pricing) · [Azure Artifact Signing pricing](https://azure.microsoft.com/en-ca/pricing/details/artifact-signing/) · [Terra pricing](https://tryterra.co/pricing) · [Claude vision token math](https://platform.claude.com/docs/en/build-with-claude/vision-coordinates)

@@ -6,14 +6,17 @@ Status: **Phase 0** (foundation and risk tests). See [docs/phase0.md](docs/phase
 
 - [Implementation plan](docs/PLAN.md): architecture, data model, phased roadmap, risks, tests, running costs.
 - [Feature catalogue](docs/FEATURES.md)
-- [ADR 0001: language and stack](docs/adr/0001-language-and-stack.md)
+- [ADR 0002: .NET MAUI, Blazor and ASP.NET Core](docs/adr/0002-dotnet-maui-blazor.md): the current stack. Platforms: Android, Web and Windows.
+- [ADR 0001: language and stack](docs/adr/0001-language-and-stack.md) (superseded)
 
 ## Layout
 
+This is the **Phase 0 TypeScript prototype**. [ADR 0002](docs/adr/0002-dotnet-maui-blazor.md) replaces it with a .NET solution in Phase 0b ([PLAN.md §2.2](docs/PLAN.md)); the Supabase migrations, pgTAP tests and PowerSync config carry over.
+
 | Path | What it is |
 |---|---|
-| `apps/app` | Expo app: Android, web (installable PWA), iOS-ready |
-| `apps/desktop` | Tauri 2 shell around the web build, for Windows and Linux |
+| `apps/app` | Expo app: Android and web (prototype) |
+| `apps/desktop` | Tauri 2 shell around the web build (prototype; desktop is Windows only, through MAUI) |
 | `packages/domain` | Deterministic health math (units first), shared with Edge Functions |
 | `packages/schemas` | zod schemas for forms, API payloads and Claude's structured output |
 | `packages/local-db` | Client SQLite schema (Drizzle → PowerSync) and the upload queue |
