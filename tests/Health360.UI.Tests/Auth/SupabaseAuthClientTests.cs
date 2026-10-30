@@ -91,6 +91,9 @@ public sealed class SupabaseAuthClientTests : IDisposable
         FakeAuth.Json(HttpStatusCode.OK, "<html>Sign in to the Wi-Fi</html>"),
         // A gateway's 4xx without Auth's JSON body.
         FakeAuth.Json(HttpStatusCode.Forbidden, "<html>Forbidden</html>"),
+        // A gateway's own JSON (Kong), which isn't Auth refusing anything.
+        FakeAuth.Json(HttpStatusCode.Forbidden, """{"message":"You cannot consume this service"}"""),
+        FakeAuth.Json(HttpStatusCode.Unauthorized, """{"message":"Invalid authentication credentials"}"""),
     ];
 
     [Theory]

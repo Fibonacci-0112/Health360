@@ -132,4 +132,44 @@ public sealed class SessionManagerTests : IDisposable
         Assert.Null(store.Saved);
         Assert.Null(await sessions.GetTokenAsync(TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task AGatewayErrorDuringRefreshKeepsTheSession()
+    {
+        using var sessions = Sessions();
+        await sessions.StartAsync(Session(TimeSpan.Zero));
+        auth.Respond = _ => FakeAuth.Json(HttpStatusCode.Forbidden, """{"message":"You cannot consume this service"}""");
+        var expired = false;
+        sessions.Expired += _ => expired = true;
+
+        Assert.Null(await sessions.GetTokenAsync(TestContext.Current.CancellationToken));
+
+        Assert.False(expired);
+        Assert.NotNull(store.Saved);
+    }
+
+    [Fact]
+    public async Task ARefreshTheCallerAbandonsStillSavesTheRotatedToken()
+    {
+        using var sessions = Sessions();
+        await sessions.StartAsync(Session(TimeSpan.Zero));
+        using var caller = new CancellationTokenSource();
+        var sent = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        auth.Respond = r =>
+        {
+            sent.TrySetResult();
+            release.Task.Wait(TestContext.Current.CancellationToken);
+            return null;
+        };
+
+        var getting = Task.Run(() => sessions.GetTokenAsync(caller.Token), TestContext.Current.CancellationToken);
+        await sent.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await caller.CancelAsync();
+        release.SetResult();
+        await getting.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        // Auth has rotated the refresh token; losing the new one would end the session at the next refresh.
+        Assert.Equal("refresh-1", store.Saved!.RefreshToken);
+    }
 }

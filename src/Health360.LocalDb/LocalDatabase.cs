@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using PowerSync.Common.Client;
 using PowerSync.Common.Client.Connection;
 using PowerSync.Common.Client.Sync.Stream;
@@ -20,7 +22,11 @@ public interface IDatabaseOwnerStore
 /// inherit the previous user's rows, their unsent writes or their quarantined ones: every connect binds
 /// the database to the signed-in user first, and clears it if someone else owned it.
 /// </summary>
-public sealed class LocalDatabase(PowerSyncDatabase db, IDatabaseOwnerStore owner, IPowerSyncBackendConnector connector) : IAsyncDisposable
+public sealed partial class LocalDatabase(
+    PowerSyncDatabase db,
+    IDatabaseOwnerStore owner,
+    IPowerSyncBackendConnector connector,
+    ILogger<LocalDatabase>? logger = null) : IAsyncDisposable
 {
     /// <summary>
     /// A 2 s retry (the SDK's default is 5 s) keeps "reconnect, then visible on another device" near
@@ -55,9 +61,16 @@ public sealed class LocalDatabase(PowerSyncDatabase db, IDatabaseOwnerStore owne
             gate.Release();
         }
 
-        // Observe a failure to start so it isn't an unobserved task exception; sync status reports it.
-        _ = connecting.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        // Nobody awaits it, so log a failure to start (the type only: no tokens or row data).
+        _ = connecting.ContinueWith(
+            t => LogConnectFailed(logger ?? (ILogger)NullLogger.Instance, t.Exception?.InnerException?.GetType().Name ?? "unknown"),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Starting sync failed ({Error}); PowerSync retries on the next connect")]
+    private static partial void LogConnectFailed(ILogger logger, string error);
 
     /// <summary>
     /// Makes sure the database belongs to <paramref name="userId"/> before anything reads or syncs it,

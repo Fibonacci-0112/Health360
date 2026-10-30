@@ -88,7 +88,11 @@ public sealed partial class AuthService : IDisposable
     /// <summary>Emails a sign-in code. Throws <see cref="AuthException"/>.</summary>
     public Task SendCodeAsync(string email) => client.SendCodeAsync(email.Trim());
 
-    /// <summary>Signs in with the emailed code, then binds the local database and starts syncing.</summary>
+    /// <summary>
+    /// Signs in with the emailed code, then binds the local database and starts syncing. All of it runs
+    /// under the transition gate, so a sign-out or another sign-in can't come between the bind and the
+    /// connect (connecting returns once sync has started, so this doesn't wait for the network).
+    /// </summary>
     public async Task VerifyCodeAsync(string email, string code)
     {
         var session = await client.VerifyCodeAsync(email.Trim(), code.Trim()).ConfigureAwait(false);
@@ -98,13 +102,12 @@ public sealed partial class AuthService : IDisposable
             await local.BindAsync(session.UserId).ConfigureAwait(false);
             await sessions.StartAsync(session).ConfigureAwait(false);
             Publish(AuthStatus.SignedIn, session);
+            await ConnectAsync(session.UserId).ConfigureAwait(false);
         }
         finally
         {
             gate.Release();
         }
-
-        await ConnectAsync(session.UserId).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -115,6 +118,12 @@ public sealed partial class AuthService : IDisposable
     /// </summary>
     public async Task<UnsyncedChanges?> SignOutAsync(bool discardUnsynced = false)
     {
+        var userId = UserId;
+        if (Status != AuthStatus.SignedIn || userId is null)
+        {
+            return null;
+        }
+
         if (!discardUnsynced)
         {
             var unsynced = await local.UnsyncedAsync().ConfigureAwait(false);
@@ -124,9 +133,10 @@ public sealed partial class AuthService : IDisposable
             }
         }
 
-        // A fresh token, so the server session is really ended (a refused refresh means it already was).
-        var token = await sessions.GetTokenAsync(CancellationToken.None).ConfigureAwait(false);
-        if (token is not null)
+        // A fresh token, so the server session is really ended. Null only when Auth already refused it;
+        // when Auth can't be reached this throws, and nothing is cleared.
+        var token = await sessions.GetTokenForSignOutAsync().ConfigureAwait(false);
+        if (token is not null && token.UserId == userId)
         {
             await client.SignOutAsync(token.AccessToken).ConfigureAwait(false);
         }
@@ -134,6 +144,14 @@ public sealed partial class AuthService : IDisposable
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            // Someone else may have signed in while the request was out (the session ended on its own
+            // meanwhile): the device is theirs now, and nothing of theirs is cleared. Signed out with
+            // nobody else in (the refresh was refused just now) still clears: this user asked for it.
+            if (UserId is not null && UserId != userId)
+            {
+                return null;
+            }
+
             await local.ClearAsync().ConfigureAwait(false);
             await sessions.EndAsync().ConfigureAwait(false);
             Publish(AuthStatus.SignedOut, null);
@@ -154,7 +172,6 @@ public sealed partial class AuthService : IDisposable
 
     private async Task RestoreAsync()
     {
-        string? userId = null;
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -162,20 +179,19 @@ public sealed partial class AuthService : IDisposable
             if (session is not null)
             {
                 await local.BindAsync(session.UserId).ConfigureAwait(false);
-                userId = session.UserId;
             }
 
             Publish(session is null ? AuthStatus.SignedOut : AuthStatus.SignedIn, session);
+
+            // Offline at launch is fine: the saved session stands and sync connects when it can.
+            if (session is not null)
+            {
+                await ConnectAsync(session.UserId).ConfigureAwait(false);
+            }
         }
         finally
         {
             gate.Release();
-        }
-
-        // Offline at launch is fine: the saved session stands and sync connects when it can.
-        if (userId is not null)
-        {
-            await ConnectAsync(userId).ConfigureAwait(false);
         }
     }
 
@@ -202,7 +218,8 @@ public sealed partial class AuthService : IDisposable
             await gate.WaitAsync().ConfigureAwait(false);
             try
             {
-                if (UserId != userId)
+                // A session started since (the same user signing in again) is not the one that expired.
+                if (UserId != userId || sessions.Current is not null)
                 {
                     return;
                 }

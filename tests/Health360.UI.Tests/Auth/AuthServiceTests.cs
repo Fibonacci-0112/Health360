@@ -172,4 +172,70 @@ public sealed class AuthServiceTests : IAsyncLifetime
         Assert.Equal($"bind {app.Auth.UserId}", app.Local.Calls[^2]);
         Assert.Equal(app.Auth.UserId, auth.UserId);
     }
+
+    [Fact]
+    public async Task OfflineSignOutWithAnExpiredTokenKeepsEverything()
+    {
+        // The token can't be refreshed, so the server session can't be ended: clearing the device now
+        // would leave it alive on the server.
+        app.Store.Saved = app.SavedSession() with { ExpiresAt = app.Clock.Now.AddMinutes(-5) };
+        using var auth = app.NewAuthService(out _);
+        await auth.InitializeAsync();
+        app.Auth.Respond = _ => throw new HttpRequestException("offline");
+
+        var error = await Assert.ThrowsAsync<AuthException>(() => auth.SignOutAsync(discardUnsynced: true));
+
+        Assert.Equal(AuthErrorKind.Unavailable, error.Kind);
+        Assert.Equal(AuthStatus.SignedIn, auth.Status);
+        Assert.DoesNotContain("clear", app.Local.Calls);
+        Assert.NotNull(app.Store.Saved);
+    }
+
+    [Fact]
+    public async Task ASignOutAuthAlreadyRefusedStillClearsTheDevice()
+    {
+        app.Store.Saved = app.SavedSession() with { ExpiresAt = app.Clock.Now };
+        using var auth = app.NewAuthService(out _);
+        await auth.InitializeAsync();
+        app.Auth.Respond = r => r.Path.StartsWith("/auth/v1/token", StringComparison.Ordinal)
+            ? FakeAuth.Error(HttpStatusCode.BadRequest, "refresh_token_not_found", "Invalid Refresh Token")
+            : null;
+
+        Assert.Null(await auth.SignOutAsync(discardUnsynced: true));
+
+        Assert.Equal(AuthStatus.SignedOut, auth.Status);
+        Assert.Equal("clear", app.Local.Calls[^1]);
+        Assert.DoesNotContain(app.Auth.Requests, r => r.Path.StartsWith("/auth/v1/logout", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ASignInThatLandsWhileSignOutIsInFlightIsNotCleared()
+    {
+        app.Store.Saved = app.SavedSession("22222222-2222-2222-2222-222222222222");
+        using var auth = app.NewAuthService(out _);
+        await auth.InitializeAsync();
+        var logoutSent = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        app.Auth.Respond = r =>
+        {
+            if (!r.Path.StartsWith("/auth/v1/logout", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            logoutSent.TrySetResult();
+            release.Task.Wait(TestContext.Current.CancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.NoContent);
+        };
+
+        var signingOut = Task.Run(() => auth.SignOutAsync(discardUnsynced: true), TestContext.Current.CancellationToken);
+        await logoutSent.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await auth.VerifyCodeAsync("sam@example.com", "123456");
+        release.SetResult();
+        await signingOut.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        Assert.Equal((AuthStatus.SignedIn, app.Auth.UserId), (auth.Status, auth.UserId));
+        Assert.DoesNotContain("clear", app.Local.Calls);
+        Assert.Equal(app.Auth.UserId, app.Store.Saved!.UserId);
+    }
 }

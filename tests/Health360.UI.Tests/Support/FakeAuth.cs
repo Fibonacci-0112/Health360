@@ -62,7 +62,10 @@ public sealed class FakeAuth : HttpMessageHandler
             Requests.Add(recorded);
         }
 
-        if (Respond(recorded) is { } custom)
+        var custom = Respond(recorded);
+        // As a real HttpClient does: a request whose caller gave up loses its answer.
+        cancellationToken.ThrowIfCancellationRequested();
+        if (custom is not null)
         {
             return custom;
         }

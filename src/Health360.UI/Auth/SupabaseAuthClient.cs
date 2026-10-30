@@ -178,11 +178,19 @@ public sealed class SupabaseAuthClient(HttpClient http, string apiKey, TimeProvi
         {
             HttpStatusCode.TooManyRequests => AuthErrorKind.RateLimited,
             HttpStatusCode.RequestTimeout => AuthErrorKind.Unavailable,
-            _ when status is >= 400 and < 500 && error is not null => AuthErrorKind.Rejected,
+            _ when status is >= 400 and < 500 && IsAuthError(error) => AuthErrorKind.Rejected,
             _ => AuthErrorKind.Unavailable,
         };
         return new AuthException(kind, code, message, null, status);
     }
+
+    /// <summary>
+    /// Auth's own error body, not just any JSON: a gateway in front of it (Kong answers
+    /// <c>{"message":"..."}</c>) must not count as Auth refusing a code or a refresh token, or a proxy
+    /// error would end the session.
+    /// </summary>
+    private static bool IsAuthError(JsonObject? error) =>
+        Text(error, "error_code") is not null || Text(error, "msg") is not null || Text(error, "error_description") is not null;
 
     private async Task<AuthSession> ReadSessionAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {

@@ -91,7 +91,17 @@ public sealed partial class SessionManager(SupabaseAuthClient client, ISessionSt
     /// Null when signed out, when Auth refused the refresh, or when it couldn't be reached and the token
     /// has already expired (sync and uploads then retry later).
     /// </summary>
-    public async Task<SessionToken?> GetTokenAsync(CancellationToken cancellationToken)
+    public Task<SessionToken?> GetTokenAsync(CancellationToken cancellationToken) => TokenAsync(forSignOut: false, cancellationToken);
+
+    /// <summary>
+    /// Like <see cref="GetTokenAsync"/>, for ending the session on the server: null only when there is no
+    /// session or Auth refused the refresh token (the server session is already gone). If Auth can't be
+    /// reached and the token has expired, it throws <see cref="AuthException"/> instead, so sign-out keeps
+    /// everything rather than clearing the device while the server session lives on.
+    /// </summary>
+    public Task<SessionToken?> GetTokenForSignOutAsync() => TokenAsync(forSignOut: true, CancellationToken.None);
+
+    private async Task<SessionToken?> TokenAsync(bool forSignOut, CancellationToken cancellationToken)
     {
         var session = Current;
         if (session is null)
@@ -122,7 +132,9 @@ public sealed partial class SessionManager(SupabaseAuthClient client, ISessionSt
             AuthSession next;
             try
             {
-                next = await client.RefreshAsync(session.RefreshToken, cancellationToken).ConfigureAwait(false);
+                // Never cancelled by the caller: Auth rotates the refresh token as soon as it answers, so an
+                // abandoned request would lose the new one and the old one would then be refused.
+                next = await client.RefreshAsync(session.RefreshToken, CancellationToken.None).ConfigureAwait(false);
             }
             catch (AuthException error) when (error.Kind == AuthErrorKind.Rejected)
             {
@@ -135,7 +147,17 @@ public sealed partial class SessionManager(SupabaseAuthClient client, ISessionSt
             catch (AuthException error)
             {
                 LogRefreshFailed(logger, error.Kind);
-                return session.ExpiresAt > clock.GetUtcNow() ? Token(session) : null;
+                if (session.ExpiresAt > clock.GetUtcNow())
+                {
+                    return Token(session);
+                }
+
+                if (forSignOut)
+                {
+                    throw;
+                }
+
+                return null;
             }
 
             if (next.UserId != session.UserId)
