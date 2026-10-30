@@ -1,12 +1,12 @@
 using System.Net;
-using Microsoft.AspNetCore.Mvc.Testing;
+using Health360.Server.Tests.Support;
 
 namespace Health360.Server.Tests;
 
-public class HealthEndpointTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
+public class HealthEndpointTests(ServerFactory factory) : IClassFixture<ServerFactory>
 {
     [Fact]
-    public async Task Health_returns_ok()
+    public async Task Health_returns_ok_without_a_token()
     {
         using var client = factory.CreateClient();
 
@@ -17,12 +17,13 @@ public class HealthEndpointTests(WebApplicationFactory<Program> factory) : IClas
     }
 
     [Fact]
-    public async Task Unknown_routes_return_not_found()
+    public async Task Unknown_routes_still_require_a_token()
     {
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync(new Uri("/notes", UriKind.Relative), TestContext.Current.CancellationToken);
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        // The fallback policy runs before routing gives up, so probing reveals nothing without a token.
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 }
