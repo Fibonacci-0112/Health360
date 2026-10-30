@@ -10,9 +10,11 @@ public class NotesTests
 {
     private const string Profile = "0190a0b0-0000-7000-8000-000000000001";
 
-    // 03:30 UTC on the 30th is still the 29th in Chicago.
+    // 03:30 UTC on the 30th is still the 29th at UTC-5 (Chicago on that date). A custom zone, because this
+    // project runs with invariant globalization, and Windows can't look up an IANA id without ICU.
     private static readonly ZonedClock Clock = new(
-        new DateTimeOffset(2026, 10, 30, 3, 30, 0, TimeSpan.Zero), TimeZoneInfo.FindSystemTimeZoneById("America/Chicago"));
+        new DateTimeOffset(2026, 10, 30, 3, 30, 0, TimeSpan.Zero),
+        TimeZoneInfo.CreateCustomTimeZone("UTC-05", TimeSpan.FromHours(-5), "UTC-05", "UTC-05"));
 
     [Fact]
     public async Task AddsATrimmedNoteForTheLocalDayAndQueuesItForUpload()
