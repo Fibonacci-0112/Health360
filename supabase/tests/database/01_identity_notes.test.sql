@@ -1,7 +1,7 @@
 -- A vs B, member vs non-member, and sharing grants, on the Phase 0 tables.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(32);
+select plan(33);
 
 -- Users A and B each get a profile and a personal household from the sign-up trigger.
 -- C is a member of A's household; B is not.
@@ -78,6 +78,11 @@ select throws_ok($$ insert into household_members (household_id, profile_id, rol
 update profiles set height = 70, height_unit = 'in', height_cm = 1 where id = current_setting('t.a')::uuid;
 select is((select height_cm from profiles where id = current_setting('t.a')::uuid), 177.8::double precision,
   'the database recomputes canonical height from the value as entered');
+-- 65.6 × 2.54 is 166.624, but Domain computes 65.6 × 2.54 × 100 / 100 (Conversion.Convert); the server
+-- must store the same double.
+update profiles set height = 65.6, height_unit = 'in' where id = current_setting('t.a')::uuid;
+select is((select height_cm from profiles where id = current_setting('t.a')::uuid), 166.62399999999997::double precision,
+  'canonical height matches Domain bit for bit');
 
 select is((select count(*) from reference_datasets where code = 'pgtap-fixture'), 1::bigint, 'reference data is readable');
 

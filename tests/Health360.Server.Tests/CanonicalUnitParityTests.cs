@@ -55,6 +55,24 @@ public sealed class CanonicalUnitParityTests
         await AssertSameAsync(cases);
     }
 
+    /// <summary>
+    /// <c>profiles.height_cm</c> comes from <c>private.length_to_cm</c>; the app computes it with
+    /// <see cref="QuantityKinds.ToCanonical"/>. They once differed in the last bit for many inch entries.
+    /// </summary>
+    [Fact]
+    public async Task HeightConvertsExactlyAsDomainDoes()
+    {
+        Assert.SkipUnless(ConnectionString is { Length: > 0 }, $"Set {EnvironmentVariable} to run the database tests.");
+
+        var heightsIn = Enumerable.Range(200, 1000).Select(i => i / 10.0);
+        var cases = (
+            from unit in Unit.OfDimension(Dimension.Length)
+            from value in Values().Concat(heightsIn)
+            select (Value: value, From: unit.Code, To: "cm", Expected: QuantityKinds.ToCanonical(QuantityKind.Height, value, unit))).ToList();
+
+        await AssertSameAsync(cases, "select private.length_to_cm(c.value, c.from_unit)");
+    }
+
     [Fact]
     public async Task UnitsOfDifferentDimensionsDoNotConvert()
     {
@@ -111,12 +129,14 @@ public sealed class CanonicalUnitParityTests
         Assert.True(rows > 0, "metric_definitions is empty");
     }
 
-    private static async Task AssertSameAsync(List<(double Value, string From, string To, double Expected)> cases)
+    private static async Task AssertSameAsync(
+        List<(double Value, string From, string To, double Expected)> cases,
+        string select = "select private.convert_unit(c.value, c.from_unit, c.to_unit)")
     {
         await using var connection = await OpenAsync();
         await using var command = new NpgsqlCommand(
-            """
-            select private.convert_unit(c.value, c.from_unit, c.to_unit)
+            $"""
+            {select}
             from unnest($1::double precision[], $2::text[], $3::text[]) with ordinality as c (value, from_unit, to_unit, n)
             order by c.n
             """,
