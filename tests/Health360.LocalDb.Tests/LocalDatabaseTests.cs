@@ -117,6 +117,36 @@ public class LocalDatabaseTests
         Assert.Null(owner.Owner);
     }
 
+    [Fact]
+    public async Task DisposingWhileAReconnectIsStartingNeitherCrashesNorHangs()
+    {
+        // PowerSync.Common 1.0.0 overflows the stack, killing the process, if Close lands while a Connect
+        // is still tearing down the previous connection. A reconnect followed straight away by shutdown is
+        // what the sync tests' cleanup does, and so does an app closed mid-reconnect.
+        var timeout = TimeSpan.FromSeconds(10);
+        var ct = TestContext.Current.CancellationToken;
+        for (var i = 0; i < 10; i++)
+        {
+            await using var t = await TestDatabase.OpenAsync();
+            var owner = new MemoryOwnerStore();
+            // A session and a PowerSync URL nothing listens on: the first connection never succeeds.
+            var local = new LocalDatabase(t.Db, owner, new SupabaseConnector(
+                new FixedSession(new SessionToken("user-a", "a-token")),
+                owner,
+                new FakeWriter(),
+                new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", new Uri("http://127.0.0.1:9")),
+                new FixedClock(DateTimeOffset.UnixEpoch),
+                NullLogger<SupabaseConnector>.Instance));
+
+            await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
+            await Task.Delay(300, ct); // the first attempt is under way, so the reconnect has a stream to tear down
+            await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
+            await local.DisposeAsync().AsTask().WaitAsync(timeout, ct);
+
+            Assert.True(t.Db.Closed);
+        }
+    }
+
     private sealed class Count
     {
         public long N { get; set; }

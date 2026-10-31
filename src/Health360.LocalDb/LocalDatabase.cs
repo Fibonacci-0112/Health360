@@ -38,6 +38,9 @@ public sealed partial class LocalDatabase(
     // next user's session connects.
     private readonly SemaphoreSlim gate = new(1, 1);
 
+    // The Connect calls not yet finished (guarded by gate), so DisposeAsync can stop them before closing.
+    private Task? connecting;
+
     public PowerSyncDatabase Db => db;
 
     /// <summary>
@@ -49,12 +52,13 @@ public sealed partial class LocalDatabase(
     public async Task ConnectAsync(string userId)
     {
         ArgumentException.ThrowIfNullOrEmpty(userId);
-        Task connecting;
+        Task started;
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
             await BindAsync(userId).ConfigureAwait(false);
-            connecting = db.Connect(connector, new PowerSyncConnectionOptions(retryDelayMs: RetryDelayMs));
+            started = db.Connect(connector, new PowerSyncConnectionOptions(retryDelayMs: RetryDelayMs));
+            connecting = connecting is { IsCompleted: false } earlier ? Task.WhenAll(earlier, started) : started;
         }
         finally
         {
@@ -62,7 +66,7 @@ public sealed partial class LocalDatabase(
         }
 
         // Nobody awaits it, so log a failure to start (the type only: no tokens or row data).
-        _ = connecting.ContinueWith(
+        _ = started.ContinueWith(
             t => LogConnectFailed(logger ?? (ILogger)NullLogger.Instance, t.Exception?.InnerException?.GetType().Name ?? "unknown"),
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted,
@@ -127,8 +131,42 @@ public sealed partial class LocalDatabase(
 
     public async ValueTask DisposeAsync()
     {
-        await db.Close().ConfigureAwait(false);
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // Closing while a Connect is still starting overflows the stack in PowerSync.Common 1.0.0.
+            await StopSyncAsync().ConfigureAwait(false);
+            await db.Close().ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+
         gate.Dispose();
+    }
+
+    /// <summary>
+    /// Disconnects, and waits until no Connect from <see cref="ConnectAsync"/> is still starting. The
+    /// SDK's Connect first awaits a disconnect of its own, then checks the client isn't closed, and only
+    /// then registers with its connection manager. Close disposes the client's resources before it marks
+    /// it closed, so a Close that lands in that gap lets the connect start on a disposed client: it fails
+    /// synchronously and retries itself recursively until the stack overflows, killing the process
+    /// (PowerSync.Common 1.0.0, <c>ConnectionManager.CheckedConnectInternal</c>). A Disconnect landing in
+    /// the same gap is overtaken, but once the connect is registered a Disconnect ends it, whether it is
+    /// still starting or retrying offline, so disconnecting until it has finished stops it without
+    /// waiting for the network. Call with the gate held.
+    /// </summary>
+    private async Task StopSyncAsync()
+    {
+        await db.Disconnect().ConfigureAwait(false);
+        while (connecting is { IsCompleted: false } pending)
+        {
+            await Task.WhenAny(pending, Task.Delay(50)).ConfigureAwait(false);
+            await db.Disconnect().ConfigureAwait(false);
+        }
+
+        connecting = null;
     }
 
     private async Task BindAsync(string userId)
