@@ -116,7 +116,7 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         await A1.Db.Execute(
             """
             INSERT INTO measurements (id, profile_id, metric_code, category, value, unit, value_canonical, measured_at, local_date, group_id, source, method)
-            VALUES (?, ?, 'lean_mass', 'physiology', 180, 'lb', -1, ?, '2026-10-31', ?, 'lab', 'dexa')
+            VALUES (?, ?, 'lean_mass', 'physiology', 181.3, 'lb', -1, ?, '2026-10-31', ?, 'lab', 'dexa')
             """,
             [weight, fx.Alex.ProfileId, "2026-10-31T07:00:00Z", group]);
         await A1.Db.Execute(
@@ -134,8 +134,9 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
                 "SELECT value AS Value, unit AS Unit, value_canonical AS ValueCanonical, category AS Category, group_id AS GroupId FROM measurements WHERE id = ?",
                 [weight]),
             r => r is { ValueCanonical: > 0 });
-        Assert.Equal((180.0, "lb", "body", group), (row!.Value, row.Unit, row.Category, row.GroupId));
-        Assert.Equal(Conversion.Convert(180, Unit.Pound, Unit.Kilogram), row.ValueCanonical);
+        Assert.Equal((181.3, "lb", "body", group), (row!.Value, row.Unit, row.Category, row.GroupId));
+        // 82.23629668100001 kg: 16 significant digits, so a lossy text round trip would show.
+        Assert.Equal(Conversion.Convert(181.3, Unit.Pound, Unit.Kilogram), row.ValueCanonical);
         await A2.SyncedAsync("measurement_groups", group);
 
         var canonical = await Wait.ForAsync(

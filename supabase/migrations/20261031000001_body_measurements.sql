@@ -295,8 +295,11 @@ create table public.zone_sets (
 create index zone_sets_profile_idx on public.zone_sets (profile_id, sport, metric, effective_from);
 create index zone_sets_group_idx on public.zone_sets (group_id);
 
+-- to_jsonb(double precision) formats through float8out, which follows the session's extra_float_digits:
+-- at 0 (some clients' setting) it keeps 15 digits and loses bits. 1 gives the shortest exact form, so the
+-- stored numbers parse back to the same doubles Domain computes, whoever writes the row.
 create function private.zone_sets_canonical() returns trigger
-language plpgsql set search_path = '' as $$
+language plpgsql set search_path = '' set extra_float_digits = 1 as $$
 declare
   canonical_unit text := case new.metric when 'hr' then 'bpm' when 'power' then 'W' when 'pace' then 's_per_km' end;
   element jsonb;

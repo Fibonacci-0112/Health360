@@ -132,17 +132,23 @@ select lives_ok(
 );
 select is((select boundaries_canonical from zone_sets where id = '60000000-0000-0000-0000-00000000000a'),
   '[0, 130, 145, 160, 172]'::jsonb, 'bpm zones are their own canonical values');
+-- Written from a session that prints doubles with 15 digits, as some clients do: the stored canonical
+-- numbers must still parse back to the exact doubles.
+set local extra_float_digits = 0;
 select lives_ok(
   format($$ insert into zone_sets (id, profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from)
             values ('60000000-0000-0000-0000-00000000000b', %L, 'run', 'pace', 'custom', '[600, 540, 480]', 's_per_mi', '[]', '2026-10-30') $$,
     current_setting('t.a')),
   'A can save pace zones in seconds per mile'
 );
-select is((select boundaries_canonical from zone_sets where id = '60000000-0000-0000-0000-00000000000b'),
-  jsonb_build_array(600::double precision * 1000 / 1609.344::double precision,
-                    540::double precision * 1000 / 1609.344::double precision,
-                    480::double precision * 1000 / 1609.344::double precision),
-  'pace zones are recomputed in seconds per km');
+reset extra_float_digits;
+select results_eq(
+  $$ select (b ->> 0)::double precision from zone_sets z, jsonb_array_elements(z.boundaries_canonical) with ordinality as e (b, n)
+     where z.id = '60000000-0000-0000-0000-00000000000b' order by n $$,
+  $$ values (600::double precision * 1000 / 1609.344::double precision),
+            (540::double precision * 1000 / 1609.344::double precision),
+            (480::double precision * 1000 / 1609.344::double precision) $$,
+  'pace zones are recomputed in seconds per km, exactly');
 select throws_ok(
   format($$ insert into zone_sets (profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from)
             values (%L, 'run', 'hr', 'custom', '[130, 120, 150]', 'bpm', '[]', '2026-10-30') $$, current_setting('t.a')),
