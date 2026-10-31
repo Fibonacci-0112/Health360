@@ -1,0 +1,364 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using Health360.Domain.Ids;
+using Health360.Domain.Photos;
+using PowerSync.Common.Client;
+
+namespace Health360.LocalDb;
+
+/// <summary>A photo whose files the server refused for good, shown to the user to retry or cancel.</summary>
+public sealed class FailedPhotoUpload
+{
+    public string Id { get; set; } = "";
+
+    public string? ErrorCode { get; set; }
+
+    public string? FailedAt { get; set; }
+}
+
+/// <summary>What one pass of <see cref="PhotoUploader.ProcessAsync"/> did.</summary>
+public sealed record PhotoUploadReport(int Uploaded, int Failed, bool Stopped);
+
+/// <summary>
+/// The offline upload queue for progress photos (PLAN.md §3, step 1.1). Adding a photo strips its metadata on the
+/// device, keeps the stripped files in the app's private storage, and writes the <c>progress_photos</c> row and a
+/// local-only <c>photo_uploads</c> entry in one transaction. The row goes up through the normal upload queue; the
+/// files go up from here when there is a connection, in the order they were taken. A file may reach Storage
+/// before its row: the bucket's policies depend only on the profile folder.
+/// <para>
+/// The queue belongs to the local database's owner like everything else in it: the entries are cleared with the
+/// database (<see cref="LocalDatabase"/> deletes the files too), and files are only sent with the owner's token.
+/// A refusal that a retry can't fix is marked failed instead of blocking later photos; a missing connection
+/// stops the pass and leaves everything for the next one.
+/// </para>
+/// </summary>
+public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, IPhotoStorage storage, TimeProvider clock) : IDisposable
+{
+    public const string Table = "photo_uploads";
+
+    /// <summary>How often the background loop tries again when nothing wakes it.</summary>
+    public static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>The poses the server accepts (<c>progress_photos.pose</c>).</summary>
+    public static readonly IReadOnlySet<string> Poses = new HashSet<string>(["front", "back", "side_left", "side_right", "other"], StringComparer.Ordinal);
+
+    private readonly SemaphoreSlim pass = new(1, 1);
+    private readonly SemaphoreSlim wake = new(0, 1);
+    private readonly CancellationTokenSource stop = new();
+    private int started;
+    private int disposed;
+
+    /// <summary>Raised after a pass changed the queue, possibly off the UI thread.</summary>
+    public event Action? Changed;
+
+    public static string PhotoName(string id) => id + ".jpg";
+
+    public static string ThumbName(string id) => id + "_thumb.jpg";
+
+    /// <summary>
+    /// Adds a photo taken (or picked) on this device and returns its id. Both images must be JPEGs already resized and
+    /// rotated upright by the platform (the EXIF orientation is removed with the rest of the metadata, so a sideways
+    /// original would stay sideways). Throws <see cref="ArgumentException"/> for anything else, before storing
+    /// anything.
+    /// </summary>
+    public async Task<string> AddAsync(
+        string profileId,
+        string pose,
+        DateTimeOffset takenAt,
+        DateOnly localDate,
+        byte[] photo,
+        byte[] thumbnail,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(profileId);
+        ArgumentNullException.ThrowIfNull(photo);
+        ArgumentNullException.ThrowIfNull(thumbnail);
+        if (!Guid.TryParse(profileId, out var profile) || profile.ToString() != profileId)
+        {
+            throw new ArgumentException("The profile id must be a lower-case UUID.", nameof(profileId));
+        }
+
+        if (!Poses.Contains(pose))
+        {
+            throw new ArgumentException("Unknown pose.", nameof(pose));
+        }
+
+        var strippedPhoto = Strip(photo, nameof(photo));
+        var strippedThumb = Strip(thumbnail, nameof(thumbnail));
+
+        var id = UuidV7.Create(clock, RandomNumberGenerator.Fill).ToString();
+        var now = Timestamps.UtcNow(clock);
+        await files.WriteAsync(PhotoName(id), strippedPhoto, cancellationToken).ConfigureAwait(false);
+        await files.WriteAsync(ThumbName(id), strippedThumb, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await db.WriteTransaction(async tx =>
+            {
+                await tx.Execute(
+                    "INSERT INTO progress_photos (id, profile_id, pose, taken_at, local_date, storage_path, thumb_path, created_at, updated_at) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        id, profileId, pose, takenAt.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture),
+                        localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), $"{profileId}/{PhotoName(id)}",
+                        $"{profileId}/{ThumbName(id)}", now, now,
+                    ]).ConfigureAwait(false);
+                await tx.Execute(
+                    $"INSERT INTO {Table} (id, profile_id, attempts, created_at) VALUES (?, ?, 0, ?)",
+                    [id, profileId, now]).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+        catch
+        {
+            DeleteFiles(id);
+            throw;
+        }
+
+        Wake();
+        return id;
+    }
+
+    /// <summary>
+    /// Uploads waiting photos, oldest first, until the queue is empty or the connection fails. Each photo's thumbnail
+    /// then full image go up; once both are stored the entry and the local files are removed.
+    /// </summary>
+    public async Task<PhotoUploadReport> ProcessAsync(CancellationToken cancellationToken = default)
+    {
+        await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var uploaded = 0;
+            var failed = 0;
+            var pending = await db.GetAll<PendingRow>(
+                $"SELECT id AS Id, profile_id AS ProfileId FROM {Table} WHERE failed_at IS NULL ORDER BY created_at, id", []).ConfigureAwait(false);
+            foreach (var row in pending)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await UploadAsync(row, cancellationToken).ConfigureAwait(false);
+                }
+                catch (PhotoUploadException error) when (error.Permanent)
+                {
+                    await db.Execute(
+                        $"UPDATE {Table} SET attempts = attempts + 1, error_code = ?, failed_at = ? WHERE id = ?",
+                        [error.Code, Timestamps.UtcNow(clock), row.Id]).ConfigureAwait(false);
+                    failed++;
+                    continue;
+                }
+                catch (PhotoUploadException error)
+                {
+                    // Offline, signed out or a server error: everything after this would fail the same way.
+                    await db.Execute(
+                        $"UPDATE {Table} SET attempts = attempts + 1, error_code = ? WHERE id = ?", [error.Code, row.Id]).ConfigureAwait(false);
+                    Notify(uploaded, failed);
+                    return new PhotoUploadReport(uploaded, failed, Stopped: true);
+                }
+
+                // The entry goes first: if the app dies before the files are deleted, the sweep removes them.
+                await db.Execute($"DELETE FROM {Table} WHERE id = ?", [row.Id]).ConfigureAwait(false);
+                DeleteFiles(row.Id);
+                uploaded++;
+            }
+
+            Notify(uploaded, failed);
+            return new PhotoUploadReport(uploaded, failed, Stopped: false);
+        }
+        finally
+        {
+            pass.Release();
+        }
+    }
+
+    /// <summary>Photos whose files haven't reached the server yet, failed ones included.</summary>
+    public async Task<long> PendingCountAsync()
+    {
+        var row = await db.Get<CountRow>($"SELECT count(*) AS Count FROM {Table}", []).ConfigureAwait(false);
+        return row.Count;
+    }
+
+    public Task<FailedPhotoUpload[]> FailedAsync() =>
+        db.GetAll<FailedPhotoUpload>(
+            $"SELECT id AS Id, error_code AS ErrorCode, failed_at AS FailedAt FROM {Table} WHERE failed_at IS NOT NULL ORDER BY failed_at", []);
+
+    /// <summary>Puts a failed photo back in the queue.</summary>
+    public async Task RetryAsync(string id)
+    {
+        await db.Execute($"UPDATE {Table} SET failed_at = NULL, error_code = NULL WHERE id = ?", [id]).ConfigureAwait(false);
+        Wake();
+    }
+
+    /// <summary>
+    /// Stops a photo's files from uploading and deletes them from the device. Used when the photo is deleted before
+    /// its files went up; deleting the row and any stored files is the delete flow's job.
+    /// </summary>
+    public async Task CancelAsync(string id)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        await pass.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await db.Execute($"DELETE FROM {Table} WHERE id = ?", [id]).ConfigureAwait(false);
+            DeleteFiles(id);
+        }
+        finally
+        {
+            pass.Release();
+        }
+    }
+
+    /// <summary>
+    /// Deletes files that no queue entry refers to: left by a crash between an upload and its clean-up, or by a
+    /// database cleared while the app was closed.
+    /// </summary>
+    public async Task<int> SweepAsync()
+    {
+        await pass.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var queued = (await db.GetAll<PendingRow>($"SELECT id AS Id, profile_id AS ProfileId FROM {Table}", []).ConfigureAwait(false))
+                .SelectMany(r => new[] { PhotoName(r.Id), ThumbName(r.Id) })
+                .ToHashSet(StringComparer.Ordinal);
+            var removed = 0;
+            foreach (var name in files.List().Where(n => !queued.Contains(n)))
+            {
+                files.Delete(name);
+                removed++;
+            }
+
+            return removed;
+        }
+        finally
+        {
+            pass.Release();
+        }
+    }
+
+    /// <summary>Asks the background loop to try now (a photo was added, or the connection came back).</summary>
+    public void Wake()
+    {
+        if (Volatile.Read(ref disposed) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            wake.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // Already woken.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed meanwhile.
+        }
+    }
+
+    /// <summary>Starts the background loop once; later calls do nothing. It runs until this is disposed.</summary>
+    public void Start()
+    {
+        if (Interlocked.Exchange(ref started, 1) == 0)
+        {
+            var stopping = stop.Token;
+            _ = Task.Run(() => RunAsync(stopping), CancellationToken.None);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) == 1)
+        {
+            return;
+        }
+
+        stop.Cancel();
+        stop.Dispose();
+        pass.Dispose();
+        wake.Dispose();
+    }
+
+    private async Task RunAsync(CancellationToken stopping)
+    {
+        try
+        {
+            await SweepAsync().ConfigureAwait(false);
+            while (!stopping.IsCancellationRequested)
+            {
+                try
+                {
+                    await ProcessAsync(stopping).ConfigureAwait(false);
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    // A closed or cleared database during sign-out; the next pass starts afresh.
+                }
+
+                await wake.WaitAsync(RetryInterval, stopping).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private async Task UploadAsync(PendingRow row, CancellationToken cancellationToken)
+    {
+        foreach (var name in new[] { ThumbName(row.Id), PhotoName(row.Id) })
+        {
+            var bytes = await files.ReadAsync(name, cancellationToken).ConfigureAwait(false)
+                ?? throw new PhotoUploadException("The photo file is missing.", permanent: true, code: "missing_file");
+            // Checked again here, so nothing with metadata can leave the device whatever wrote the file.
+            if (!JpegMetadata.IsStripped(bytes))
+            {
+                throw new PhotoUploadException("The photo file still carries metadata.", permanent: true, code: "not_stripped");
+            }
+
+            await storage.UploadAsync($"{row.ProfileId}/{name}", bytes, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static byte[] Strip(byte[] jpeg, string parameter)
+    {
+        if (!JpegMetadata.TryStrip(jpeg, out var stripped))
+        {
+            throw new ArgumentException("Not a complete JPEG image.", parameter);
+        }
+
+        if (!stripped!.IsUpright)
+        {
+            throw new ArgumentException("The image must be rotated upright before it is added.", parameter);
+        }
+
+        return stripped.Jpeg;
+    }
+
+    private void DeleteFiles(string id)
+    {
+        files.Delete(PhotoName(id));
+        files.Delete(ThumbName(id));
+    }
+
+    private void Notify(int uploaded, int failed)
+    {
+        if (uploaded + failed > 0)
+        {
+            Changed?.Invoke();
+        }
+    }
+
+    internal sealed class PendingRow
+    {
+        public string Id { get; set; } = "";
+
+        public string ProfileId { get; set; } = "";
+    }
+
+    internal sealed class CountRow
+    {
+        public long Count { get; set; }
+    }
+}

@@ -19,7 +19,10 @@ public class SchemaTests
     public void KeepsFailedUploadsLocalOnly()
     {
         Assert.True(Tables[AppSchema.FailedUploads].LocalOnly);
-        Assert.All(Tables.Values.Where(t => t.Name != AppSchema.FailedUploads), t => Assert.False(t.LocalOnly, t.Name));
+        Assert.True(Tables[PhotoUploader.Table].LocalOnly);
+        Assert.All(
+            Tables.Values.Where(t => t.Name is not AppSchema.FailedUploads and not PhotoUploader.Table),
+            t => Assert.False(t.LocalOnly, t.Name));
     }
 
     [Fact]
