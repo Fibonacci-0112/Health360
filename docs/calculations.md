@@ -2,7 +2,7 @@
 
 The exact rules `Health360.Domain` implements for the body and physiology screens, with their sources. Code, tests and this page must agree; change them together. General rules are in [PLAN.md §2.8](PLAN.md) and the units rules in §2.6. Every formula here takes canonical units (kg, cm, years). Convert with `Health360.Domain/Units` and never through a rounded display value.
 
-Status: what's below is implemented and tested in `Health360.Domain` (`Body/`, `Physiology/`). Not yet specified: the LTHR estimate and the non-exercise VO₂max estimators (Nes et al., 2011; Jackson et al., 1990). They wait until their coefficients are checked against the papers, not secondary sources (see [Still to specify](#still-to-specify)).
+Status: what's below is implemented and tested in `Health360.Domain` (`Body/`, `Physiology/`). Not yet specified: the LTHR estimate and the Nes et al. (2011) VO₂max estimator. They wait until they're checked against primary sources, not secondary ones (see [Still to specify](#still-to-specify)).
 
 ## Navy method (body fat from circumferences)
 
@@ -74,6 +74,27 @@ When the sync window arrives (PLAN.md §2.3), truncating history must not change
 
 - **Tanaka** (Tanaka et al., 2001, [doi:10.1016/s0735-1097(00)01054-8](https://doi.org/10.1016/s0735-1097(00)01054-8)): 208 − 0.7 × age. Golden values: 40 y → 180; 25 y → 190.5.
 - **Not estimated** when the heart-rate-lowering medication flag is set (PLAN.md §2.5).
+
+## VO₂max: non-exercise estimate (ml/kg/min)
+
+**Source:** Jackson, A. S., Blair, S. N., Mahar, M. T., Wier, L. T., Ross, R. M. and Stuteville, J. E. (1990). Prediction of functional aerobic capacity without exercise testing. *Med Sci Sports Exerc* 22(6):863–870 ([doi:10.1249/00005768-199012000-00021](https://doi.org/10.1249/00005768-199012000-00021)). Checked against the original paper, p. 866.
+
+The paper fits two models, N-Ex %fat and N-Ex BMI, each with resting HR (I) and without it (II). Resting HR added little, so the paper drops it and prints only the model II equations, which the app uses. Sex is coded female 0, male 1.
+
+| Model II | Equation | R | SE (ml/kg/min) |
+|---|---|---|---|
+| %fat | 50.513 + 1.589 × PA-R − 0.289 × age − 0.552 × %fat + 5.863 × sex | 0.812 | 5.35 |
+| BMI | 56.363 + 1.921 × PA-R − 0.381 × age − 0.754 × BMI + 10.987 × sex | 0.783 | 5.70 |
+
+The paper also prints the men's equations with the sex term folded in: intercepts 56.376 (%fat) and 67.350 (BMI). A property test checks they agree. Several secondary sources print the %fat coefficient as 0.522; the paper says **0.552**.
+
+- **PA-R** is the NASA/Johnson Space Center physical activity scale, an integer from 0 to 7; 7 means running more than 10 miles a week. The paper doesn't print the scale itself; it cites Ross, R. M. and Jackson, A. S. (1990), *Exercise Concepts, Calculations, and Computer Applications*, Benchmark Press, pp. 95–103, 109. **The scale's wording must be checked against that source before the app asks for it.** The five onboarding activity levels are not PA-R and are not mapped onto it.
+- **%fat:** the paper measured it from three skinfolds. The app accepts %fat from any source (DEXA, scale, Navy method), which adds that method's error.
+- **Which model:** %fat when body fat is known (the paper's more accurate model), otherwise BMI (`Vo2Max.Jackson`). It is used only when there is no resting HR; with one, PLAN.md §2.8 calls for Nes et al. (2011), which isn't implemented yet.
+- **Population:** 2,009 NASA employees (9.7% women) aged 18–70, VO₂peak 20–70. The models underestimate fit people: for measured VO₂peak above 55 the cross-validation SE was 10.7 (%fat) and 12.1 (BMI). Show the estimate with its SE, labelled as an estimate.
+- **Invalid inputs:** PA-R outside 0–7, negative age, BMI not positive, or %fat outside [0, 100) are rejected. A result that isn't positive gives no estimate.
+
+Golden values: BMI, male, PA-R 5, 40 y, BMI 25 → 42.865; female, PA-R 3, 35 y, BMI 22 → 32.203. %fat, male, PA-R 5, 40 y, 20% → 41.721; female, PA-R 4, 30 y, 28% → 32.743.
 
 ## Age
 
@@ -186,7 +207,7 @@ Step 1.1 proves that entering a lab RMR changes the physiology profile's mainten
 
 ## Still to specify
 
-These are in PLAN.md §2.8 but not implemented, because their coefficients couldn't be checked against the original papers yet:
+These are in PLAN.md §2.8 but not implemented, because they couldn't be checked against primary sources yet:
 - **Non-exercise VO₂max, Nes et al. (2011)**, *Med Sci Sports Exerc* 43(11):2024–2030 ([doi:10.1249/MSS.0b013e31821d3f6f](https://doi.org/10.1249/MSS.0b013e31821d3f6f)). The full text is paywalled. The equations and the PA-index scoring need checking against the paper.
-- **Non-exercise VO₂max, Jackson et al. (1990)**, *Med Sci Sports Exerc* 22(6):863–870 ([doi:10.1249/00005768-199012000-00021](https://doi.org/10.1249/00005768-199012000-00021)). The full text is paywalled. Secondary sources disagree on the %fat model's fat coefficient (0.552 or 0.522), and the paper reports more than one fit (for example, a men-only %fat model), so the model and its coefficients must come from the paper itself.
 - **LTHR estimate (about 90% of max HR).** No primary source found yet for the 90% figure. Until there is one it stays unimplemented. Zones don't depend on it, because the LTHR estimate never sets zones.
+- **The PA-R activity scale's wording** for the Jackson estimate (Ross and Jackson, 1990). The equations are implemented; the question the app asks is not.

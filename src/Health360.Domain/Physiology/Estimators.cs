@@ -12,6 +12,8 @@ public static class EstimateMethods
     public const string MifflinStJeor = "Mifflin-St Jeor";
     public const string KatchMcArdle = "Katch-McArdle";
     public const string Tanaka = "Tanaka";
+    public const string JacksonBmi = "Jackson (BMI)";
+    public const string JacksonPercentFat = "Jackson (%fat)";
 }
 
 /// <summary>Resting metabolic rate (kcal/day). Sources: docs/calculations.md.</summary>
