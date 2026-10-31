@@ -27,9 +27,9 @@ public class ConversionTests
     }
 
     [Fact]
-    public void Exact_pairs_match_the_typescript_doubles()
+    public void Exact_pairs_multiply_numerators_first()
     {
-        // packages/domain evaluates value × a.num × b.den / (a.den × b.num) in the same order.
+        // value × a.num × b.den / (a.den × b.num), in that order (the Phase 0 prototype's doubles).
         Assert.Equal(225 * 0.45359237 * 1 / (1 * 1), Conversion.Convert(225, Unit.Pound, Unit.Kilogram));
         Assert.Equal(70 * 2.54 * 100 / (100 * 1), Conversion.Convert(70, Unit.Inch, Unit.Centimetre));
     }

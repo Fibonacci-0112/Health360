@@ -60,9 +60,9 @@ public class UnitPrefsTests
     }
 
     [Fact]
-    public void Preference_codes_match_the_typescript_prototype()
+    public void Preference_codes_match_the_stored_codes()
     {
-        // UNIT_PREF_OPTIONS in packages/domain/src/units/prefs.ts; profiles.unit_prefs stores these codes.
+        // profiles.unit_prefs already stores these codes (written by the Phase 0 prototype too).
         Assert.Equal(["kg", "lb", "st_lb"], Codes(UnitPrefOptions.BodyWeight));
         Assert.Equal(["kg", "lb"], Codes(UnitPrefOptions.Load));
         Assert.Equal(["cm", "ft_in"], Codes(UnitPrefOptions.Height));

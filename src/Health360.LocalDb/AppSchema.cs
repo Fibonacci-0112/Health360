@@ -6,8 +6,7 @@ namespace Health360.LocalDb;
 /// The PowerSync client schema. Client tables mirror the synced Postgres tables column for column
 /// (PowerSync stores everything as text, integer or real; jsonb arrives as JSON text and booleans as
 /// 0/1). Server-only columns that clients never read can be left out. PowerSync adds the <c>id</c>
-/// column itself. Keep this identical to <c>packages/local-db/src/schema.ts</c> while the prototype
-/// exists.
+/// column itself. <c>tools/drift</c> checks it against the migrations.
 /// </summary>
 public static class AppSchema
 {

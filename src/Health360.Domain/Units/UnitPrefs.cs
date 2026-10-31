@@ -135,7 +135,7 @@ public sealed record UnitPrefs
 
 /// <summary>
 /// The choices for each preference and their codes in <c>profiles.unit_prefs</c>, in the order the settings
-/// screen lists them. The codes must match <c>UNIT_PREF_OPTIONS</c> in packages/domain.
+/// screen lists them. Stored profiles already use these codes, so don't rename them.
 /// </summary>
 public static class UnitPrefOptions
 {

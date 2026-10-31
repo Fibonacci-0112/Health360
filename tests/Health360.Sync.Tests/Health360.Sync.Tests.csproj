@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Two-client sync against a real Supabase and PowerSync: the .NET port of e2e/sync. Every test is
+    Two-client sync against a real Supabase and PowerSync. Every test is
     skipped unless SYNC_E2E=1 (see docs/phase0b.md, "Two-client sync test").
   -->
   <ItemGroup>

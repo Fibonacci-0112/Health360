@@ -1,5 +1,5 @@
 # Sync Streams. These must mirror the RLS in supabase/migrations: a row may sync to a user only if
-# RLS would let that user read it. The two-client test in e2e/sync proves it, together with pgTAP.
+# RLS would let that user read it. The two-client test in tests/Health360.Sync.Tests proves it, together with pgTAP.
 #
 # Filters use columns copied onto each row (profile_id, household_id, household_members.user_id)
 # so no stream needs a join (PLAN.md §2.3).

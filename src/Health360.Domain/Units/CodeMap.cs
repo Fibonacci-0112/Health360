@@ -2,7 +2,7 @@ namespace Health360.Domain.Units;
 
 /// <summary>
 /// The stored string codes for an enum's values, in display order. Unit preferences are kept as
-/// these codes in <c>profiles.unit_prefs</c>, shared with the TypeScript prototype.
+/// these codes in <c>profiles.unit_prefs</c>.
 /// </summary>
 public sealed class CodeMap<T>
     where T : struct, Enum

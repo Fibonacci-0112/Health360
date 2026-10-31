@@ -26,7 +26,7 @@ public static class Conversion
         var b = to.Ratio!.Value;
         // value × a.Num/a.Den gives the base unit; × b.Den/b.Num leaves it in `to`.
         // Multiplying both numerators first keeps exact pairs (e.g. lb↔kg) to one rounding step.
-        // The evaluation order matches packages/domain, so both stacks produce the same doubles.
+        // The order is fixed: it matches the Phase 0 prototype bit for bit, and changing it changes results.
         return value * a.Num * b.Den / (a.Den * b.Num);
     }
 }
