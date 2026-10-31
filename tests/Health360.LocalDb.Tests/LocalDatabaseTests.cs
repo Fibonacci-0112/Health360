@@ -118,6 +118,38 @@ public class LocalDatabaseTests
     }
 
     [Fact]
+    public async Task DisconnectingWhileAReconnectIsStartingKeepsSyncStoppedAndWritesPending()
+    {
+        var timeout = TimeSpan.FromSeconds(10);
+        var ct = TestContext.Current.CancellationToken;
+        for (var i = 0; i < 10; i++)
+        {
+            await using var t = await TestDatabase.OpenAsync();
+            var owner = new MemoryOwnerStore();
+            await using var local = new LocalDatabase(t.Db, owner, new SupabaseConnector(
+                new FixedSession(new SessionToken("user-a", "a-token")),
+                owner,
+                new FakeWriter(),
+                new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", new Uri("http://127.0.0.1:9")),
+                new FixedClock(DateTimeOffset.UnixEpoch),
+                NullLogger<SupabaseConnector>.Instance));
+
+            await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
+            await Task.Delay(300, ct);
+            // Reconnecting tears down the old stream asynchronously. Disconnect must also stop the
+            // new connection even if it hasn't registered with the SDK's connection manager yet.
+            await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
+            await local.DisconnectAsync().WaitAsync(timeout, ct);
+            await SeedAsync(t);
+            await Task.Delay(300, ct);
+
+            Assert.False(t.Db.CurrentStatus.Connected);
+            Assert.False(t.Db.CurrentStatus.Connecting);
+            Assert.Equal((1, 1, 1), await CountsAsync(t));
+        }
+    }
+
+    [Fact]
     public async Task DisposingWhileAReconnectIsStartingNeitherCrashesNorHangs()
     {
         // PowerSync.Common 1.0.0 overflows the stack, killing the process, if Close lands while a Connect
