@@ -192,7 +192,7 @@ The Phase 0 TypeScript prototype (`apps/`, `packages/`, `supabase/functions/`, `
   - 1 g/lb = 1 / 0.45359237 g/kg (from the lb factor), for protein targets
   - Per-analyte factors for glucose and lab values, kept in the `biomarkers.unit_conversions` table
 
-  Canonical values are computed on write. A Postgres trigger recomputes them, so client and server can't drift. For `measurements` and `zone_sets`, `private.convert_unit` mirrors `Health360.Domain/Units` (same ratios, same evaluation order, pace in seconds per km or mile), and `CanonicalUnitParityTests` checks it against Domain bit for bit.
+  Canonical values are computed on write. A Postgres trigger recomputes them, so client and server can't drift. For `measurements` and `zone_sets`, `private.convert_unit` mirrors `Health360.Domain/Units` (same ratios, same evaluation order, pace in seconds per km or mile), and `CanonicalUnitParityTests` checks it against Domain bit for bit. Devices receive `double precision` columns from PowerSync rounded to 15 significant digits (found by the two-client sync test), so on the device canonical values match the server's within about 1e-15 relative, not bit for bit; comparisons already use a tolerance. jsonb numbers (zone boundaries) arrive exact, because the trigger writes them in shortest exact form.
 - **Mixed-unit history:** charts convert every point to your current display unit. PR comparisons use the canonical value with a small tolerance, so switching units never creates fake PRs.
 - **Training:**
   - Progression increments are set in your lifting unit (e.g. +5 lb or +2.5 kg).

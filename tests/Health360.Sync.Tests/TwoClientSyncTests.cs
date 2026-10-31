@@ -135,8 +135,11 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
                 [weight]),
             r => r is { ValueCanonical: > 0 });
         Assert.Equal((181.3, "lb", "body", group), (row!.Value, row.Unit, row.Category, row.GroupId));
-        // 82.23629668100001 kg: 16 significant digits, so a lossy text round trip would show.
-        Assert.Equal(Conversion.Convert(181.3, Unit.Pound, Unit.Kilogram), row.ValueCanonical);
+        // The server stores Domain's exact double (pgTAP and CanonicalUnitParityTests check that). PowerSync
+        // delivers double precision columns rounded to 15 significant digits, so the device copy of
+        // 82.23629668100001 kg is 82.236296681: equal well within Quantity.CanonicalEquals' tolerance.
+        var expected = Conversion.Convert(181.3, Unit.Pound, Unit.Kilogram);
+        Assert.InRange(row.ValueCanonical, expected * (1 - 1e-14), expected * (1 + 1e-14));
         await A2.SyncedAsync("measurement_groups", group);
 
         var canonical = await Wait.ForAsync(
