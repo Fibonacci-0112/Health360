@@ -13,13 +13,15 @@ public sealed record StrippedJpeg(byte[] Jpeg, int Orientation)
 
 /// <summary>
 /// Removes metadata from a JPEG without re-encoding it (PLAN.md §2.5: EXIF and location stripped on the device).
-/// It keeps only the segments a decoder needs: quantisation and Huffman tables, frame and scan headers, restart
-/// intervals, the entropy-coded data, a JFIF header rebuilt without its thumbnail, the ICC colour profile and the
-/// Adobe colour-transform marker. Everything else goes: EXIF (GPS, camera, times, the embedded thumbnail), XMP,
-/// IPTC and Photoshop blocks, comments, every other application segment, and anything after the end-of-image
-/// marker (phones append motion-photo videos and vendor trailers there).
+/// It keeps only an allow-list of what a decoder needs: quantisation, Huffman and arithmetic-coding tables, frame
+/// and scan headers (checked against their component counts), restart intervals, line counts, the entropy-coded data,
+/// a JFIF header rebuilt without its thumbnail, and the Adobe colour-transform marker rebuilt from its fixed fields.
+/// Everything else goes: EXIF (GPS, camera, times, the embedded thumbnail), XMP, IPTC and Photoshop blocks, ICC
+/// profiles (they carry free text; the image decodes as sRGB without one), comments, every other application
+/// segment, and anything after the end-of-image marker (phones append motion-photo videos and vendor trailers there).
 /// <para>
-/// It fails closed: a file that isn't a complete, well-formed JPEG is rejected rather than passed through.
+/// It fails closed: a file that isn't a complete, well-formed JPEG, or that holds any other kind of segment, is
+/// rejected rather than passed through.
 /// </para>
 /// </summary>
 public static class JpegMetadata
@@ -29,16 +31,21 @@ public static class JpegMetadata
     private const byte Sos = 0xDA;
     private const byte App0 = 0xE0;
     private const byte App1 = 0xE1;
-    private const byte App2 = 0xE2;
     private const byte App14 = 0xEE;
+    private const byte Dqt = 0xDB;
+    private const byte Dht = 0xC4;
+    private const byte Dac = 0xCC;
+    private const byte Dri = 0xDD;
+    private const byte Dnl = 0xDC;
+
+    // "Adobe", version (2), flags0 (2), flags1 (2), colour transform (1).
+    private const int AdobeLength = 12;
     private const byte App15 = 0xEF;
     private const byte Com = 0xFE;
 
     private static ReadOnlySpan<byte> JfifId => "JFIF\0"u8;
 
     private static ReadOnlySpan<byte> ExifId => "Exif\0\0"u8;
-
-    private static ReadOnlySpan<byte> IccId => "ICC_PROFILE\0"u8;
 
     private static ReadOnlySpan<byte> AdobeId => "Adobe"u8;
 
@@ -114,12 +121,24 @@ public static class JpegMetadata
                 {
                     orientation = ExifOrientation(payload[ExifId.Length..]) ?? orientation;
                 }
-                else if ((marker == App2 && payload.StartsWith(IccId)) || (marker == App14 && payload.StartsWith(AdobeId)))
+                else if (marker == App14 && payload.StartsWith(AdobeId))
                 {
-                    Append(output, segment);
+                    if (payload.Length < AdobeLength)
+                    {
+                        return false;
+                    }
+
+                    // Only the fixed fields: anything appended after them is dropped.
+                    output.AddRange([0xFF, App14, 0x00, AdobeLength + 2]);
+                    Append(output, payload[..AdobeLength]);
                 }
 
                 continue;
+            }
+
+            if (!IsKeptSegment(marker, payload))
+            {
+                return false;
             }
 
             if (IsFrame(marker))
@@ -222,6 +241,76 @@ public static class JpegMetadata
 
         marker = jpeg[i++];
         return true;
+    }
+
+    /// <summary>
+    /// The decoding segments kept, each checked for the length its own fields require, so no segment can carry
+    /// extra bytes through. Anything else (JPG extensions, DHP, EXP, reserved codes) rejects the file.
+    /// </summary>
+    private static bool IsKeptSegment(byte marker, ReadOnlySpan<byte> payload)
+    {
+        if (IsFrame(marker))
+        {
+            // Precision, height (2), width (2), component count, then 3 bytes per component.
+            return payload.Length >= 6 && payload[5] >= 1 && payload.Length == 6 + (3 * payload[5]);
+        }
+
+        return marker switch
+        {
+            // Component count (1–4), 2 bytes per component, then spectral start and end and approximation.
+            Sos => payload.Length >= 1 && payload[0] is >= 1 and <= 4 && payload.Length == 1 + (2 * payload[0]) + 3,
+            Dqt => DqtValid(payload),
+            Dht => DhtValid(payload),
+            Dac => payload.Length > 0 && payload.Length % 2 == 0,
+            Dri => payload.Length == 2,
+            Dnl => payload.Length == 2,
+            _ => false,
+        };
+    }
+
+    // One or more tables: precision/id byte, then 64 values of 1 or 2 bytes.
+    private static bool DqtValid(ReadOnlySpan<byte> payload)
+    {
+        var i = 0;
+        while (i < payload.Length)
+        {
+            var size = 1 + ((payload[i] >> 4) == 0 ? 64 : 128);
+            if ((payload[i] >> 4) > 1 || i + size > payload.Length)
+            {
+                return false;
+            }
+
+            i += size;
+        }
+
+        return payload.Length > 0;
+    }
+
+    // One or more tables: class/id byte, 16 code-length counts, then that many symbol values.
+    private static bool DhtValid(ReadOnlySpan<byte> payload)
+    {
+        var i = 0;
+        while (i < payload.Length)
+        {
+            if (i + 17 > payload.Length)
+            {
+                return false;
+            }
+
+            var symbols = 0;
+            for (var n = 1; n <= 16; n++)
+            {
+                symbols += payload[i + n];
+            }
+
+            i += 17 + symbols;
+            if (i > payload.Length)
+            {
+                return false;
+            }
+        }
+
+        return payload.Length > 0;
     }
 
     // RSTn and TEM have no length field.

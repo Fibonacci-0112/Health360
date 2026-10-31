@@ -39,14 +39,30 @@ public class JpegMetadataTests
     }
 
     [Fact]
-    public void KeepsTheColourProfileAndAdobeMarker()
+    public void KeepsOnlyTheAdobeMarkersFixedFieldsAndDropsTheColourProfile()
     {
-        var icc = Jpeg.Segment(0xE2, [.. "ICC_PROFILE\0"u8, 1, 1, 0xAA, 0xBB]);
+        var icc = Jpeg.Segment(0xE2, [.. "ICC_PROFILE\0"u8, 1, 1, .. "desc: Home, 51.5007 N"u8]);
         var adobe = Jpeg.Segment(0xEE, [.. "Adobe"u8, 0, 100, 0, 0, 0, 0, 1]);
+        var adobeWithText = Jpeg.Segment(0xEE, [.. "Adobe"u8, 0, 100, 0, 0, 0, 0, 1, .. "GPS 51.5007N"u8]);
 
-        Assert.True(JpegMetadata.TryStrip(Jpeg.Build(icc, Jpeg.Exif(1, gps: true), adobe), out var stripped));
+        Assert.True(JpegMetadata.TryStrip(Jpeg.Build(icc, Jpeg.Exif(1, gps: true), adobeWithText), out var stripped));
 
-        Assert.Equal(Jpeg.Build(icc, adobe), stripped!.Jpeg);
+        Assert.Equal(Jpeg.Build(adobe), stripped!.Jpeg);
+        AssertNoText(stripped.Jpeg, "GPS", "51.5007", "ICC");
+        Assert.False(JpegMetadata.TryStrip(Jpeg.Build(Jpeg.Segment(0xEE, [.. "Adobe"u8, 0])), out _));
+    }
+
+    [Theory]
+    [InlineData(0xF1)]
+    [InlineData(0xDE)]
+    [InlineData(0xDF)]
+    [InlineData(0x02)]
+    public void RejectsSegmentsADecoderDoesNotNeed(byte marker)
+    {
+        var input = Jpeg.Build(Jpeg.Segment(marker, "GPS 51.5007N"u8.ToArray()));
+
+        Assert.False(JpegMetadata.TryStrip(input, out _));
+        Assert.False(JpegMetadata.IsStripped(input));
     }
 
     [Fact]
@@ -115,6 +131,9 @@ public class JpegMetadataTests
         { "length below two", [0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x01, 0xFF, 0xD9] },
         { "garbage between segments", [0xFF, 0xD8, 0x12, 0x34, 0xFF, 0xD9] },
         { "scan before frame", Jpeg.BuildWith(frame: false) },
+        { "empty frame and scan headers", [0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x02, 0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9] },
+        { "frame header with extra bytes", [0xFF, 0xD8, .. Jpeg.Segment(0xC0, [8, 0, 1, 0, 1, 1, 1, 0x11, 0, 0x47, 0x50]), 0xFF, 0xD9] },
+        { "restart interval with extra bytes", Jpeg.Build(Jpeg.Segment(0xDD, [0, 4, 0x47, 0x50])) },
     };
 
     [Theory]
@@ -143,6 +162,7 @@ public class JpegMetadataTests
             Jpeg.Segment(0xED, "8BIM"u8.ToArray()),
             Jpeg.Segment(0xFE, "comment"u8.ToArray()),
             Jpeg.Segment(0xE3, [1, 2, 3]),
+            Jpeg.Segment(0xE2, [.. "ICC_PROFILE\0"u8, 1, 1]),
             Jpeg.Segment(0xEF, []));
         var gen = Gen.Zip(metadata.ArrayOf(), Gen.Choose(1, 3));
 

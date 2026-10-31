@@ -21,14 +21,15 @@ public interface IDatabaseOwnerStore
 /// a sign-out (revoked or expired while the app was closed), so the next person to sign in must never
 /// inherit the previous user's rows, their unsent writes or their quarantined ones: every connect binds
 /// the database to the signed-in user first, and clears it if someone else owned it. Progress photos waiting to
-/// upload live as files beside the database (<paramref name="photoFiles"/>); they are deleted whenever it is cleared.
+/// upload live as files beside the database (<paramref name="photos"/>); uploads stop and the files are deleted whenever
+/// it is cleared.
 /// </summary>
 public sealed partial class LocalDatabase(
     PowerSyncDatabase db,
     IDatabaseOwnerStore owner,
     IPowerSyncBackendConnector connector,
     ILogger<LocalDatabase>? logger = null,
-    IPhotoFileStore? photoFiles = null) : IAsyncDisposable
+    PhotoUploader? photos = null) : IAsyncDisposable
 {
     /// <summary>
     /// A 2 s retry (the SDK's default is 5 s) keeps "reconnect, then visible on another device" near
@@ -125,8 +126,7 @@ public sealed partial class LocalDatabase(
         try
         {
             await StopSyncAsync().ConfigureAwait(false);
-            await db.DisconnectAndClear(clearLocal: true).ConfigureAwait(false);
-            photoFiles?.DeleteAll();
+            await ClearLocalAsync().ConfigureAwait(false);
             owner.Forget();
         }
         finally
@@ -195,8 +195,12 @@ public sealed partial class LocalDatabase(
         // clearLocal also empties failed_uploads and photo_uploads, which hold the previous user's rejected writes
         // and unsent photos. Their photo files go too.
         await StopSyncAsync().ConfigureAwait(false);
-        await db.DisconnectAndClear(clearLocal: true).ConfigureAwait(false);
-        photoFiles?.DeleteAll();
+        await ClearLocalAsync().ConfigureAwait(false);
         owner.Save(userId);
     }
+
+    private Task ClearLocalAsync() =>
+        photos is null
+            ? db.DisconnectAndClear(clearLocal: true)
+            : photos.ClearAsync(() => db.DisconnectAndClear(clearLocal: true));
 }

@@ -7,6 +7,9 @@ namespace Health360.LocalDb;
 
 public static class LocalDbServices
 {
+    /// <summary>How long one photo file upload may take before it is abandoned and retried later.</summary>
+    public static readonly TimeSpan PhotoUploadTimeout = TimeSpan.FromMinutes(5);
+
     /// <summary>
     /// Registers the PowerSync database, the PostgREST writer, the connector and <see cref="LocalDatabase"/>.
     /// The host registers what is platform- or session-specific: <see cref="SyncEndpoints"/>,
@@ -45,8 +48,9 @@ public static class LocalDbServices
             services.AddSingleton<IPhotoStorage>(provider =>
             {
                 var endpoints = provider.GetRequiredService<SyncEndpoints>();
-                // No overall timeout: a full-size photo on a slow connection can take a while. Offline fails fast.
-                var http = new HttpClient { BaseAddress = endpoints.SupabaseUrl, Timeout = Timeout.InfiniteTimeSpan };
+                // Generous, because a full-size photo on a slow connection takes a while, but finite so a stalled
+                // request can't hold the queue. A timeout is retried.
+                var http = new HttpClient { BaseAddress = endpoints.SupabaseUrl, Timeout = PhotoUploadTimeout };
                 return new SupabasePhotoStorage(
                     http, provider.GetRequiredService<ISupabaseSession>(), provider.GetRequiredService<IDatabaseOwnerStore>(), endpoints.SupabaseApiKey);
             });
@@ -58,7 +62,7 @@ public static class LocalDbServices
             provider.GetRequiredService<IDatabaseOwnerStore>(),
             provider.GetRequiredService<SupabaseConnector>(),
             provider.GetService<ILogger<LocalDatabase>>(),
-            provider.GetService<IPhotoFileStore>()));
+            provider.GetService<PhotoUploader>()));
         return services;
     }
 }

@@ -225,7 +225,7 @@ public sealed class PhotoUploaderTests
                 new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", new Uri("http://127.0.0.1:8080")),
                 Clock,
                 NullLogger<SupabaseConnector>.Instance),
-            photoFiles: files);
+            photos: uploader);
 
         await database.BindToUserAsync("user-a");
         Assert.Equal(2, files.List().Count);
@@ -298,6 +298,101 @@ public sealed class PhotoUploaderTests
         Assert.Equal(((int)status).ToString(System.Globalization.CultureInfo.InvariantCulture), error.Code);
     }
 
+    [Theory]
+    [InlineData("""{"statusCode":"400","error":"InvalidJWT","message":"jwt expired"}""", false)]
+    [InlineData("""{"statusCode":"401","error":"Unauthorized","message":"no"}""", false)]
+    [InlineData("""{"statusCode":"403","error":"Unauthorized","message":"new row violates row-level security policy"}""", true)]
+    [InlineData("not json", true)]
+    public async Task StorageRetriesA400ThatIsReallyAnExpiredToken(string body, bool permanent)
+    {
+        var (storage, server) = Storage();
+        server.Replies.Enqueue(HttpStatusCode.BadRequest);
+        server.Body = body;
+
+        var error = await Assert.ThrowsAsync<PhotoUploadException>(() => storage.UploadAsync($"{Profile}/x.jpg", [1], Ct));
+
+        Assert.Equal(permanent, error.Permanent);
+    }
+
+    [Fact]
+    public async Task ClearingCancelsAnUploadInFlightAndWaitsForIt()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        var owner = new MemoryOwnerStore { Owner = "user-a" };
+        var files = new MemoryPhotoFiles();
+        var storage = new BlockingPhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, files, storage, Clock);
+        await AddAsync(uploader);
+        var database = Database(t, owner, uploader);
+
+        var pass = uploader.ProcessAsync(Ct);
+        await storage.Started.Task.WaitAsync(Ct);
+        await database.BindToUserAsync("user-b");
+
+        Assert.True(storage.Cancelled);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pass);
+        Assert.Empty(files.List());
+        Assert.Equal(0, await uploader.PendingCountAsync());
+        Assert.Equal("user-b", owner.Owner);
+    }
+
+    [Fact]
+    public async Task ClearingWaitsForAPhotoBeingAddedSoNoEntryLosesItsFiles()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        var owner = new MemoryOwnerStore { Owner = "user-a" };
+        var files = new MemoryPhotoFiles { Gate = new TaskCompletionSource() };
+        using var uploader = new PhotoUploader(t.Db, files, new FakePhotoStorage(), Clock);
+        var database = Database(t, owner, uploader);
+
+        var adding = AddAsync(uploader);
+        await files.Writing.Task.WaitAsync(Ct);
+        var clearing = database.BindToUserAsync("user-b");
+        await Task.Delay(100, Ct);
+        Assert.False(clearing.IsCompleted);
+        files.Gate.SetResult();
+        await adding;
+        await clearing;
+
+        // The add finished first, then the clear removed both its entry and its files.
+        Assert.Empty(files.List());
+        Assert.Equal(0, await uploader.PendingCountAsync());
+    }
+
+    [Fact]
+    public async Task SweepAlsoRemovesHalfWrittenFiles()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "health360-photos-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await using var t = await TestDatabase.OpenAsync();
+            var store = new DirectoryPhotoFileStore(root);
+            using var uploader = new PhotoUploader(t.Db, store, new FakePhotoStorage(), Clock);
+            Directory.CreateDirectory(root);
+            await File.WriteAllBytesAsync(Path.Combine(root, "0190a0b0-0000-7000-8000-000000000003.jpg.tmp"), [1], Ct);
+
+            Assert.Equal(1, await uploader.SweepAsync());
+            Assert.Empty(Directory.EnumerateFiles(root));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static LocalDatabase Database(TestDatabase t, MemoryOwnerStore owner, PhotoUploader uploader) =>
+        new(
+            t.Db,
+            owner,
+            new SupabaseConnector(
+                new FixedSession(null),
+                owner,
+                new FakeWriter(),
+                new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", new Uri("http://127.0.0.1:8080")),
+                Clock,
+                NullLogger<SupabaseConnector>.Instance),
+            photos: uploader);
+
     [Fact]
     public async Task StorageSendsNothingWithoutTheOwnersSession()
     {
@@ -336,6 +431,8 @@ public sealed class PhotoUploaderTests
     {
         public Queue<HttpStatusCode> Replies { get; } = new();
 
+        public string Body { get; set; } = "{}";
+
         public List<(string Line, Dictionary<string, string> Headers, string? ContentType)> Requests { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -344,20 +441,28 @@ public sealed class PhotoUploaderTests
                 $"{request.Method} {request.RequestUri!.PathAndQuery}",
                 request.Headers.ToDictionary(h => h.Key, h => string.Join(",", h.Value)),
                 request.Content?.Headers.ContentType?.MediaType));
-            return Task.FromResult(new HttpResponseMessage(Replies.Dequeue()) { Content = new StringContent("{}") });
+            return Task.FromResult(new HttpResponseMessage(Replies.Dequeue()) { Content = new StringContent(Body) });
         }
     }
 }
 
-/// <summary>Photo files in memory.</summary>
+/// <summary>Photo files in memory. With a <see cref="Gate"/>, the first write waits for it.</summary>
 public sealed class MemoryPhotoFiles : IPhotoFileStore
 {
     public Dictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
 
-    public Task WriteAsync(string name, byte[] jpeg, CancellationToken cancellationToken)
+    public TaskCompletionSource? Gate { get; set; }
+
+    public TaskCompletionSource Writing { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public async Task WriteAsync(string name, byte[] jpeg, CancellationToken cancellationToken)
     {
         Files[name] = jpeg;
-        return Task.CompletedTask;
+        Writing.TrySetResult();
+        if (Gate is { } gate)
+        {
+            await gate.Task.WaitAsync(cancellationToken);
+        }
     }
 
     public Task<byte[]?> ReadAsync(string name, CancellationToken cancellationToken) =>
@@ -396,6 +501,28 @@ public sealed class FakePhotoStorage : IPhotoStorage
 
         Uploads.Add((path, jpeg));
         return Task.CompletedTask;
+    }
+}
+
+/// <summary>Storage whose upload never answers until it is cancelled.</summary>
+public sealed class BlockingPhotoStorage : IPhotoStorage
+{
+    public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public bool Cancelled { get; private set; }
+
+    public async Task UploadAsync(string path, byte[] jpeg, CancellationToken cancellationToken)
+    {
+        Started.TrySetResult();
+        try
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            Cancelled = true;
+            throw;
+        }
     }
 }
 

@@ -45,6 +45,9 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     private readonly SemaphoreSlim pass = new(1, 1);
     private readonly SemaphoreSlim wake = new(0, 1);
     private readonly CancellationTokenSource stop = new();
+
+    // Cancels the pass in progress when the account's data is cleared (guarded by pass).
+    private CancellationTokenSource? running;
     private int started;
     private int disposed;
 
@@ -88,10 +91,13 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
 
         var id = UuidV7.Create(clock, RandomNumberGenerator.Fill).ToString();
         var now = Timestamps.UtcNow(clock);
-        await files.WriteAsync(PhotoName(id), strippedPhoto, cancellationToken).ConfigureAwait(false);
-        await files.WriteAsync(ThumbName(id), strippedThumb, cancellationToken).ConfigureAwait(false);
+        // Held from the first file to the commit, so clearing the account's data can't land in between and leave an
+        // entry without its files (or this account's row in the next account's database).
+        await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            await files.WriteAsync(PhotoName(id), strippedPhoto, cancellationToken).ConfigureAwait(false);
+            await files.WriteAsync(ThumbName(id), strippedThumb, cancellationToken).ConfigureAwait(false);
             await db.WriteTransaction(async tx =>
             {
                 await tx.Execute(
@@ -112,6 +118,10 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
             DeleteFiles(id);
             throw;
         }
+        finally
+        {
+            pass.Release();
+        }
 
         Wake();
         return id;
@@ -124,6 +134,9 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     public async Task<PhotoUploadReport> ProcessAsync(CancellationToken cancellationToken = default)
     {
         await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var current = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        running = current;
+        cancellationToken = current.Token;
         try
         {
             var uploaded = 0;
@@ -165,6 +178,7 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         }
         finally
         {
+            running = null;
             pass.Release();
         }
     }
@@ -173,6 +187,13 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     public async Task<long> PendingCountAsync()
     {
         var row = await db.Get<CountRow>($"SELECT count(*) AS Count FROM {Table}", []).ConfigureAwait(false);
+        return row.Count;
+    }
+
+    /// <summary>Photos the server refused for good, waiting for the user to retry or cancel them.</summary>
+    public async Task<long> FailedCountAsync()
+    {
+        var row = await db.Get<CountRow>($"SELECT count(*) AS Count FROM {Table} WHERE failed_at IS NOT NULL", []).ConfigureAwait(false);
         return row.Count;
     }
 
@@ -233,6 +254,36 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         }
     }
 
+    /// <summary>
+    /// Runs <paramref name="clear"/> (which empties the local database) with uploads stopped: the pass in progress
+    /// is cancelled and waited for, no pass or add starts until it is done, and then every photo file is deleted.
+    /// <see cref="LocalDatabase"/> calls this for a sign-out or another user's sign-in. A request already sent when
+    /// the pass is cancelled may still complete, but only into the departing owner's own folder with their token.
+    /// </summary>
+    public async Task ClearAsync(Func<Task> clear)
+    {
+        ArgumentNullException.ThrowIfNull(clear);
+        try
+        {
+            running?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // That pass has just finished.
+        }
+
+        await pass.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await clear().ConfigureAwait(false);
+            files.DeleteAll();
+        }
+        finally
+        {
+            pass.Release();
+        }
+    }
+
     /// <summary>Asks the background loop to try now (a photo was added, or the connection came back).</summary>
     public void Wake()
     {
@@ -282,16 +333,24 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     {
         try
         {
-            await SweepAsync().ConfigureAwait(false);
+            try
+            {
+                await SweepAsync().ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is not OperationCanceledException and not ObjectDisposedException)
+            {
+                // Left for the next start; uploads go on regardless.
+            }
+
             while (!stopping.IsCancellationRequested)
             {
                 try
                 {
                     await ProcessAsync(stopping).ConfigureAwait(false);
                 }
-                catch (Exception error) when (error is not OperationCanceledException)
+                catch (Exception) when (!stopping.IsCancellationRequested)
                 {
-                    // A closed or cleared database during sign-out; the next pass starts afresh.
+                    // A pass cancelled by a sign-out, or a closed or cleared database; the next pass starts afresh.
                 }
 
                 await wake.WaitAsync(RetryInterval, stopping).ConfigureAwait(false);

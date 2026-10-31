@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Health360.LocalDb;
 
@@ -88,7 +90,11 @@ public sealed class SupabasePhotoStorage(HttpClient http, ISupabaseSession sessi
             }
 
             var status = (int)response.StatusCode;
-            throw new PhotoUploadException($"Storage answered {status}.", IsPermanent(response.StatusCode), status.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            throw new PhotoUploadException(
+                $"Storage answered {status}.",
+                IsPermanent(response.StatusCode, body),
+                status.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
     }
 
@@ -96,7 +102,43 @@ public sealed class SupabasePhotoStorage(HttpClient http, ISupabaseSession sessi
     /// Refusals that a retry can't fix: a malformed request or path, a policy that denies the folder, a file too
     /// large or not a JPEG. 401 (an expired token), 408, 429 and 5xx are retried.
     /// </summary>
-    public static bool IsPermanent(HttpStatusCode status) => status is
-        HttpStatusCode.BadRequest or HttpStatusCode.Forbidden or HttpStatusCode.RequestEntityTooLarge
-        or HttpStatusCode.UnsupportedMediaType or HttpStatusCode.UnprocessableEntity;
+    /// <remarks>
+    /// Storage also answers 400 for an expired or invalid token, with a body whose <c>statusCode</c> is 401 or whose
+    /// error or message names the JWT; that 400 is retried after the session refreshes. The body is only inspected,
+    /// never logged.
+    /// </remarks>
+    public static bool IsPermanent(HttpStatusCode status, string? body = null)
+    {
+        if (status == HttpStatusCode.BadRequest && IsTokenError(body))
+        {
+            return false;
+        }
+
+        return status is HttpStatusCode.BadRequest or HttpStatusCode.Forbidden or HttpStatusCode.RequestEntityTooLarge
+            or HttpStatusCode.UnsupportedMediaType or HttpStatusCode.UnprocessableEntity;
+    }
+
+    private static bool IsTokenError(string? body)
+    {
+        if (string.IsNullOrEmpty(body))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (JsonNode.Parse(body) is not JsonObject error)
+            {
+                return false;
+            }
+
+            var inner = (error["statusCode"] as JsonValue)?.ToString();
+            var text = $"{(error["error"] as JsonValue)?.ToString()} {(error["message"] as JsonValue)?.ToString()}";
+            return inner == "401" || text.Contains("jwt", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 }
