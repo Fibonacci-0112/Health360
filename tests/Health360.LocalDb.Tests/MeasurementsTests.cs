@@ -225,6 +225,32 @@ public class MeasurementsTests
     }
 
     [Fact]
+    public async Task TheActivityRatingUploadsOnlyItsOwnColumnAndCanBeCleared()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.Db.Execute("INSERT INTO profiles (id, user_id, unit_prefs) VALUES (?, 'user-1', '{}')", [Profile]);
+        await Uploads.UploadPendingAsync(t.Db, new FakeWriter(), Clock, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Null((await Profiles.GetMineAsync(t.Db, "user-1"))!.ActivityRating);
+
+        await Profiles.SetActivityRatingAsync(t.Db, Profile, 6);
+
+        Assert.Equal(6, (await Profiles.GetMineAsync(t.Db, "user-1"))!.ActivityRating);
+        var writer = new FakeWriter();
+        await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
+        var write = Assert.Single(writer.Writes);
+        Assert.Equal(("PATCH", "profiles", Profile), (write.Op, write.Table, write.Id));
+        Assert.Equal(["activity_rating"], write.Data!.Select(p => p.Key));
+        Assert.Equal(6, write.Data!["activity_rating"]!.GetValue<long>());
+
+        await Profiles.SetActivityRatingAsync(t.Db, Profile, null);
+        Assert.Null((await Profiles.GetMineAsync(t.Db, "user-1"))!.ActivityRating);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => Profiles.SetActivityRatingAsync(t.Db, Profile, 8));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => Profiles.SetActivityRatingAsync(t.Db, Profile, -1));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Profiles.SetActivityRatingAsync(t.Db, Other, 3));
+    }
+
+    [Fact]
     public async Task EditedDetailsWriteAndUploadOnlyTheFieldsGiven()
     {
         await using var t = await TestDatabase.OpenAsync();

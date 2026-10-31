@@ -1,5 +1,6 @@
 using Bunit;
 using Health360.LocalDb;
+using Health360.UI.Components;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -99,6 +100,35 @@ public sealed class PhysiologyTests : AppTestContext
         Assert.Empty(cut.FindAll("table.zones"));
         Assert.Contains("Enter a measured max heart rate", cut.Markup, StringComparison.Ordinal);
         Assert.Equal(1, await App.Database.Db.Get<long>("SELECT takes_hr_lowering_medication FROM profiles WHERE id = ?", [ProfileId]));
+    }
+
+    [Fact]
+    public async Task AnsweringThePaRQuestionsGivesAJacksonVo2MaxEstimate()
+    {
+        var cut = await PhysiologyAsync();
+        cut.WaitForAssertion(() => Assert.Contains("answer the activity questions below", Values(cut), StringComparison.Ordinal), Wait);
+        Assert.True(cut.Find("[aria-labelledby=activity-title] button.primary").HasAttribute("disabled"));
+
+        await ClickAsync(() => cut.FindAll("[aria-labelledby=activity-q1] [role=radio]").Single(e => e.TextContent.Trim() == "Heavy exercise"));
+        await ClickAsync(() => cut.FindAll("[aria-labelledby=activity-q2] [role=radio]").Single(e => e.TextContent.Trim() == "1 to 3 hours per week"));
+        await ClickAsync(cut, "[aria-labelledby=activity-title] button.primary");
+
+        // Jackson BMI model, male, PA-R 6, 30 y, BMI 80 / 1.8² (docs/calculations.md).
+        var expected = Health360.Domain.Physiology.Vo2Max.JacksonBmi(Health360.Domain.Physiology.Sex.Male, 6, 30, 80 / (1.8 * 1.8))!;
+        cut.WaitForAssertion(() => Assert.Contains("Jackson (BMI) equation", Values(cut), StringComparison.Ordinal), Wait);
+        Assert.Contains(MetricDisplay.Format(expected.Value, "ml/kg/min"), Values(cut), StringComparison.Ordinal);
+        Assert.Equal(6, await App.Database.Db.Get<long>("SELECT activity_rating FROM profiles WHERE id = ?", [ProfileId]));
+
+        // A resting HR means the Jackson model no longer applies.
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000c3", ProfileId, "resting_hr", 55, "bpm", 55, "2026-10-29");
+        cut.WaitForAssertion(() => Assert.DoesNotContain("Jackson", Values(cut), StringComparison.Ordinal), Wait);
+
+        await Measurements.DeleteAsync(App.Database.Db, ProfileId, "0192f0c0-0000-7000-8000-0000000000c3");
+        cut.WaitForAssertion(() => Assert.Contains("Jackson (BMI) equation", Values(cut), StringComparison.Ordinal), Wait);
+
+        await ClickAsync(() => cut.FindAll("[aria-labelledby=activity-title] button").Single(e => e.TextContent.Trim() == "Clear my rating"));
+        cut.WaitForAssertion(() => Assert.Contains("answer the activity questions below", Values(cut), StringComparison.Ordinal), Wait);
+        Assert.Null(await App.Database.Db.Get<long?>("SELECT activity_rating FROM profiles WHERE id = ?", [ProfileId]));
     }
 
     [Fact]
