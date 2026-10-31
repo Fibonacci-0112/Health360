@@ -47,7 +47,7 @@
                         }
                         else
                         {
-                            <span class="muted">@(profile.Rmr is null ? "Needs a resting metabolic rate." : "Needs your activity level, from your profile.")</span>
+                            <span class="muted">@(profile.Rmr is null ? "Needs a resting metabolic rate." : "Needs your activity level (Settings).")</span>
                         }
                     </dd>
                 </div>
@@ -249,13 +249,13 @@
     };
 
     private string RmrMissing() =>
-        profile!.WeightKg is null ? "Needs a weigh-in (Body tab), plus your height, birth date and sex from your profile."
-        : "Needs your height, birth date and sex from your profile.";
+        profile!.WeightKg is null ? "Needs a weigh-in (Body tab), plus your height, birth date and sex (Settings)."
+        : "Needs your height, birth date and sex (Settings).";
 
     private string MaxHrMissing() =>
         profile!.Inputs.TakesHeartRateLoweringMedication
             ? "Not estimated while the medication setting below is on. Enter a measured value."
-            : "Needs your birth date, from your profile.";
+            : "Needs your birth date (Settings).";
 
     private string ZoneBasisText(HeartRateZones zones)
     {
@@ -275,7 +275,7 @@
     private string ZonesMissing() =>
         profile!.Inputs.TakesHeartRateLoweringMedication
             ? "Enter a measured max heart rate: with the medication setting on, zones aren't based on an age estimate."
-            : "Enter your birth date in your profile, or a measured max heart rate, threshold or lab test.";
+            : "Enter your birth date in Settings, or a measured max heart rate, threshold or lab test.";
 
     private async Task SetMedicationAsync(ChangeEventArgs e)
     {

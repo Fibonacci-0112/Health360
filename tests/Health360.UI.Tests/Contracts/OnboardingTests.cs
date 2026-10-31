@@ -138,3 +138,32 @@ public class OnboardingTests
     [InlineData("١٢٣٤٥٦", false)]
     public void CodesAreSixDigits(string code, bool valid) => Assert.Equal(valid, SignInRules.IsCode(code));
 }
+
+public class ProfileDetailsTests
+{
+    private static readonly ProfileDetailsFormValidator Validator = new();
+
+    private static ProfileDetailsForm Valid() => new("1990-04-02", "male", 180, "cm", 180, "active");
+
+    [Fact]
+    public void AcceptsDetailsAndAllCleared()
+    {
+        Assert.True(Validator.Validate(Valid()).IsValid);
+        Assert.True(Validator.Validate(new ProfileDetailsForm(null, null, null, null, null, null)).IsValid);
+    }
+
+    public static TheoryData<string, ProfileDetailsForm> Invalid() => new()
+    {
+        { "BirthDate", Valid() with { BirthDate = "1990-02-30" } },
+        { "SexForCalcs", Valid() with { SexForCalcs = "other" } },
+        { "Height", Valid() with { Height = 301 } },
+        { "HeightUnit", Valid() with { HeightUnit = null } },
+        { "HeightCm", Valid() with { HeightCm = null } },
+        { "ActivityLevel", Valid() with { ActivityLevel = "extreme" } },
+    };
+
+    [Theory]
+    [MemberData(nameof(Invalid))]
+    public void RejectsWhatTheTableWouldReject(string property, ProfileDetailsForm form) =>
+        Assert.Contains(Validator.Validate(form).Errors, e => e.PropertyName == property);
+}

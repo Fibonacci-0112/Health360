@@ -1,5 +1,6 @@
 using FluentValidation;
 using Health360.Contracts.Body;
+using Health360.Contracts.Profiles;
 using Health360.Domain.Ids;
 using Health360.Domain.Physiology;
 using Health360.LocalDb.Tests.Support;
@@ -221,6 +222,33 @@ public class MeasurementsTests
         Assert.Equal(["takes_hr_lowering_medication"], write.Data!.Select(p => p.Key));
         Assert.True(write.Data!["takes_hr_lowering_medication"]!.GetValue<bool>());
         await Assert.ThrowsAsync<InvalidOperationException>(() => Profiles.SetHeartRateLoweringMedicationAsync(t.Db, Other, true));
+    }
+
+    [Fact]
+    public async Task EditedDetailsWriteAndUploadOnlyTheFieldsGiven()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.Db.Execute(
+            "INSERT INTO profiles (id, user_id, unit_prefs, birth_date, sex_for_calcs, height, height_unit, height_cm, activity_level) VALUES (?, 'user-1', '{}', '1990-04-02', 'female', 65, 'in', 165.1, 'light')",
+            [Profile]);
+        await Uploads.UploadPendingAsync(t.Db, new FakeWriter(), Clock, cancellationToken: TestContext.Current.CancellationToken);
+
+        // The form's birth date and height are an older copy; only sex and activity were edited.
+        await Profiles.SetDetailsAsync(
+            t.Db, Profile, new ProfileDetailsForm("1980-01-01", null, 70, "in", 177.8, "active"),
+            ProfileDetailFields.SexForCalcs | ProfileDetailFields.ActivityLevel);
+
+        var saved = (await Profiles.GetMineAsync(t.Db, "user-1"))!;
+        Assert.Equal((null, "active", 65.0, "in", "1990-04-02"), (saved.SexForCalcs, saved.ActivityLevel, saved.Height, saved.HeightUnit, saved.BirthDate));
+        var writer = new FakeWriter();
+        await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
+        var write = Assert.Single(writer.Writes);
+        Assert.Equal(("PATCH", "profiles", Profile), (write.Op, write.Table, write.Id));
+        Assert.Equal(["activity_level", "sex_for_calcs"], write.Data!.Select(p => p.Key).Order());
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Profiles.SetDetailsAsync(t.Db, Other, new ProfileDetailsForm(null, null, null, null, null, null), ProfileDetailFields.All));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Profiles.SetDetailsAsync(t.Db, Other, new ProfileDetailsForm(null, null, null, null, null, null), ProfileDetailFields.None));
     }
 
     private sealed class ZonedClock(DateTimeOffset now, TimeZoneInfo zone) : TimeProvider

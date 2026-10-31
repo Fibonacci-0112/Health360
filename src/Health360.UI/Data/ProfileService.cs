@@ -51,6 +51,10 @@ public sealed partial class ProfileService : IDisposable
     public Task CompleteOnboardingAsync(OnboardingForm form, double? heightCm) =>
         Profiles.CompleteOnboardingAsync(db, RequireProfile().Id, form, heightCm, clock);
 
+    /// <summary>Saves edited profile details to the local database; they upload when online.</summary>
+    public Task SetDetailsAsync(ProfileDetailsForm form, ProfileDetailFields fields) =>
+        Profiles.SetDetailsAsync(db, RequireProfile().Id, form, fields);
+
     public Task SetUnitPrefsAsync(UnitPrefs prefs) => Profiles.SetUnitPrefsAsync(db, RequireProfile().Id, prefs);
 
     public void Dispose()
