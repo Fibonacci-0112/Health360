@@ -31,7 +31,6 @@ public static class AppSchema
         ("timezone", ColumnType.Text),
         ("currency", ColumnType.Text),
         ("activity_level", ColumnType.Text),
-        ("physiology_prefs", ColumnType.Text),
         ("onboarded_at", ColumnType.Text),
         ("takes_hr_lowering_medication", ColumnType.Integer),
         ("activity_rating", ColumnType.Integer));
@@ -168,7 +167,6 @@ public static class AppSchema
             ["profiles"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
             {
                 ["unit_prefs"] = ServerColumnType.Json,
-                ["physiology_prefs"] = ServerColumnType.Json,
                 ["takes_hr_lowering_medication"] = ServerColumnType.Boolean,
             },
             ["consents"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
