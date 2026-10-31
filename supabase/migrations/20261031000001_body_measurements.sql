@@ -272,9 +272,12 @@ create trigger measurements_updated_at before update on public.measurements
 -- zone_sets (U)
 -------------------------------------------------------------------------------
 
--- boundaries: the lower bound of each zone, zone 1 first, as entered in `unit`. A value below the first
--- bound is below zone 1; the last zone has no upper bound. Intensity rises zone by zone, so the numbers
--- ascend for hr (bpm) and power (W) and descend for pace (seconds per km or mile; faster is smaller).
+-- boundaries: where each zone starts, zone 1 first, as entered in `unit`. Intensity rises zone by zone:
+--   * hr (bpm) and power (W): the numbers ascend. Zone i holds values >= boundaries[i] and < boundaries[i+1];
+--     a value below the first boundary is below zone 1.
+--   * pace (seconds per km or mile; faster is smaller): the numbers descend. Zone i holds paces
+--     <= boundaries[i] and > boundaries[i+1]; a pace slower (greater) than the first boundary is below zone 1.
+-- The last zone has no far end.
 create table public.zone_sets (
   id uuid primary key default gen_random_uuid(),
   profile_id uuid not null references public.profiles (id) on delete cascade,
