@@ -2,7 +2,7 @@
 -- alone to change, read by others only through a grant for the metric's category. Runs as `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(33);
+select plan(34);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000000a', 'a@example.com'),
@@ -40,6 +40,12 @@ create function pg_temp.pin(profile uuid, metric text, measurement uuid) returns
   on conflict (id) do update set target = excluded.target, measurement_id = excluded.measurement_id;
 $$;
 grant execute on function pg_temp.pin(uuid, text, uuid) to authenticated;
+
+-- The derived id is the only uniqueness. A second unique index made two devices' simultaneous uploads of a new
+-- pin fail with 23505 instead of upserting: ON CONFLICT (id) resolves conflicts on the primary key only.
+select is(
+  (select count(*) from pg_index where indrelid = 'public.metric_pins'::regclass and indisunique),
+  1::bigint, 'the primary key is the only unique index on metric_pins');
 
 -- The golden value Health360.Domain's UuidV8Tests and LocalDb's MetricPinsTests check too.
 select is(private.metric_pin_id('0190a0b0-0000-7000-8000-000000000001', 'max_hr'),
