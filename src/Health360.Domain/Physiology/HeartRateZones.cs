@@ -3,20 +3,20 @@ namespace Health360.Domain.Physiology;
 /// <summary>What a zone set was derived from (<c>zone_sets.basis</c>, except <c>custom</c>, which the user types in).</summary>
 public enum ZoneBasis
 {
-    /// <summary>Lab thresholds: LT1/VT1 and LT2/VT2 heart rates (Seiler and Kjerland, 2006).</summary>
+    /// <summary>Lab thresholds: LT1/VT1 and LT2/VT2 heart rates (Friel for run and bike, Seiler and Kjerland otherwise).</summary>
     Lab,
 
-    /// <summary>A measured or test-derived lactate threshold heart rate (Friel).</summary>
+    /// <summary>A measured or test-derived lactate threshold heart rate (Friel's functional threshold HR).</summary>
     Lthr,
 
     /// <summary>Heart rate reserve (Karvonen), banded as in Garber et al. (2011), Table 4.</summary>
     HeartRateReserve,
 
-    /// <summary>Percent of maximum heart rate, banded as in Garber et al. (2011), Table 4.</summary>
+    /// <summary>Percent of maximum heart rate: Friel for run and bike, Garber et al. (2011), Table 4, otherwise.</summary>
     PercentOfMax,
 }
 
-/// <summary>The sport a zone set is for (<c>zone_sets.sport</c>). Friel's LTHR zones differ between run and bike.</summary>
+/// <summary>The sport a zone set is for (<c>zone_sets.sport</c>). Friel's zones cover run and bike only.</summary>
 public enum ZoneSport
 {
     All,
@@ -84,21 +84,26 @@ public sealed record ZoneInputs(
 /// <summary>Heart-rate zones, best basis first (PLAN.md §2.8). Sources and boundaries: docs/calculations.md.</summary>
 public static class HeartRateZoneRules
 {
+    public const string FrielLactateMethod = "Friel (LT1 and LT2)";
+    public const string FrielThresholdMethod = "Friel (threshold HR)";
+    public const string FrielMaxMethod = "Friel (% of max HR)";
     public const string SeilerMethod = "Three zones from lab thresholds (Seiler)";
-    public const string FrielMethod = "Friel (LTHR)";
     public const string KarvonenMethod = "Karvonen (heart rate reserve)";
     public const string PercentOfMaxMethod = "% of max HR";
 
     /// <summary>
-    /// Friel's run zones as % of LTHR, each zone's lower bound: Z1 &lt; 85, Z2 85–89, Z3 90–94, Z4 95–99,
-    /// Z5a 100–102, Z5b 103–106, Z5c &gt; 106. Whole-percent ranges are read as [a, b + 1), so Z5c starts at 107.
+    /// Friel (2025), FTHR column, run and bike: Z1 &lt; 78, Z2 78–86, Z3 87–93, Z4 94–99, Z5a 100–102, Z5b &gt; 102.
+    /// Each zone starts at the first number of its own range; "more than 102" starts at 102.
     /// </summary>
-    public static IReadOnlyList<(string Name, double Percent)> FrielRun { get; } =
-        [("1", 0), ("2", 85), ("3", 90), ("4", 95), ("5a", 100), ("5b", 103), ("5c", 107)];
+    public static IReadOnlyList<(string Name, double Percent)> FrielThreshold { get; } =
+        [("1", 0), ("2", 78), ("3", 87), ("4", 94), ("5a", 100), ("5b", 102)];
 
-    /// <summary>Friel's bike zones as % of LTHR: Z1 &lt; 81, Z2 81–89, Z3 90–93, Z4 94–99, Z5a 100–102, Z5b 103–106, Z5c &gt; 106.</summary>
-    public static IReadOnlyList<(string Name, double Percent)> FrielBike { get; } =
-        [("1", 0), ("2", 81), ("3", 90), ("4", 94), ("5a", 100), ("5b", 103), ("5c", 107)];
+    /// <summary>
+    /// Friel (2025), MHR column, run and bike: Z1 &lt; 72, Z2 73–82, Z3 83–87, Z4 88–92, Z5a and Z5b together
+    /// 92–100. Each zone starts at the first number of its own range.
+    /// </summary>
+    public static IReadOnlyList<(string Name, double Percent)> FrielMax { get; } =
+        [("1", 0), ("2", 73), ("3", 83), ("4", 88), ("5", 92)];
 
     /// <summary>Garber et al. (2011), Table 4, %HRR: very light &lt; 30, light 30–39, moderate 40–59, vigorous 60–89, near-maximal ≥ 90.</summary>
     public static IReadOnlyList<(string Name, double Percent)> GarberReserve { get; } =
@@ -107,6 +112,9 @@ public static class HeartRateZoneRules
     /// <summary>Garber et al. (2011), Table 4, %HRmax: very light &lt; 57, light 57–63, moderate 64–76, vigorous 77–95, near-maximal ≥ 96.</summary>
     public static IReadOnlyList<(string Name, double Percent)> GarberMax { get; } =
         [("Very light", 0), ("Light", 57), ("Moderate", 64), ("Vigorous", 77), ("Near-maximal to maximal", 96)];
+
+    /// <summary>Friel's zones cover running and cycling only; other sports use Seiler and Garber.</summary>
+    public static bool UsesFriel(ZoneSport sport) => sport is ZoneSport.Run or ZoneSport.Bike;
 
     /// <summary>The stored code, as in <c>zone_sets.basis</c>.</summary>
     public static string Code(ZoneBasis basis) => basis switch
@@ -133,37 +141,39 @@ public static class HeartRateZoneRules
     /// <summary>
     /// Derives zones from the best basis the inputs allow:
     /// <list type="number">
-    /// <item>Lab thresholds, when both are measured and the lower is below the upper.</item>
-    /// <item>A measured LTHR (or, without one, a measured LT2/VT2, which is taken as LTHR), for run and bike only:
-    /// Friel publishes no zones for other sports.</item>
-    /// <item>Heart rate reserve, when max HR and a measured resting HR are known and max is above resting.</item>
-    /// <item>% of max HR.</item>
+    /// <item>Lab thresholds (LT1/VT1 and LT2/VT2), both measured: Friel's lactate column for run and bike,
+    /// Seiler's three zones for other sports.</item>
+    /// <item>A measured or test-derived LTHR (Friel's FTHR), run and bike only.</item>
+    /// <item>Heart rate reserve (Garber bands), when max HR and a measured resting HR are known.</item>
+    /// <item>% of max HR: Friel's MHR column for run and bike, Garber's bands for other sports.</item>
     /// </list>
-    /// Estimated LTHR and thresholds never set zones. When the heart-rate-lowering medication flag is set, an
-    /// estimated (age-predicted) max HR is not used either. A basis whose boundaries wouldn't be finite and strictly
-    /// ascending is skipped. Null when no basis applies.
+    /// Estimated LTHR, thresholds and resting HR never set zones. When the heart-rate-lowering medication flag is
+    /// set, an estimated (age-predicted) max HR is not used either. A basis whose boundaries wouldn't be finite and
+    /// strictly ascending is skipped. Null when no basis applies.
     /// </summary>
     public static HeartRateZones? Derive(ZoneSport sport, ZoneInputs inputs)
     {
         ArgumentNullException.ThrowIfNull(inputs);
+        var friel = UsesFriel(sport);
+
         var lower = Measured(inputs.LowerThreshold);
         var upper = Measured(inputs.UpperThreshold);
-        if (lower is not null && upper is not null
-            && Valid(Build([("1", 0), ("2", lower.Value), ("3", upper.Value)], 1, 0)) is { } lab)
+        if (lower is not null && upper is not null)
         {
-            return new HeartRateZones(ZoneBasis.Lab, sport, SeilerMethod, lab, [lower, upper]);
+            // Friel: Z2 is the 10 bpm below LT1, Z4 the 10 bpm above LT2, Z5 everything higher.
+            var lab = friel
+                ? Valid(Zones(["1", "2", "3", "4", "5"], [0, lower.Value - 10, lower.Value, upper.Value, upper.Value + 10]))
+                : Valid(Zones(["1", "2", "3"], [0, lower.Value, upper.Value]));
+            if (lab is not null)
+            {
+                return new HeartRateZones(ZoneBasis.Lab, sport, friel ? FrielLactateMethod : SeilerMethod, lab, [lower, upper]);
+            }
         }
 
-        var lthr = Measured(inputs.Lthr) ?? upper;
-        var friel = sport switch
+        var lthr = Measured(inputs.Lthr);
+        if (friel && lthr is not null && Valid(Percent(FrielThreshold, lthr.Value / 100, 0)) is { } threshold)
         {
-            ZoneSport.Run => FrielRun,
-            ZoneSport.Bike => FrielBike,
-            _ => null,
-        };
-        if (lthr is not null && friel is not null && Valid(Build(friel, lthr.Value / 100, 0)) is { } frielZones)
-        {
-            return new HeartRateZones(ZoneBasis.Lthr, sport, FrielMethod, frielZones, [lthr]);
+            return new HeartRateZones(ZoneBasis.Lthr, sport, FrielThresholdMethod, threshold, [lthr]);
         }
 
         var max = inputs.MaxHr is { } m && (!m.IsEstimate || !inputs.TakesHeartRateLoweringMedication) && Positive(m.Value)
@@ -176,18 +186,18 @@ public static class HeartRateZoneRules
 
         // Karvonen: target = resting + fraction × (max − resting).
         var resting = Measured(inputs.RestingHr);
-        if (resting is not null && Valid(Build(GarberReserve, (max.Value - resting.Value) / 100, resting.Value)) is { } reserve)
+        if (resting is not null && Valid(Percent(GarberReserve, (max.Value - resting.Value) / 100, resting.Value)) is { } reserve)
         {
             return new HeartRateZones(ZoneBasis.HeartRateReserve, sport, KarvonenMethod, reserve, [max, resting]);
         }
 
-        return Valid(Build(GarberMax, max.Value / 100, 0)) is { } percentOfMax
-            ? new HeartRateZones(ZoneBasis.PercentOfMax, sport, PercentOfMaxMethod, percentOfMax, [max])
+        return Valid(Percent(friel ? FrielMax : GarberMax, max.Value / 100, 0)) is { } percentOfMax
+            ? new HeartRateZones(ZoneBasis.PercentOfMax, sport, friel ? FrielMaxMethod : PercentOfMaxMethod, percentOfMax, [max])
             : null;
     }
 
     // What zone_sets accepts for metric hr: finite, non-negative, strictly ascending lower bounds. A basis whose
-    // bounds fail (LT1 ≥ LT2, resting ≥ max, or a value so large the arithmetic overflows) is skipped.
+    // bounds fail (LT1 ≥ LT2, LT1 ≤ 10 bpm, resting ≥ max, or a value so large the arithmetic overflows) is skipped.
     private static List<HeartRateZone>? Valid(List<HeartRateZone> zones) =>
         zones.All(z => double.IsFinite(z.LowerBpm) && z.LowerBpm >= 0)
         && zones.Zip(zones.Skip(1)).All(p => p.Second.LowerBpm > p.First.LowerBpm)
@@ -200,9 +210,9 @@ public static class HeartRateZoneRules
     private static bool Positive(double value) => double.IsFinite(value) && value > 0;
 
     // Lower bound of each zone = offset + percent × scale, so zone 1 (percent 0) starts at the offset.
-    private static List<HeartRateZone> Build(IReadOnlyList<(string Name, double Percent)> table, double scale, double offset)
-    {
-        var lowers = table.Select(t => offset + (t.Percent * scale)).ToList();
-        return [.. table.Select((t, i) => new HeartRateZone(t.Name, lowers[i], i + 1 < lowers.Count ? lowers[i + 1] : null))];
-    }
+    private static List<HeartRateZone> Percent(IReadOnlyList<(string Name, double Percent)> table, double scale, double offset) =>
+        Zones([.. table.Select(t => t.Name)], [.. table.Select(t => offset + (t.Percent * scale))]);
+
+    private static List<HeartRateZone> Zones(IReadOnlyList<string> names, IReadOnlyList<double> lowers) =>
+        [.. names.Select((name, i) => new HeartRateZone(name, lowers[i], i + 1 < lowers.Count ? lowers[i + 1] : null))];
 }

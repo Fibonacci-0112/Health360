@@ -149,16 +149,48 @@ These values sit well above the common 1.2–1.9 multipliers, whose primary sour
 `HeartRateZoneRules.Derive` picks the best basis the resolved values allow (PLAN.md §2.8) and returns each zone's lower bound in bpm. That's what `zone_sets.boundaries` stores for metric `hr`: zone 1 first, strictly ascending, and zone i holds heart rates ≥ its lower bound and below the next zone's. The last zone has no far end. Boundaries are kept unrounded; round them only for display.
 
 **Order, best first:**
-1. **Lab thresholds**, when LT1 (or VT1) and LT2 (or VT2) heart rates are both measured and LT1 < LT2.
-2. **LTHR (Friel)**, from a measured or test-derived LTHR. Without one, a measured LT2/VT2 is taken as LTHR (§2.8). Friel publishes zones for run and bike only, so other sports skip this basis.
-3. **Heart rate reserve (Karvonen)**, when max HR and a measured resting HR are known and resting < max.
-4. **% of max HR.**
 
-Only measured values (any source tier) feed bases 1–3; estimated thresholds, LTHR and resting HR are ignored, so **the LTHR estimate never sets zones**. Max HR may be the Tanaka estimate, except when the heart-rate-lowering medication flag is set (PLAN.md §2.5). Then an estimated max HR is not used, and with no measured value there are no HR zones. A basis whose boundaries wouldn't be finite and strictly ascending (LT1 ≥ LT2, resting ≥ max, or a value so large that 107% of it overflows) is skipped, and the next basis is tried.
+| Basis | Run and bike | Other sports (swim, row, other, all) |
+|---|---|---|
+| 1. Lab thresholds: LT1 (or VT1) and LT2 (or VT2), both measured | Friel, lactate column | Seiler and Kjerland, three zones |
+| 2. Measured or test-derived LTHR | Friel, FTHR column | Skipped |
+| 3. Heart rate reserve: max HR and a measured resting HR | Karvonen with Garber's bands | Karvonen with Garber's bands |
+| 4. % of max HR | Friel, MHR column | Garber's bands |
 
-**Reading whole-percent ranges.** Both sources give bands as whole percentages ("85% to 89%", then "90% to 94%"). The app reads a band "a–b" as [a, b + 1), so each zone starts at its own first percentage and there are no gaps. So Friel's zone 5c ("more than 106%") starts at 107%. Every lower bound is computed as offset + percent × (base / 100).
+Friel's guide covers running and cycling only, so other sports keep the Seiler and Garber bases. Friel gives no heart-rate-reserve column, so basis 3 uses Garber's bands for every sport.
 
-### Lab thresholds: three zones
+Only measured values (any source tier) feed bases 1–3; estimated thresholds, LTHR and resting HR are ignored, so **the LTHR estimate never sets zones**. Max HR may be the Tanaka estimate, except when the heart-rate-lowering medication flag is set (PLAN.md §2.5). Then an estimated max HR is not used, and with no measured value there are no HR zones. A basis whose boundaries wouldn't be finite and strictly ascending (LT1 ≥ LT2, LT1 ≤ 10 bpm for Friel's lactate column, resting ≥ max, or a value so large the arithmetic overflows) is skipped, and the next basis is tried.
+
+**LT2 is not used as threshold HR for zones.** PLAN.md §2.8 takes LT2 as LTHR when there's no LTHR, but Friel's 2025 table puts LT2 at the zone 3/4 border and threshold HR at the zone 4/5a border, so the two differ. With LT2 but no LT1 and no LTHR, zones fall through to heart rate reserve or % of max HR.
+
+**Reading whole-percent ranges.** The sources give bands as whole percentages with small gaps or overlaps ("less than 72%", then "73–82%"; "88–92%", then "92–100%"). Each zone starts at the first number of its own range, and a "more than X" zone starts at X. A value in a gap belongs to the lower zone. Every lower bound is computed as offset + percent × (base / 100).
+
+### Friel (2025): run and bike
+
+**Source:** Friel, J. *A Quick Guide to Setting Zones*, joefrieltraining.com, revised September 2025 ([joefrieltraining.com](https://joefrieltraining.com/a-quick-guide-to-setting-zones/)). The zones are in a table image on that page (reproduced from p. 63 of one of his books), checked by reading the image. The guide gives one table for running and cycling. It replaces the older TrainingPeaks guide (separate run and bike % of LTHR, zones up to 5c), which this app no longer uses.
+
+Heart-rate columns of the table:
+
+| Zone | % of max HR (MHR) | % of functional threshold HR (FTHR) | Lactate (LT1, LT2) |
+|---|---|---|---|
+| 1 | < 72 | < 78 | Below zone 2 |
+| 2 | 73–82 | 78–86 | LT1 − 10 bpm up to LT1 |
+| 3 | 83–87 | 87–93 | LT1 to LT2 |
+| 4 | 88–92 | 94–99 | LT2 to LT2 + 10 bpm |
+| 5a | 92–100 (5a and 5b together) | 100–102 | Higher than zone 4 (5a and 5b together) |
+| 5b | | > 102 | |
+| 5c | Not applicable | Not applicable | Not applicable |
+
+- **FTHR** is the app's measured or test-derived LTHR. Friel's 20-minute test takes the test's average HR minus 5%; his 30-minute solo test takes the average HR of its last 20 minutes. Lower bounds used (%): 0, 78, 87, 94, 100, 102; zones 1, 2, 3, 4, 5a, 5b.
+- **MHR:** lower bounds used (%): 0, 73, 83, 88, 92; zones 1, 2, 3, 4, 5 (Friel's 5a and 5b share one range). Friel warns not to use 220 − age. The app may use the Tanaka estimate here (PLAN.md §2.8) and labels the zones as resting on an estimate.
+- **Lactate:** lower bounds used (bpm): 0, LT1 − 10, LT1, LT2, LT2 + 10; zones 1, 2, 3, 4, 5. Friel puts LT1 at about 2 mmol/L.
+
+Golden values:
+- FTHR 170 → 0, 132.6, 147.9, 159.8, 170, 173.4. FTHR 160 → 0, 124.8, 139.2, 150.4, 160, 163.2.
+- Max HR 180 → 0, 131.4, 149.4, 158.4, 165.6.
+- LT1 140, LT2 165 → 0, 130, 140, 165, 175.
+
+### Lab thresholds, other sports: three zones
 
 **Source:** Seiler, K. S. and Kjerland, G. Ø. (2006). Quantifying training intensity distribution in elite endurance athletes: is there evidence for an "optimal" distribution? *Scand J Med Sci Sports* 16(1):49–56 ([doi:10.1111/j.1600-0838.2004.00418.x](https://doi.org/10.1111/j.1600-0838.2004.00418.x)). VT1 and VT2 delineate three intensity zones.
 
@@ -170,23 +202,7 @@ Only measured values (any source tier) feed bases 1–3; estimated thresholds, L
 
 Golden value: LT1 140, LT2 165 → 0, 140, 165.
 
-### LTHR: Friel
-
-**Source:** Friel, J. *Joe Friel's Quick Guide to Setting Zones*, TrainingPeaks ([trainingpeaks.com](https://www.trainingpeaks.com/learn/articles/joe-friel-s-quick-guide-to-setting-zones/)), which gives % of LTHR for run and bike. Friel's own site revised the guide in September 2025 ([joefrieltraining.com](https://joefrieltraining.com/a-quick-guide-to-setting-zones/)) and now gives the table as an image, which we haven't checked. Re-check before changing anything here.
-
-| Zone | Run (% of LTHR) | Bike (% of LTHR) |
-|---|---|---|
-| 1 | < 85 | < 81 |
-| 2 | 85–89 | 81–89 |
-| 3 | 90–94 | 90–93 |
-| 4 | 95–99 | 94–99 |
-| 5a | 100–102 | 100–102 |
-| 5b | 103–106 | 103–106 |
-| 5c | > 106 | > 106 |
-
-Lower bounds used (%): run 0, 85, 90, 95, 100, 103, 107; bike 0, 81, 90, 94, 100, 103, 107. Golden values: run LTHR 170 → 0, 144.5, 153, 161.5, 170, 175.1, 181.9; bike LTHR 160 → 0, 129.6, 144, 150.4, 160, 164.8, 171.2.
-
-### Heart rate reserve and % of max HR: Garber et al. (2011)
+### Heart rate reserve (all sports) and % of max HR (other sports): Garber et al. (2011)
 
 **Sources:**
 - Karvonen, M. J., Kentala, E. and Mustala, O. (1957). The effects of training on heart rate; a longitudinal study. *Ann Med Exp Biol Fenn* 35(3):307–315. Target HR = resting HR + fraction × (max HR − resting HR).

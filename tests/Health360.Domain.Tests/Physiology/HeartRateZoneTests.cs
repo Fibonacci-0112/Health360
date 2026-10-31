@@ -28,21 +28,55 @@ public class HeartRateZoneTests
 
     // Hand calculations from the published tables (docs/calculations.md).
     [Fact]
-    public void Friel_run_zones_match_a_hand_calculation()
+    public void Friel_threshold_zones_match_a_hand_calculation()
     {
         var zones = HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(Lthr: Lab(170)))!;
 
         Assert.Equal(ZoneBasis.Lthr, zones.Basis);
-        Assert.Equal(["1", "2", "3", "4", "5a", "5b", "5c"], zones.Zones.Select(z => z.Name));
-        AssertBoundaries(zones, 0, 144.5, 153, 161.5, 170, 175.1, 181.9); // 170 × 0, .85, .90, .95, 1, 1.03, 1.07
+        Assert.Equal("Friel (threshold HR)", zones.Method);
+        Assert.Equal(["1", "2", "3", "4", "5a", "5b"], zones.Zones.Select(z => z.Name));
+        AssertBoundaries(zones, 0, 132.6, 147.9, 159.8, 170, 173.4); // 170 × 0, .78, .87, .94, 1, 1.02
     }
 
     [Fact]
-    public void Friel_bike_zones_match_a_hand_calculation()
+    public void Friel_uses_the_same_table_for_run_and_bike()
     {
         var zones = HeartRateZoneRules.Derive(ZoneSport.Bike, new ZoneInputs(Lthr: Manual(160)))!;
 
-        AssertBoundaries(zones, 0, 129.6, 144, 150.4, 160, 164.8, 171.2); // 160 × 0, .81, .90, .94, 1, 1.03, 1.07
+        AssertBoundaries(zones, 0, 124.8, 139.2, 150.4, 160, 163.2); // 160 × 0, .78, .87, .94, 1, 1.02
+    }
+
+    [Fact]
+    public void More_than_102_percent_of_threshold_is_zone_5b()
+    {
+        var zones = HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(Lthr: Lab(170)))!;
+
+        Assert.Equal("5a", zones.Zones[zones.ZoneOf(173.3)!.Value].Name);
+        Assert.Equal("5b", zones.Zones[zones.ZoneOf(173.5)!.Value].Name); // just over 102%
+    }
+
+    [Fact]
+    public void Friel_lab_zones_sit_10_bpm_either_side_of_the_thresholds()
+    {
+        var zones = HeartRateZoneRules.Derive(
+            ZoneSport.Run,
+            new ZoneInputs(MaxHr: Lab(190), RestingHr: Manual(50), Lthr: Lab(168), LowerThreshold: Lab(140), UpperThreshold: Lab(165)))!;
+
+        Assert.Equal(ZoneBasis.Lab, zones.Basis);
+        Assert.Equal("Friel (LT1 and LT2)", zones.Method);
+        Assert.Equal(["1", "2", "3", "4", "5"], zones.Zones.Select(z => z.Name));
+        AssertBoundaries(zones, 0, 130, 140, 165, 175); // LT1 − 10, LT1, LT2, LT2 + 10
+        Assert.Equal(2, zones.Inputs.Count);
+    }
+
+    [Fact]
+    public void Friel_max_hr_zones_match_a_hand_calculation()
+    {
+        var zones = HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Estimated(180)))!;
+
+        Assert.Equal(ZoneBasis.PercentOfMax, zones.Basis);
+        Assert.Equal("Friel (% of max HR)", zones.Method);
+        AssertBoundaries(zones, 0, 131.4, 149.4, 158.4, 165.6); // 180 × 0, .73, .83, .88, .92
     }
 
     [Fact]
@@ -55,25 +89,24 @@ public class HeartRateZoneTests
         AssertBoundaries(zones, 60, 99, 112, 138, 177); // 60 + 130 × 0, .30, .40, .60, .90
     }
 
-    [Fact]
-    public void Percent_of_max_zones_use_garbers_max_hr_bands()
+    [Theory]
+    [InlineData(ZoneSport.Swim)]
+    [InlineData(ZoneSport.Row)]
+    [InlineData(ZoneSport.Other)]
+    [InlineData(ZoneSport.All)]
+    public void Other_sports_use_seiler_and_garber_instead_of_friel(ZoneSport sport)
     {
-        var zones = HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Estimated(180)))!;
+        var lab = HeartRateZoneRules.Derive(sport, new ZoneInputs(LowerThreshold: Lab(140), UpperThreshold: Lab(165)))!;
+        Assert.Equal("Three zones from lab thresholds (Seiler)", lab.Method);
+        AssertBoundaries(lab, 0, 140, 165);
 
-        Assert.Equal(ZoneBasis.PercentOfMax, zones.Basis);
-        AssertBoundaries(zones, 0, 102.6, 115.2, 138.6, 172.8); // 180 × 0, .57, .64, .77, .96
-    }
+        var withLthr = HeartRateZoneRules.Derive(sport, new ZoneInputs(MaxHr: Lab(190), RestingHr: Manual(60), Lthr: Lab(170)))!;
+        Assert.Equal(ZoneBasis.HeartRateReserve, withLthr.Basis);
+        Assert.Equal(sport, withLthr.Sport);
 
-    [Fact]
-    public void Lab_thresholds_give_three_zones_split_at_them()
-    {
-        var zones = HeartRateZoneRules.Derive(
-            ZoneSport.Run,
-            new ZoneInputs(MaxHr: Lab(190), RestingHr: Manual(50), Lthr: Lab(168), LowerThreshold: Lab(140), UpperThreshold: Lab(165)))!;
-
-        Assert.Equal(ZoneBasis.Lab, zones.Basis);
-        AssertBoundaries(zones, 0, 140, 165);
-        Assert.Equal(2, zones.Inputs.Count);
+        var max = HeartRateZoneRules.Derive(sport, new ZoneInputs(MaxHr: Estimated(180)))!;
+        Assert.Equal("% of max HR", max.Method);
+        AssertBoundaries(max, 0, 102.6, 115.2, 138.6, 172.8); // Garber: 180 × 0, .57, .64, .77, .96
     }
 
     [Fact]
@@ -93,20 +126,12 @@ public class HeartRateZoneTests
     }
 
     [Fact]
-    public void A_measured_lt2_is_taken_as_lthr_when_there_is_no_lthr()
+    public void Lt2_alone_is_not_used_as_threshold_hr()
     {
-        var zones = HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(UpperThreshold: Lab(170)))!;
+        // Friel (2025) puts LT2 at the zone 3/4 border and threshold HR at the zone 4/5a border, so they differ.
+        var zones = HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Lab(190), UpperThreshold: Lab(170)))!;
 
-        Assert.Equal(ZoneBasis.Lthr, zones.Basis);
-        AssertBoundaries(zones, 0, 144.5, 153, 161.5, 170, 175.1, 181.9);
-    }
-
-    [Fact]
-    public void A_measured_lthr_beats_lt2_for_friel_zones()
-    {
-        var zones = HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(Lthr: Manual(170), UpperThreshold: Lab(160)))!;
-
-        Assert.True(Close(zones.Boundaries[4], 170));
+        Assert.Equal(ZoneBasis.PercentOfMax, zones.Basis);
     }
 
     [Fact]
@@ -145,26 +170,18 @@ public class HeartRateZoneTests
         Assert.Equal(ZoneBasis.Lthr, lthr.Basis);
     }
 
-    [Theory]
-    [InlineData(ZoneSport.Swim)]
-    [InlineData(ZoneSport.Row)]
-    [InlineData(ZoneSport.Other)]
-    [InlineData(ZoneSport.All)]
-    public void Friel_zones_are_only_for_run_and_bike(ZoneSport sport)
-    {
-        var zones = HeartRateZoneRules.Derive(sport, new ZoneInputs(MaxHr: Lab(190), RestingHr: Manual(60), Lthr: Lab(170)))!;
-
-        Assert.Equal(ZoneBasis.HeartRateReserve, zones.Basis);
-        Assert.Equal(sport, zones.Sport);
-    }
-
     [Fact]
     public void Inconsistent_inputs_fall_back_instead_of_giving_zones_that_do_not_ascend()
     {
-        // LT1 not below LT2: lab zones are skipped, and LT2 is taken as LTHR.
+        // LT1 not below LT2: lab zones are skipped.
         Assert.Equal(
-            ZoneBasis.Lthr,
-            HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(LowerThreshold: Lab(165), UpperThreshold: Lab(165)))!.Basis);
+            ZoneBasis.PercentOfMax,
+            HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Lab(190), LowerThreshold: Lab(165), UpperThreshold: Lab(165)))!.Basis);
+
+        // LT1 of 10 bpm or less: Friel's zone 2 would start at or below 0.
+        Assert.Equal(
+            ZoneBasis.PercentOfMax,
+            HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Lab(190), LowerThreshold: Lab(10), UpperThreshold: Lab(165)))!.Basis);
 
         // Resting HR not below max HR: heart rate reserve is skipped.
         Assert.Equal(
@@ -175,13 +192,18 @@ public class HeartRateZoneTests
     [Fact]
     public void Values_so_large_the_boundaries_overflow_skip_that_basis()
     {
-        // 107% of 1.7e308 is infinite, which zone_sets rejects.
+        // 102% of double.MaxValue is infinite, which zone_sets rejects.
         Assert.Equal(
             ZoneBasis.PercentOfMax,
-            HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Lab(190), Lthr: Lab(1.7e308)))!.Basis);
+            HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Lab(190), Lthr: Lab(double.MaxValue)))!.Basis);
 
-        // Only Friel's 107% band can overflow; the Garber bands stay at or below 100% of the base.
-        var huge = HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Lab(double.MaxValue), RestingHr: Manual(1)))!;
+        // LT2 + 10 rounds back to LT2 at this size, so the bounds don't ascend.
+        Assert.Equal(
+            ZoneBasis.PercentOfMax,
+            HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Lab(190), LowerThreshold: Lab(140), UpperThreshold: Lab(double.MaxValue)))!.Basis);
+
+        // The Garber bands stay at or below 100% of their base, so they never overflow.
+        var huge = HeartRateZoneRules.Derive(ZoneSport.Swim, new ZoneInputs(MaxHr: Lab(double.MaxValue), RestingHr: Manual(1)))!;
         Assert.Equal(ZoneBasis.HeartRateReserve, huge.Basis);
         Assert.All(huge.Boundaries, b => Assert.True(double.IsFinite(b)));
     }
