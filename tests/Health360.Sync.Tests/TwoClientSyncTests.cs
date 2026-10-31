@@ -215,9 +215,13 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         await A2.DrainAsync();
         await A2.DisconnectAsync();
         await MetricPins.PinEstimateAsync(A2.Db, profile, "max_hr", TimeProvider.System);
+        Assert.True(await A2.PendingAsync() > 0, $"A2 straight after its offline pin: {await DescribeAsync(A2, profile)}");
         await MetricPins.PinMeasurementAsync(A1.Db, profile, measured, TimeProvider.System);
         await A1.DrainAsync();
         await A1.SyncedAsync("metric_pins", pinId);
+        // The test relies on A2's pin reaching the server after A1's. If A2 uploaded while disconnected, say so
+        // here, rather than as a convergence timeout further down.
+        Assert.True(await A2.PendingAsync() > 0, $"A2 uploaded its pin while disconnected: {await DescribeAsync(A2, profile)}");
 
         await A2.ConnectAsync();
         await A2.DrainAsync();
@@ -361,9 +365,11 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
     private static async Task<string> DescribeAsync(Device device, string profileId)
     {
         var pins = await MetricPins.ListAsync(device.Db, profileId);
+        var status = device.Db.CurrentStatus;
+        var state = $"connected {status.Connected}, connecting {status.Connecting}, pending {await device.PendingAsync()}; ";
         var failed = await device.Db.GetAll<FailedDetail>(
             "SELECT table_name AS TableName, op AS Op, error_code AS ErrorCode, error_message AS ErrorMessage FROM failed_uploads");
-        return "pins [" + string.Join(", ", pins.Select(p => $"{p.MetricCode} {p.Target} {p.MeasurementId ?? "null"}")) + "]; failed [" +
+        return state + "pins [" + string.Join(", ", pins.Select(p => $"{p.MetricCode} {p.Target} {p.MeasurementId ?? "null"}")) + "]; failed [" +
             string.Join(", ", failed.Select(f => $"{f.Op} {f.TableName} {f.ErrorCode}: {f.ErrorMessage}")) + "]";
     }
 
