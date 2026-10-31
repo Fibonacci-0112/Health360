@@ -30,23 +30,26 @@ public abstract class AppTestContext : BunitContext, IAsyncLifetime
         GC.SuppressFinalize(this);
     }
 
-    // The app re-renders from background work (sync status, watched queries), so events are awaited:
-    // bUnit's synchronous triggers can land on a handler a concurrent render just replaced.
-    protected static Task TypeAsync<T>(IRenderedComponent<T> cut, string selector, string value)
+    // The app re-renders from background work (sync status, watched queries), so events are awaited,
+    // and each one finds its element and dispatches on the renderer's dispatcher in one step: an element
+    // found earlier can carry a handler that a concurrent render has since replaced.
+    protected Task TypeAsync<T>(IRenderedComponent<T> cut, string selector, string value)
         where T : IComponent =>
-        cut.Find(selector).TriggerEventAsync("oninput", new ChangeEventArgs { Value = value });
+        DispatchAsync(() => cut.Find(selector).TriggerEventAsync("oninput", new ChangeEventArgs { Value = value }));
 
-    protected static Task ChangeAsync<T>(IRenderedComponent<T> cut, string selector, string value)
+    protected Task ChangeAsync<T>(IRenderedComponent<T> cut, string selector, string value)
         where T : IComponent =>
-        cut.Find(selector).TriggerEventAsync("onchange", new ChangeEventArgs { Value = value });
+        DispatchAsync(() => cut.Find(selector).TriggerEventAsync("onchange", new ChangeEventArgs { Value = value }));
 
-    protected static Task ClickAsync(IElement element) => element.ClickAsync(new MouseEventArgs());
+    protected Task ClickAsync(Func<IElement> find) => DispatchAsync(() => find().ClickAsync(new MouseEventArgs()));
 
-    protected static Task ClickAsync<T>(IRenderedComponent<T> cut, string selector)
-        where T : IComponent => ClickAsync(cut.Find(selector));
+    protected Task ClickAsync<T>(IRenderedComponent<T> cut, string selector)
+        where T : IComponent => ClickAsync(() => cut.Find(selector));
 
-    protected static Task SubmitAsync<T>(IRenderedComponent<T> cut)
-        where T : IComponent => cut.Find("form").SubmitAsync(EventArgs.Empty);
+    protected Task SubmitAsync<T>(IRenderedComponent<T> cut)
+        where T : IComponent => DispatchAsync(() => cut.Find("form").SubmitAsync(EventArgs.Empty));
+
+    private Task DispatchAsync(Func<Task> trigger) => Renderer.Dispatcher.InvokeAsync(trigger);
 
     /// <summary>Signed in on an earlier launch, onboarded, profile synced.</summary>
     protected async Task SignedInAndOnboardedAsync(string unitPrefs = "{}")
