@@ -125,6 +125,19 @@ public static class AppSchema
         ("target", ColumnType.Text),
         ("measurement_id", ColumnType.Text));
 
+    /// <summary>
+    /// U: one progress photo's metadata (PLAN.md §2.3). The files live in the private <c>progress-photos</c> bucket at
+    /// <c>storage_path</c> and <c>thumb_path</c>, which the server requires to be derived from the profile and row id.
+    /// The files are not synced rows.
+    /// </summary>
+    public static Table ProgressPhotos { get; } = Synced("progress_photos",
+        ("profile_id", ColumnType.Text),
+        ("pose", ColumnType.Text),
+        ("taken_at", ColumnType.Text),
+        ("local_date", ColumnType.Text),
+        ("storage_path", ColumnType.Text),
+        ("thumb_path", ColumnType.Text));
+
     /// <summary>Phase 0 throwaway table that proves sync on every target.</summary>
     public static Table Notes { get; } = Synced("notes",
         ("profile_id", ColumnType.Text),
@@ -151,7 +164,7 @@ public static class AppSchema
     public static IReadOnlyList<Table> Tables { get; } =
         [
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
-            MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, Notes, FailedUploadsTable,
+            MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, Notes, FailedUploadsTable,
         ];
 
     public static Schema Schema { get; } = new([.. Tables]);
@@ -205,7 +218,7 @@ public static class AppSchema
     /// <summary>Tables the client may write. Everything else synced is read-only on the client.</summary>
     public static IReadOnlySet<string> UploadableTables { get; } =
         new HashSet<string>(
-            ["profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins", "notes"],
+            ["profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins", "progress_photos", "notes"],
             StringComparer.Ordinal);
 
     private static Table Synced(string name, params (string Name, ColumnType Type)[] columns) =>
