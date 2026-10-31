@@ -67,6 +67,23 @@ public sealed class SettingsTests : AppTestContext
     }
 
     [Fact]
+    public async Task SavingDoesNotUndoADetailAnotherDeviceChangedWhileTheFormWasOpen()
+    {
+        var cut = await SettingsAsync(Metric, "activity_level = 'light', height = 180, height_unit = 'cm', height_cm = 180");
+        cut.WaitForAssertion(() => cut.Find("#details-birth"), Wait);
+
+        // Another device's change syncs down after the form opened.
+        await App.Database.Db.Execute(
+            "UPDATE profiles SET activity_level = 'very_active', height = 181, height_cm = 181 WHERE id = ?", [ProfileId]);
+        await ChangeAsync(cut, "#details-birth", "1985-12-01");
+        await SubmitAsync(cut, "#details-birth");
+
+        cut.WaitForAssertion(() => Assert.Contains("Saved.", cut.Markup, StringComparison.Ordinal), Wait);
+        var saved = await DetailsAsync();
+        Assert.Equal(("1985-12-01", "very_active", 181.0), (saved.BirthDate, saved.ActivityLevel, saved.Height));
+    }
+
+    [Fact]
     public async Task SavedDisappearsOnceAFieldIsEditedAgain()
     {
         var cut = await SettingsAsync(Metric);

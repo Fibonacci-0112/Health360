@@ -75,6 +75,18 @@ public sealed record ProfileDetailsForm(
     double? HeightCm,
     string? ActivityLevel) : IProfileDetails;
 
+/// <summary>Which details an edit changed. Height covers its value, unit and canonical cm together.</summary>
+[Flags]
+public enum ProfileDetailFields
+{
+    None = 0,
+    BirthDate = 1,
+    SexForCalcs = 2,
+    Height = 4,
+    ActivityLevel = 8,
+    All = BirthDate | SexForCalcs | Height | ActivityLevel,
+}
+
 /// <summary>The checks on <see cref="IProfileDetails"/>, matching the <c>profiles</c> table's constraints.</summary>
 public sealed class ProfileDetailsValidator : AbstractValidator<IProfileDetails>
 {

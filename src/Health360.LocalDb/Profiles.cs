@@ -98,20 +98,50 @@ public static class Profiles
 
     /// <summary>
     /// Saves the details edited in Settings. The form must already have passed <see cref="ProfileDetailsFormValidator"/>.
-    /// Only columns whose value changes go into the upload, so this can't undo another device's change to a
-    /// different setting.
+    /// Only the columns in <paramref name="fields"/> are written, so a value another device changed since the form
+    /// opened is not overwritten by the form's older copy of it.
     /// </summary>
-    public static Task SetDetailsAsync(IPowerSyncDatabase db, string profileId, ProfileDetailsForm form)
+    public static Task SetDetailsAsync(IPowerSyncDatabase db, string profileId, ProfileDetailsForm form, ProfileDetailFields fields)
     {
         ArgumentNullException.ThrowIfNull(form);
-        return UpdateAsync(
-            db,
-            profileId,
-            """
-            UPDATE profiles SET birth_date = ?, sex_for_calcs = ?, height = ?, height_unit = ?, height_cm = ?, activity_level = ?
-            WHERE id = ?
-            """,
-            [form.BirthDate, form.SexForCalcs, form.Height, form.HeightUnit, form.HeightCm, form.ActivityLevel, profileId]);
+        var columns = new List<string>();
+        var values = new List<object?>();
+        void Set(string column, object? value)
+        {
+            columns.Add($"{column} = ?");
+            values.Add(value);
+        }
+
+        if (fields.HasFlag(ProfileDetailFields.BirthDate))
+        {
+            Set("birth_date", form.BirthDate);
+        }
+
+        if (fields.HasFlag(ProfileDetailFields.SexForCalcs))
+        {
+            Set("sex_for_calcs", form.SexForCalcs);
+        }
+
+        if (fields.HasFlag(ProfileDetailFields.Height))
+        {
+            Set("height", form.Height);
+            Set("height_unit", form.HeightUnit);
+            Set("height_cm", form.HeightCm);
+        }
+
+        if (fields.HasFlag(ProfileDetailFields.ActivityLevel))
+        {
+            Set("activity_level", form.ActivityLevel);
+        }
+
+        if (columns.Count == 0)
+        {
+            // Nothing to write, but a save is still never shown as done without the row.
+            return RequireAsync(db, profileId);
+        }
+
+        values.Add(profileId);
+        return UpdateAsync(db, profileId, $"UPDATE profiles SET {string.Join(", ", columns)} WHERE id = ?", [.. values]);
     }
 
     public static Task SetUnitPrefsAsync(IPowerSyncDatabase db, string profileId, Domain.Units.UnitPrefs prefs) =>
@@ -140,6 +170,16 @@ public static class Profiles
 
             await tx.Execute(sql, parameters).ConfigureAwait(false);
         }).ConfigureAwait(false);
+    }
+
+    private static async Task RequireAsync(IPowerSyncDatabase db, string profileId)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentException.ThrowIfNullOrEmpty(profileId);
+        if (await db.GetOptional<IdRow>("SELECT id AS Id FROM profiles WHERE id = ?", [profileId]).ConfigureAwait(false) is null)
+        {
+            throw new InvalidOperationException("The profile is not in the local database.");
+        }
     }
 
     internal sealed class IdRow

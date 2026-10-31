@@ -3,7 +3,8 @@
 
 @* Edits the details calculations use after onboarding: birth date, sex, height and activity level. Saves go
    to the local database and sync when online. A height left as shown is not rewritten, so a value entered
-   in the other unit is never replaced by its rounded display. *@
+   in the other unit is never replaced by its rounded display. Only fields edited since the form opened are
+   written, so a detail another device changed meanwhile is not overwritten with this form's older copy. *@
 <form class="form" @onsubmit="SaveAsync" aria-labelledby="@($"{IdPrefix}-title")">
     @if (shownIn == HeightUnit.Centimetre)
     {
@@ -129,8 +130,26 @@
         double? height = loaded.Height;
         var heightUnit = loaded.HeightUnit;
         var canonical = loaded.HeightCm;
+        var trimmedBirth = string.IsNullOrWhiteSpace(birthDate) ? null : birthDate.Trim();
+        var fields = ProfileDetailFields.None;
+        if (trimmedBirth != loaded.BirthDate)
+        {
+            fields |= ProfileDetailFields.BirthDate;
+        }
+
+        if (sex != loaded.SexForCalcs)
+        {
+            fields |= ProfileDetailFields.SexForCalcs;
+        }
+
+        if (activity != loaded.ActivityLevel)
+        {
+            fields |= ProfileDetailFields.ActivityLevel;
+        }
+
         if (HeightEdited)
         {
+            fields |= ProfileDetailFields.Height;
             try
             {
                 var parsed = new HeightEntry(heightCm, heightFeet, heightInches).Parse(shownIn);
@@ -144,7 +163,7 @@
         }
 
         var form = new ProfileDetailsForm(
-            BirthDate: string.IsNullOrWhiteSpace(birthDate) ? null : birthDate.Trim(),
+            BirthDate: trimmedBirth,
             SexForCalcs: sex,
             Height: height,
             HeightUnit: heightUnit,
@@ -162,8 +181,17 @@
         busy = true;
         try
         {
-            await Profiles.SetDetailsAsync(form);
-            loaded = new ProfileRow { Id = loaded.Id, Height = height, HeightUnit = heightUnit, HeightCm = canonical };
+            await Profiles.SetDetailsAsync(form, fields);
+            loaded = new ProfileRow
+            {
+                Id = loaded.Id,
+                BirthDate = form.BirthDate,
+                SexForCalcs = form.SexForCalcs,
+                ActivityLevel = form.ActivityLevel,
+                Height = height,
+                HeightUnit = heightUnit,
+                HeightCm = canonical,
+            };
             ShowHeight(loaded);
             birthDate = form.BirthDate;
             saved = Current;
