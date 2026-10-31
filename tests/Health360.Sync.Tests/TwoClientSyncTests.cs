@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Health360.Domain.Units;
 using Health360.Sync.Tests.Support;
 
 namespace Health360.Sync.Tests;
@@ -99,6 +100,62 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         Assert.Equal("""{"load":"lb"}""", System.Text.Json.Nodes.JsonNode.Parse(row.UnitPrefs!)!.ToJsonString());
         Assert.Equal(177.8, row.HeightCm!.Value, 10);
         Assert.Empty(await FailedAsync(A1, fx.Alex.ProfileId));
+    }
+
+    [Fact]
+    public async Task MeasurementsSyncToTheOwnersDevicesWithServerCanonicalValuesAndNeverToB()
+    {
+        // A DEXA scan, one value in it entered in lb, and pace zones in seconds per mile. The client sends a
+        // wrong canonical value and category; the server recomputes both and sync brings its values back.
+        var group = Guid.CreateVersion7().ToString();
+        var weight = Guid.CreateVersion7().ToString();
+        var zones = Guid.CreateVersion7().ToString();
+        await A1.Db.Execute(
+            "INSERT INTO measurement_groups (id, profile_id, kind, measured_at, local_date, device_make) VALUES (?, ?, 'dexa', ?, '2026-10-31', 'Hologic')",
+            [group, fx.Alex.ProfileId, "2026-10-31T07:00:00Z"]);
+        await A1.Db.Execute(
+            """
+            INSERT INTO measurements (id, profile_id, metric_code, category, value, unit, value_canonical, measured_at, local_date, group_id, source, method)
+            VALUES (?, ?, 'lean_mass', 'physiology', 180, 'lb', -1, ?, '2026-10-31', ?, 'lab', 'dexa')
+            """,
+            [weight, fx.Alex.ProfileId, "2026-10-31T07:00:00Z", group]);
+        await A1.Db.Execute(
+            """
+            INSERT INTO zone_sets (id, profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from)
+            VALUES (?, ?, 'run', 'pace', 'custom', '[600, 540]', 's_per_mi', '[]', '2026-10-31')
+            """,
+            [zones, fx.Alex.ProfileId]);
+        await A1.DrainAsync();
+        Assert.Empty(await FailedAsync(A1, weight));
+        Assert.Empty(await FailedAsync(A1, zones));
+
+        var row = await Wait.ForAsync(
+            () => A2.Db.GetOptional<MeasurementRow>(
+                "SELECT value AS Value, unit AS Unit, value_canonical AS ValueCanonical, category AS Category, group_id AS GroupId FROM measurements WHERE id = ?",
+                [weight]),
+            r => r is { ValueCanonical: > 0 });
+        Assert.Equal((180.0, "lb", "body", group), (row!.Value, row.Unit, row.Category, row.GroupId));
+        Assert.Equal(Conversion.Convert(180, Unit.Pound, Unit.Kilogram), row.ValueCanonical);
+        await A2.SyncedAsync("measurement_groups", group);
+
+        var canonical = await Wait.ForAsync(
+            () => A2.Db.GetOptional<ZoneRow>("SELECT boundaries_canonical AS BoundariesCanonical FROM zone_sets WHERE id = ?", [zones]),
+            r => r is { BoundariesCanonical: not null and not "[]" });
+        Assert.Equal(
+            [Pace.ToSecondsPerKm(600, PaceUnit.MinutesPerMile), Pace.ToSecondsPerKm(540, PaceUnit.MinutesPerMile)],
+            System.Text.Json.JsonSerializer.Deserialize<double[]>(canonical!.BoundariesCanonical!)!);
+
+        // B's own write coming back means B's stream has caught up past A's; nothing of A's arrived.
+        var marker = await B.AddNoteAsync("marker");
+        await B.SyncedAsync("notes", marker);
+        foreach (var (table, id) in new[] { ("measurement_groups", group), ("measurements", weight), ("zone_sets", zones) })
+        {
+            Assert.Empty(await IdsAsync(B, $"SELECT id AS Id FROM {table} WHERE id = ?", id));
+            Assert.Empty(await IdsAsync(B, "SELECT row_id AS Id FROM ps_oplog WHERE row_id = ?", id));
+        }
+
+        // Metric definitions are reference data: every signed-in device has them.
+        Assert.NotEmpty(await IdsAsync(B, "SELECT id AS Id FROM metric_definitions WHERE code = 'weight'"));
     }
 
     [Fact]
@@ -210,6 +267,24 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         public string Op { get; set; } = "";
 
         public string? ErrorCode { get; set; }
+    }
+
+    public sealed class MeasurementRow
+    {
+        public double Value { get; set; }
+
+        public string Unit { get; set; } = "";
+
+        public double ValueCanonical { get; set; }
+
+        public string Category { get; set; } = "";
+
+        public string? GroupId { get; set; }
+    }
+
+    public sealed class ZoneRow
+    {
+        public string? BoundariesCanonical { get; set; }
     }
 
     public sealed class ProfileRow

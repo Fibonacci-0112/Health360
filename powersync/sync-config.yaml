@@ -20,6 +20,9 @@ streams:
       - SELECT * FROM profiles WHERE id IN my_profiles
       - SELECT * FROM consents WHERE profile_id IN my_profiles
       - SELECT * FROM sharing_grants WHERE profile_id IN my_profiles
+      - SELECT * FROM measurement_groups WHERE profile_id IN my_profiles
+      - SELECT * FROM measurements WHERE profile_id IN my_profiles
+      - SELECT * FROM zone_sets WHERE profile_id IN my_profiles
       - SELECT * FROM notes WHERE profile_id IN my_profiles
 
   # H tables for every household the user belongs to.
@@ -36,6 +39,7 @@ streams:
     auto_subscribe: true
     queries:
       - SELECT * FROM reference_datasets
+      - SELECT * FROM metric_definitions
 
   # Not in Phase 0: `shared_profile`, an on-demand stream for another member's rows. It must check
   # sharing_grants exactly as private.readable_profile_ids() does before it is added.

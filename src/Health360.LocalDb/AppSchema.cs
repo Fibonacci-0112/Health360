@@ -63,6 +63,55 @@ public static class AppSchema
         ("attribution", ColumnType.Text),
         ("imported_at", ColumnType.Text));
 
+    /// <summary>G: what can be measured, its sharing category, entry units and canonical unit.</summary>
+    public static Table MetricDefinitions { get; } = Synced("metric_definitions",
+        ("code", ColumnType.Text),
+        ("category", ColumnType.Text),
+        ("units", ColumnType.Text),
+        ("canonical_unit", ColumnType.Text),
+        ("valid_min", ColumnType.Real),
+        ("valid_max", ColumnType.Real));
+
+    /// <summary>U: one sitting (a DEXA scan, a lab visit, a field test, or values entered together).</summary>
+    public static Table MeasurementGroups { get; } = Synced("measurement_groups",
+        ("profile_id", ColumnType.Text),
+        ("kind", ColumnType.Text),
+        ("measured_at", ColumnType.Text),
+        ("local_date", ColumnType.Text),
+        ("provider", ColumnType.Text),
+        ("device_make", ColumnType.Text),
+        ("protocol", ColumnType.Text),
+        ("report_path", ColumnType.Text));
+
+    /// <summary>
+    /// U: one body, vitals or physiology value as entered (value + unit). The server recomputes
+    /// <c>value_canonical</c> and copies <c>category</c> from the metric, whatever the client sends.
+    /// </summary>
+    public static Table Measurements { get; } = Synced("measurements",
+        ("profile_id", ColumnType.Text),
+        ("metric_code", ColumnType.Text),
+        ("category", ColumnType.Text),
+        ("value", ColumnType.Real),
+        ("unit", ColumnType.Text),
+        ("value_canonical", ColumnType.Real),
+        ("measured_at", ColumnType.Text),
+        ("local_date", ColumnType.Text),
+        ("group_id", ColumnType.Text),
+        ("source", ColumnType.Text),
+        ("method", ColumnType.Text));
+
+    /// <summary>U: heart-rate, power or pace zones per sport. The server recomputes <c>boundaries_canonical</c>.</summary>
+    public static Table ZoneSets { get; } = Synced("zone_sets",
+        ("profile_id", ColumnType.Text),
+        ("sport", ColumnType.Text),
+        ("metric", ColumnType.Text),
+        ("basis", ColumnType.Text),
+        ("boundaries", ColumnType.Text),
+        ("unit", ColumnType.Text),
+        ("boundaries_canonical", ColumnType.Text),
+        ("effective_from", ColumnType.Text),
+        ("group_id", ColumnType.Text));
+
     /// <summary>Phase 0 throwaway table that proves sync on every target.</summary>
     public static Table Notes { get; } = Synced("notes",
         ("profile_id", ColumnType.Text),
@@ -87,7 +136,10 @@ public static class AppSchema
         new TableOptions(localOnly: true));
 
     public static IReadOnlyList<Table> Tables { get; } =
-        [Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, Notes, FailedUploadsTable];
+        [
+            Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
+            MeasurementGroups, Measurements, ZoneSets, Notes, FailedUploadsTable,
+        ];
 
     public static Schema Schema { get; } = new([.. Tables]);
 
@@ -108,6 +160,15 @@ public static class AppSchema
             {
                 ["granted"] = ServerColumnType.Boolean,
             },
+            ["metric_definitions"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
+            {
+                ["units"] = ServerColumnType.Json,
+            },
+            ["zone_sets"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
+            {
+                ["boundaries"] = ServerColumnType.Json,
+                ["boundaries_canonical"] = ServerColumnType.Json,
+            },
         };
 
     /// <summary>
@@ -118,7 +179,9 @@ public static class AppSchema
 
     /// <summary>Tables the client may write. Everything else synced is read-only on the client.</summary>
     public static IReadOnlySet<string> UploadableTables { get; } =
-        new HashSet<string>(["profiles", "consents", "sharing_grants", "notes"], StringComparer.Ordinal);
+        new HashSet<string>(
+            ["profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "notes"],
+            StringComparer.Ordinal);
 
     private static Table Synced(string name, params (string Name, ColumnType Type)[] columns) =>
         new(name, Columns([.. columns, .. Timestamps]), new TableOptions());
