@@ -17,6 +17,7 @@ Before significant work, read the relevant parts of:
 - `docs/FEATURES.md` — feature requirements.
 - `docs/adr/0002-dotnet-maui-blazor.md` — accepted stack and platform decision (supersedes ADR 0001).
 - `docs/phase0b.md` — .NET foundation status, setup and findings.
+- `docs/calculations.md` — the exact body and physiology formulas, the resolver rules and their sources; keep it in step with `Health360.Domain`.
 - `docs/phase0.md` — "What the tests found" in the prototype (bugs and platform limits already hit; don't reintroduce them).
 
 ## Stack and repository layout
