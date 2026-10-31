@@ -13,3 +13,7 @@
 
 alter table public.metric_pins
   drop constraint metric_pins_profile_id_metric_code_key;
+
+-- The constraint's index was the only one leading with profile_id, which the sync stream, the RLS policies and the
+-- profile delete cascade all filter on. Keep that lookup with a plain (non-unique) index.
+create index metric_pins_profile_metric_idx on public.metric_pins (profile_id, metric_code);

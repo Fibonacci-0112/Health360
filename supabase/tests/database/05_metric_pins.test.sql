@@ -2,7 +2,7 @@
 -- alone to change, read by others only through a grant for the metric's category. Runs as `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(34);
+select plan(35);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000000a', 'a@example.com'),
@@ -46,6 +46,10 @@ grant execute on function pg_temp.pin(uuid, text, uuid) to authenticated;
 select is(
   (select count(*) from pg_index where indrelid = 'public.metric_pins'::regclass and indisunique),
   1::bigint, 'the primary key is the only unique index on metric_pins');
+select is(
+  (select count(*) from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
+   where i.indrelid = 'public.metric_pins'::regclass and a.attname = 'profile_id'),
+  1::bigint, 'pins are still found by profile through an index');
 
 -- The golden value Health360.Domain's UuidV8Tests and LocalDb's MetricPinsTests check too.
 select is(private.metric_pin_id('0190a0b0-0000-7000-8000-000000000001', 'max_hr'),
