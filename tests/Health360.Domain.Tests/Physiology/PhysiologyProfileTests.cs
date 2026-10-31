@@ -86,6 +86,17 @@ public class PhysiologyProfileTests
     }
 
     [Fact]
+    public void A_zero_weigh_in_from_sync_is_skipped_rather_than_breaking_the_profile()
+    {
+        // metric_definitions allows 0 kg; the trend needs positive weights.
+        var profile = PhysiologyProfile.Build(Sam(Weighed, V(MetricCodes.Weight, 0, "2026-10-31")));
+
+        Assert.Single(profile.WeightTrend);
+        Assert.Equal(80, profile.WeightKg);
+        Assert.Null(PhysiologyProfile.Build(Sam(V(MetricCodes.Weight, 0, "2026-10-31"))).WeightKg);
+    }
+
+    [Fact]
     public void Without_weight_birth_date_or_sex_nothing_is_estimated()
     {
         var profile = PhysiologyProfile.Build(new PhysiologyInputs(Today, []));

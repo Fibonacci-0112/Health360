@@ -18,7 +18,8 @@ public class MeasurementInputTests
     public void AValidEntryPasses()
     {
         Assert.Empty(Errors(Weight, 80, "kg"));
-        Assert.Empty(Errors(Weight, 0, "lb", "lab", Today.AddYears(-3)));
+        Assert.Empty(Errors(Weight, 0.1, "lb", "lab", Today.AddYears(-3)));
+        Assert.Empty(Errors(BodyFat, 0, "%"));
         Assert.Empty(Errors(Temperature, -1, "C"));
     }
 
@@ -28,6 +29,7 @@ public class MeasurementInputTests
         Assert.Equal(["Enter a number."], Errors(Weight, null, "kg"));
         Assert.Equal(["Enter a number."], Errors(Weight, double.NaN, "kg"));
         Assert.Equal(["The value can't be negative."], Errors(Weight, -0.1, "lb"));
+        Assert.Equal(["Weight must be more than 0."], Errors(Weight, 0, "kg"));
         Assert.Equal(["Enter a percentage from 0 to 100."], Errors(BodyFat, 100.5, "%"));
         Assert.Equal(["Choose a unit."], Errors(Weight, 80, "st"));
         Assert.Equal(["Choose where the value came from."], Errors(Weight, 80, "kg", "guess"));

@@ -86,6 +86,7 @@
     {
         Data.Changed += Refresh;
         Profiles.Changed += Refresh;
+        Data.EnsureWatching();
     }
 
     protected override void OnParametersSet() => profile = Data.Profile();

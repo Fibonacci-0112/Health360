@@ -95,7 +95,10 @@ public sealed record PhysiologyProfile
 
         int? age = inputs.BirthDate is { } birth && birth <= inputs.AsOf ? Ages.Years(birth, inputs.AsOf) : null;
         double? height = inputs.HeightCm is { } h && double.IsFinite(h) && h > 0 ? h : null;
-        var trend = Body.WeightTrend.Compute(Of(MetricCodes.Weight).Select(m => new WeighIn(m.MeasuredOn, m.Value)));
+        // The table allows 0 kg, the trend needs positive weights: an unusable synced weigh-in is skipped, not fatal.
+        var trend = Body.WeightTrend.Compute(Of(MetricCodes.Weight)
+            .Where(m => double.IsFinite(m.Value) && m.Value > 0)
+            .Select(m => new WeighIn(m.MeasuredOn, m.Value)));
         double? weight = trend.Count > 0 ? trend[^1].TrendKg : null;
         double? bmi = weight is { } w && height is { } hc ? BodyComposition.Bmi(w, hc) : null;
 

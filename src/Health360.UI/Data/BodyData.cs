@@ -20,9 +20,11 @@ public sealed partial class BodyData : IDisposable
     private readonly TimeProvider clock;
     private readonly ILogger<BodyData> logger;
     private readonly Lock watchLock = new();
-    private readonly CancellationTokenSource definitionsWatch = new();
+    private readonly CancellationTokenSource stop = new();
     private CancellationTokenSource? measurementsWatch;
     private string? watchedProfile;
+    private bool measurementsFailed;
+    private bool definitionsFailed;
 
     public BodyData(PowerSyncDatabase db, ProfileService profiles, TimeProvider clock, ILogger<BodyData> logger)
     {
@@ -31,8 +33,7 @@ public sealed partial class BodyData : IDisposable
         this.clock = clock;
         this.logger = logger;
         profiles.Changed += Follow;
-        var token = definitionsWatch.Token;
-        _ = Task.Run(() => WatchDefinitionsAsync(token), CancellationToken.None);
+        StartDefinitions();
         Follow();
     }
 
@@ -47,7 +48,40 @@ public sealed partial class BodyData : IDisposable
         new Dictionary<string, MetricDefinition>(StringComparer.Ordinal);
 
     /// <summary>True when a watched query failed; what's shown may then be out of date.</summary>
-    public bool Failed { get; private set; }
+    public bool Failed => measurementsFailed || definitionsFailed;
+
+    /// <summary>
+    /// Restarts a watch that failed, so leaving a screen and coming back retries. Pages call it when they open.
+    /// A watch that is running is left alone. <see cref="Failed"/> clears once the restarted watch answers.
+    /// </summary>
+    public void EnsureWatching()
+    {
+        bool restartMeasurements;
+        bool restartDefinitions;
+        lock (watchLock)
+        {
+            restartMeasurements = measurementsFailed;
+            restartDefinitions = definitionsFailed;
+            if (restartMeasurements)
+            {
+                // Follow() starts a watch only when the profile changes; forget the failed one so it starts again.
+                measurementsWatch?.Cancel();
+                measurementsWatch?.Dispose();
+                measurementsWatch = null;
+                watchedProfile = null;
+            }
+        }
+
+        if (restartDefinitions)
+        {
+            StartDefinitions();
+        }
+
+        if (restartMeasurements)
+        {
+            Follow();
+        }
+    }
 
     /// <summary>Today on this device, the day new entries default to and the profile is computed for.</summary>
     public DateOnly Today => DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
@@ -90,8 +124,8 @@ public sealed partial class BodyData : IDisposable
     public void Dispose()
     {
         profiles.Changed -= Follow;
-        definitionsWatch.Cancel();
-        definitionsWatch.Dispose();
+        stop.Cancel();
+        stop.Dispose();
         lock (watchLock)
         {
             measurementsWatch?.Cancel();
@@ -150,6 +184,7 @@ public sealed partial class BodyData : IDisposable
                     }
 
                     Measurements = rows;
+                    measurementsFailed = false;
                 }
 
                 Changed?.Invoke();
@@ -162,9 +197,31 @@ public sealed partial class BodyData : IDisposable
         {
             // The type only: a message can quote SQL parameters.
             LogWatchFailed(logger, "measurements", error.GetType().Name);
-            Failed = true;
+            lock (watchLock)
+            {
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    measurementsFailed = true;
+                }
+            }
+
             Changed?.Invoke();
         }
+    }
+
+    private void StartDefinitions()
+    {
+        CancellationToken token;
+        try
+        {
+            token = stop.Token;
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        _ = Task.Run(() => WatchDefinitionsAsync(token), CancellationToken.None);
     }
 
     private async Task WatchDefinitionsAsync(CancellationToken cancellationToken)
@@ -177,6 +234,7 @@ public sealed partial class BodyData : IDisposable
                     .Select(r => r.ToDefinition())
                     .OfType<MetricDefinition>()
                     .ToDictionary(d => d.Code, StringComparer.Ordinal);
+                definitionsFailed = false;
                 Changed?.Invoke();
             }
         }
@@ -186,7 +244,7 @@ public sealed partial class BodyData : IDisposable
         catch (Exception error) when (error is not ObjectDisposedException)
         {
             LogWatchFailed(logger, "metric definitions", error.GetType().Name);
-            Failed = true;
+            definitionsFailed = true;
             Changed?.Invoke();
         }
     }

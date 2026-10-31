@@ -114,7 +114,8 @@
         <section class="card" aria-labelledby="medication-title">
             <h2 id="medication-title">Medication</h2>
             <label class="check">
-                <input type="checkbox" checked="@profile.Inputs.TakesHeartRateLoweringMedication" disabled="@savingMedication"
+                @* Keyed so a failed save re-creates the box from the stored value instead of keeping the click. *@
+                <input @key="medicationRender" type="checkbox" checked="@profile.Inputs.TakesHeartRateLoweringMedication" disabled="@savingMedication"
                        @onchange="SetMedicationAsync" />
                 I take medication that lowers my heart rate (a beta blocker, for example)
             </label>
@@ -159,6 +160,7 @@
     private string sport = "run";
     private bool savingMedication;
     private string? medicationError;
+    private int medicationRender;
 
     private IReadOnlyList<Health360.LocalDb.MeasurementRow> PhysiologyRows =>
         [.. (Data.Measurements ?? []).Where(r => Data.Definitions.TryGetValue(r.MetricCode, out var d) && d.Category == "physiology")];
@@ -167,6 +169,7 @@
     {
         Data.Changed += Refresh;
         Profiles.Changed += Refresh;
+        Data.EnsureWatching();
     }
 
     protected override void OnParametersSet() => profile = Data.Profile();
@@ -285,6 +288,7 @@
         catch (Exception failure) when (failure is not OperationCanceledException)
         {
             medicationError = "Couldn't save this setting on this device. Please try again.";
+            medicationRender++;
         }
         finally
         {

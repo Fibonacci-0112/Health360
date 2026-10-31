@@ -29,7 +29,8 @@ public sealed record MeasurementInput(string MetricCode, double? Value, string U
 
 /// <summary>
 /// Checks an entry against its metric before it is written: the same rules as the <c>measurements</c> table and its
-/// trigger (allowed unit, finite value, the metric's limits on the canonical value), plus no date after today.
+/// trigger (allowed unit, finite value, the metric's limits on the canonical value), plus no date after today and
+/// a weight above 0 (the weight trend needs one).
 /// The server checks again; this lets the form say what's wrong instead of the write being quarantined.
 /// </summary>
 public sealed class MeasurementInputValidator : AbstractValidator<MeasurementInput>
@@ -46,6 +47,7 @@ public sealed class MeasurementInputValidator : AbstractValidator<MeasurementInp
             .NotNull().WithMessage("Enter a number.")
             .Must(v => double.IsFinite(v!.Value)).WithMessage("Enter a number.")
             .Must((input, v) => InRange(metric, v!.Value, input.Unit)).WithMessage(_ => RangeMessage(metric))
+            .Must(v => metric.Code != MetricCodes.Weight || v!.Value > 0).WithMessage("Weight must be more than 0.")
             .When(x => metric.Units.Contains(x.Unit));
     }
 
