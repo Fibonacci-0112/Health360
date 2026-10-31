@@ -43,8 +43,8 @@ public sealed class OnboardingTests : AppTestContext
     {
         var cut = await OnboardingAsync();
 
-        await ClickAsync(Chip(cut, "onboarding-unit-bodyWeight", "kg"));
-        await ClickAsync(Chip(cut, "onboarding-unit-height", "cm"));
+        await ClickAsync(() => Chip(cut, "onboarding-unit-bodyWeight", "kg"));
+        await ClickAsync(() => Chip(cut, "onboarding-unit-height", "cm"));
 
         Assert.True(Checked(Chip(cut, "onboarding-unit-bodyWeight", "kg")));
         Assert.True(Checked(Chip(cut, "onboarding-unit-proteinRatio", "g/kg")));
@@ -71,9 +71,9 @@ public sealed class OnboardingTests : AppTestContext
         await ChangeAsync(cut, "input[aria-label=Feet]", "5");
         await ChangeAsync(cut, "input[aria-label=Inches]", "10");
         await ChangeAsync(cut, "input#birth", "1990-04-02");
-        await ClickAsync(Chip(cut, "sex-label", "Female"));
-        await ClickAsync(Chip(cut, "activity-label", "Moderate"));
-        await ClickAsync(Chip(cut, "onboarding-unit-energy", "kJ"));
+        await ClickAsync(() => Chip(cut, "sex-label", "Female"));
+        await ClickAsync(() => Chip(cut, "activity-label", "Moderate"));
+        await ClickAsync(() => Chip(cut, "onboarding-unit-energy", "kJ"));
         await SubmitAsync(cut);
 
         cut.WaitForAssertion(() => Assert.Equal("Today", cut.Find("h1").TextContent), Wait);
@@ -94,8 +94,8 @@ public sealed class OnboardingTests : AppTestContext
     {
         var cut = await OnboardingAsync();
 
-        await ClickAsync(Chip(cut, "sex-label", "Male"));
-        await ClickAsync(Chip(cut, "sex-label", "Male"));
+        await ClickAsync(() => Chip(cut, "sex-label", "Male"));
+        await ClickAsync(() => Chip(cut, "sex-label", "Male"));
 
         Assert.DoesNotContain(cut.FindAll("[aria-labelledby='sex-label'] [role=radio]"), Checked);
     }

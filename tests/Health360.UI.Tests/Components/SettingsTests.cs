@@ -29,7 +29,7 @@ public sealed class SettingsTests : AppTestContext
     {
         var cut = await SettingsAsync();
 
-        await ClickAsync(cut.FindAll("[aria-labelledby='settings-unit-temperature'] [role=radio]").Single(b => b.TextContent.Trim() == "°F"));
+        await ClickAsync(() => cut.FindAll("[aria-labelledby='settings-unit-temperature'] [role=radio]").Single(b => b.TextContent.Trim() == "°F"));
 
         cut.WaitForAssertion(async () =>
         {
@@ -46,9 +46,9 @@ public sealed class SettingsTests : AppTestContext
 
         await QuarantineAsync("crud-7", "23505");
         cut.WaitForAssertion(() => Assert.Contains("PUT notes · 23505", cut.Find(".failed").TextContent, StringComparison.Ordinal), Wait);
-        Assert.Contains("1 rejected", cut.Find(".badge").TextContent, StringComparison.Ordinal);
+        cut.WaitForAssertion(() => Assert.Contains("1 rejected", cut.Find(".badge").TextContent, StringComparison.Ordinal), Wait);
 
-        await ClickAsync(cut.FindAll(".failed button").Single(b => b.TextContent == "Discard"));
+        await ClickAsync(() => cut.FindAll(".failed button").Single(b => b.TextContent == "Discard"));
 
         cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".failed")), Wait);
     }
@@ -60,7 +60,7 @@ public sealed class SettingsTests : AppTestContext
         await QuarantineAsync("crud-7", "23505");
         cut.WaitForAssertion(() => cut.Find(".failed"), Wait);
 
-        await ClickAsync(cut.FindAll(".failed button").Single(b => b.TextContent == "Retry"));
+        await ClickAsync(() => cut.FindAll(".failed button").Single(b => b.TextContent == "Retry"));
 
         cut.WaitForAssertion(() => Assert.Contains("Retry needs a connection to the server.", cut.Markup, StringComparison.Ordinal), Wait);
         Assert.Single(cut.FindAll(".failed"));
@@ -72,12 +72,12 @@ public sealed class SettingsTests : AppTestContext
         var cut = await SettingsAsync();
         App.Local.Unsynced = new UnsyncedChanges(Pending: 1, Rejected: 2);
 
-        await ClickAsync(cut.FindAll("button").Single(b => b.TextContent == "Sign out"));
+        await ClickAsync(() => cut.FindAll("button").Single(b => b.TextContent == "Sign out"));
 
         cut.WaitForAssertion(() => Assert.Contains("1 change not synced yet and 2 changes the server rejected", cut.Find("[role=alertdialog]").TextContent, StringComparison.Ordinal), Wait);
         Assert.DoesNotContain("clear", App.Local.Calls);
 
-        await ClickAsync(cut.FindAll("button").Single(b => b.TextContent == "Stay signed in"));
+        await ClickAsync(() => cut.FindAll("button").Single(b => b.TextContent == "Stay signed in"));
         Assert.Empty(cut.FindAll("[role=alertdialog]"));
         Assert.Equal(AuthStatus.SignedIn, Services.GetRequiredService<AuthService>().Status);
     }
@@ -87,7 +87,7 @@ public sealed class SettingsTests : AppTestContext
     {
         var cut = await SettingsAsync();
         App.Local.Unsynced = new UnsyncedChanges(Pending: 1, Rejected: 0);
-        await ClickAsync(cut.FindAll("button").Single(b => b.TextContent == "Sign out"));
+        await ClickAsync(() => cut.FindAll("button").Single(b => b.TextContent == "Sign out"));
         cut.WaitForAssertion(() => cut.Find("[role=alertdialog]"), Wait);
 
         await ClickAsync(cut, "[role=alertdialog] button.danger");
@@ -103,7 +103,7 @@ public sealed class SettingsTests : AppTestContext
         var cut = await SettingsAsync();
         App.Auth.Respond = _ => throw new HttpRequestException("offline");
 
-        await ClickAsync(cut.FindAll("button").Single(b => b.TextContent == "Sign out"));
+        await ClickAsync(() => cut.FindAll("button").Single(b => b.TextContent == "Sign out"));
 
         cut.WaitForAssertion(() => Assert.Equal("Couldn't sign out. Check your connection and try again.", cut.Find("[role=alert]").TextContent), Wait);
         Assert.Equal("Settings", cut.Find("h1").TextContent);
