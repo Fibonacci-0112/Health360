@@ -1,5 +1,4 @@
 using Bunit;
-using Health360.Contracts.Profiles;
 using Health360.LocalDb;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
@@ -99,8 +98,7 @@ public sealed class PhysiologyTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Contains("Not estimated while the medication setting", Values(cut), StringComparison.Ordinal), Wait);
         Assert.Empty(cut.FindAll("table.zones"));
         Assert.Contains("Enter a measured max heart rate", cut.Markup, StringComparison.Ordinal);
-        var prefs = await App.Database.Db.Get<string>("SELECT physiology_prefs FROM profiles WHERE id = ?", [ProfileId]);
-        Assert.True(PhysiologyPrefsJson.Parse(prefs).TakesHeartRateLoweringMedication);
+        Assert.Equal(1, await App.Database.Db.Get<long>("SELECT takes_hr_lowering_medication FROM profiles WHERE id = ?", [ProfileId]));
     }
 
     [Fact]

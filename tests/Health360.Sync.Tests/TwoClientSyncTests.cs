@@ -103,6 +103,37 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
     }
 
     [Fact]
+    public async Task SettingsChangedOnTwoDevicesBothSurvive()
+    {
+        // A2 changes its units while offline; meanwhile A1 turns the medication flag on and it reaches the
+        // server. When A2 reconnects, its upload carries only unit_prefs, so the flag isn't undone.
+        await A2.DrainAsync();
+        await A2.DisconnectAsync();
+        await A2.Db.Execute("UPDATE profiles SET unit_prefs = ? WHERE id = ?", ["""{"distance":"mi"}""", fx.Alex.ProfileId]);
+        await Profiles.SetHeartRateLoweringMedicationAsync(A1.Db, fx.Alex.ProfileId, true);
+        await A1.DrainAsync();
+
+        await A2.ConnectAsync();
+        await A2.DrainAsync();
+
+        foreach (var device in new[] { A1, A2 })
+        {
+            var row = await Wait.ForAsync(
+                () => device.Db.Get<SettingsRow>(
+                    "SELECT unit_prefs AS UnitPrefs, takes_hr_lowering_medication AS Flag FROM profiles WHERE id = ?", [fx.Alex.ProfileId]),
+                r => r.Flag == 1 && r.UnitPrefs is not null && r.UnitPrefs.Contains("\"mi\"", StringComparison.Ordinal));
+            Assert.Equal(1, row.Flag);
+        }
+
+        Assert.Empty(await FailedAsync(A1, fx.Alex.ProfileId));
+        Assert.Empty(await FailedAsync(A2, fx.Alex.ProfileId));
+
+        // Leave Alex's profile as other tests expect it.
+        await Profiles.SetHeartRateLoweringMedicationAsync(A1.Db, fx.Alex.ProfileId, false);
+        await A1.DrainAsync();
+    }
+
+    [Fact]
     public async Task MeasurementsSyncToTheOwnersDevicesWithServerCanonicalValuesAndNeverToB()
     {
         // A DEXA scan, one value in it entered in lb, and pace zones in seconds per mile. The client sends a
@@ -289,6 +320,13 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
     public sealed class ZoneRow
     {
         public string? BoundariesCanonical { get; set; }
+    }
+
+    public sealed class SettingsRow
+    {
+        public string? UnitPrefs { get; set; }
+
+        public long Flag { get; set; }
     }
 
     public sealed class ProfileRow

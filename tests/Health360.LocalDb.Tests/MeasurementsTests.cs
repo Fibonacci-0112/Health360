@@ -204,16 +204,22 @@ public class MeasurementsTests
     }
 
     [Fact]
-    public async Task TheMedicationFlagKeepsOtherPhysiologySettings()
+    public async Task TheMedicationFlagUploadsOnlyItsOwnColumnAsABoolean()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await t.Db.Execute(
-            "INSERT INTO profiles (id, user_id, physiology_prefs) VALUES (?, 'user-1', ?)", [Profile, "{\"pins\":{\"rmr\":\"x\"}}"]);
+        await t.Db.Execute("INSERT INTO profiles (id, user_id, unit_prefs) VALUES (?, 'user-1', '{}')", [Profile]);
+        await Uploads.UploadPendingAsync(t.Db, new FakeWriter(), Clock, cancellationToken: TestContext.Current.CancellationToken);
 
         await Profiles.SetHeartRateLoweringMedicationAsync(t.Db, Profile, true);
 
-        var stored = await t.Db.Get<string>("SELECT physiology_prefs FROM profiles WHERE id = ?", [Profile]);
-        Assert.Equal("{\"pins\":{\"rmr\":\"x\"},\"heartRateLoweringMedication\":true}", stored);
+        Assert.Equal(1, (await Profiles.GetMineAsync(t.Db, "user-1"))!.TakesHrLoweringMedication);
+        var writer = new FakeWriter();
+        await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
+        var write = Assert.Single(writer.Writes);
+        Assert.Equal(("PATCH", "profiles", Profile), (write.Op, write.Table, write.Id));
+        // Only the changed column, so it can't overwrite another device's change to a different setting.
+        Assert.Equal(["takes_hr_lowering_medication"], write.Data!.Select(p => p.Key));
+        Assert.True(write.Data!["takes_hr_lowering_medication"]!.GetValue<bool>());
         await Assert.ThrowsAsync<InvalidOperationException>(() => Profiles.SetHeartRateLoweringMedicationAsync(t.Db, Other, true));
     }
 

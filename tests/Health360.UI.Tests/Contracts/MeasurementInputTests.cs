@@ -1,5 +1,4 @@
 using Health360.Contracts.Body;
-using Health360.Contracts.Profiles;
 
 namespace Health360.UI.Tests.Contracts;
 
@@ -94,24 +93,4 @@ public class MeasurementInputTests
     [InlineData("Infinity")]
     [InlineData("eighty")]
     public void NumbersRejectAnythingElse(string? text) => Assert.Null(NumberText.Parse(text));
-
-    [Theory]
-    [InlineData(null, false)]
-    [InlineData("{}", false)]
-    [InlineData("{\"heartRateLoweringMedication\":true}", true)]
-    [InlineData("{\"heartRateLoweringMedication\":\"yes\"}", false)]
-    [InlineData("[]", false)]
-    [InlineData("not json", false)]
-    public void TheMedicationFlagIsOffUnlessSet(string? json, bool flag) =>
-        Assert.Equal(flag, PhysiologyPrefsJson.Parse(json).TakesHeartRateLoweringMedication);
-
-    [Fact]
-    public void SettingTheFlagKeepsOtherKeys()
-    {
-        var json = PhysiologyPrefsJson.WithMedication("{\"pins\":{}}", true);
-
-        Assert.Equal("{\"pins\":{},\"heartRateLoweringMedication\":true}", json);
-        Assert.False(PhysiologyPrefsJson.Parse(PhysiologyPrefsJson.WithMedication(json, false)).TakesHeartRateLoweringMedication);
-        Assert.Equal("{\"heartRateLoweringMedication\":true}", PhysiologyPrefsJson.WithMedication("not json", true));
-    }
 }

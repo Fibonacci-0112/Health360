@@ -31,8 +31,11 @@ public sealed class ProfileRow
     /// <summary>An activity level code, or null when not given.</summary>
     public string? ActivityLevel { get; set; }
 
-    /// <summary>JSON text; read it with <see cref="PhysiologyPrefsJson.Parse"/>.</summary>
-    public string? PhysiologyPrefs { get; set; }
+    /// <summary>
+    /// The heart-rate-lowering medication flag, as SQLite stores a boolean (0 or 1). Nothing is derived from
+    /// age-predicted max HR when it is set (PLAN.md §2.5).
+    /// </summary>
+    public long TakesHrLoweringMedication { get; set; }
 }
 
 /// <summary>
@@ -44,7 +47,7 @@ public static class Profiles
     private const string MineSql =
         "SELECT id AS Id, display_name AS DisplayName, unit_prefs AS UnitPrefs, onboarded_at AS OnboardedAt, " +
         "height AS Height, height_unit AS HeightUnit, height_cm AS HeightCm, birth_date AS BirthDate, " +
-        "sex_for_calcs AS SexForCalcs, activity_level AS ActivityLevel, physiology_prefs AS PhysiologyPrefs " +
+        "sex_for_calcs AS SexForCalcs, activity_level AS ActivityLevel, takes_hr_lowering_medication AS TakesHrLoweringMedication " +
         "FROM profiles WHERE user_id = ?";
 
     /// <summary>The user's profile now and after every change (an empty array until it has synced).</summary>
@@ -97,23 +100,11 @@ public static class Profiles
         UpdateAsync(db, profileId, "UPDATE profiles SET unit_prefs = ? WHERE id = ?", [UnitPrefsJson.Serialize(prefs), profileId]);
 
     /// <summary>
-    /// Sets the heart-rate-lowering medication flag in <c>physiology_prefs</c>, keeping every other key. The
-    /// stored JSON is read in the same transaction, so a concurrent change to another key isn't lost.
+    /// Sets the heart-rate-lowering medication flag. It is a column of its own, so the upload carries only this
+    /// column and can't undo another device's change to a different setting.
     /// </summary>
-    public static async Task SetHeartRateLoweringMedicationAsync(IPowerSyncDatabase db, string profileId, bool value)
-    {
-        ArgumentNullException.ThrowIfNull(db);
-        ArgumentException.ThrowIfNullOrEmpty(profileId);
-        await db.WriteTransaction(async tx =>
-        {
-            var found = await tx.GetOptional<PrefsRow>(
-                "SELECT physiology_prefs AS PhysiologyPrefs FROM profiles WHERE id = ?", [profileId]).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("The profile is not in the local database.");
-            await tx.Execute(
-                "UPDATE profiles SET physiology_prefs = ? WHERE id = ?",
-                [PhysiologyPrefsJson.WithMedication(found.PhysiologyPrefs, value), profileId]).ConfigureAwait(false);
-        }).ConfigureAwait(false);
-    }
+    public static Task SetHeartRateLoweringMedicationAsync(IPowerSyncDatabase db, string profileId, bool value) =>
+        UpdateAsync(db, profileId, "UPDATE profiles SET takes_hr_lowering_medication = ? WHERE id = ?", [value ? 1 : 0, profileId]);
 
     // PowerSync tables are views with INSTEAD OF triggers, whose row counts SQLite reports as 0, so the
     // row is checked for in the same transaction instead.
@@ -136,11 +127,6 @@ public static class Profiles
     internal sealed class IdRow
     {
         public string Id { get; set; } = "";
-    }
-
-    internal sealed class PrefsRow
-    {
-        public string? PhysiologyPrefs { get; set; }
     }
 }
 
