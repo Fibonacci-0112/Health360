@@ -34,6 +34,19 @@ public class ServerRowTests
         Assert.Equal("""{"unit_prefs":{"load":"kg"},"display_name":"A"}""", row.ToJsonString());
     }
 
+    [Fact]
+    public void SendsZoneBoundariesAsJsonArrays()
+    {
+        var row = Uploads.ToServerRow("zone_sets", new JsonObject
+        {
+            ["boundaries"] = "[0,130,145]",
+            ["boundaries_canonical"] = "[]",
+            ["unit"] = "bpm",
+        });
+
+        Assert.Equal("""{"boundaries":[0,130,145],"boundaries_canonical":[],"unit":"bpm"}""", row.ToJsonString());
+    }
+
     [Theory]
     [InlineData(1L, true)]
     [InlineData(0L, false)]
