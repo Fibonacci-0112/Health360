@@ -241,4 +241,27 @@ public sealed class PhysiologyTests : AppTestContext
         cut.WaitForAssertion(() => Assert.DoesNotContain("no longer available", ValueRow(cut, "Resting heart rate").TextContent, StringComparison.Ordinal), Wait);
         Assert.Empty(await MetricPins.ListAsync(App.Database.Db, ProfileId));
     }
+
+    [Fact]
+    public async Task APinOnTheThresholdPairNotInUseIsShownAndCanBeCleared()
+    {
+        var cut = await PhysiologyAsync();
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000e1", ProfileId, "vt1_hr", 140, "bpm", 140, "2026-09-01", "lab");
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000e2", ProfileId, "vt2_hr", 170, "bpm", 170, "2026-09-01", "lab");
+        await MetricPins.PinMeasurementAsync(App.Database.Db, ProfileId, "0192f0c0-0000-7000-8000-0000000000e1", TimeProvider.System);
+        cut.WaitForAssertion(() => Assert.Contains("your choice", ValueRow(cut, "VT1 heart rate").TextContent, StringComparison.Ordinal), Wait);
+
+        // Both lactate thresholds arrive: the screen switches to the LT pair, and the VT1 pin must not vanish.
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000e3", ProfileId, "lt1_hr", 145, "bpm", 145, "2026-10-01", "lab");
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000e4", ProfileId, "lt2_hr", 172, "bpm", 172, "2026-10-01", "lab");
+
+        cut.WaitForAssertion(() => Assert.Contains("Your choice for VT1 heart rate isn't in use", ValueRow(cut, "VT1 heart rate").TextContent,
+            StringComparison.Ordinal), Wait);
+        Assert.Contains("145 bpm", ValueRow(cut, "LT1 heart rate").TextContent, StringComparison.Ordinal);
+
+        await ClickAsync(() => Button(cut, "Clear your choice for VT1 heart rate"));
+
+        cut.WaitForAssertion(() => Assert.DoesNotContain(cut.FindAll(".value-row dt"), e => e.TextContent == "VT1 heart rate"), Wait);
+        Assert.Empty(await MetricPins.ListAsync(App.Database.Db, ProfileId));
+    }
 }

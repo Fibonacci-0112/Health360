@@ -180,6 +180,9 @@ public sealed partial class BodyData : IDisposable
             watchedProfile = profileId;
             Measurements = null;
             Pins = null;
+            // A failure belongs to the watch that had it; the cancelled watch can't report one after this.
+            measurementsFailed = false;
+            pinsFailed = false;
             if (profileId is not null)
             {
                 started = measurementsWatch = new CancellationTokenSource();

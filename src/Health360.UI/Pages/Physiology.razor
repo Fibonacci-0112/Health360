@@ -62,6 +62,19 @@
                     "From a lab lactate or gas-exchange test. Not estimated.")
                 @Row(ThresholdName(profile.UpperThreshold, "LT2"), profile.UpperThreshold?.MetricCode ?? MetricCodes.Lt2Hr, profile.UpperThreshold, v => MetricDisplay.Format(v, "bpm"),
                     "From a lab lactate or gas-exchange test. Not estimated.")
+                @foreach (var code in InactiveThresholdPins())
+                {
+                    var name = MetricDisplay.Name(code);
+                    @* The screen shows one threshold pair (lactate first); a pin on the other pair would otherwise be
+                       invisible, yet come back into use if the shown pair's values were deleted. *@
+                    <div class="value-row">
+                        <dt>@name</dt>
+                        <dd>
+                            <span class="error small">Your choice for @name isn't in use: thresholds now come from the @(code.StartsWith("vt", StringComparison.Ordinal) ? "lactate" : "ventilatory") pair.</span>
+                            @PinButton("Clear my choice", $"Clear your choice for {name}", () => Data.UnpinAsync(code))
+                        </dd>
+                    </div>
+                }
                 @Row("Body fat", MetricCodes.BodyFatPercent, profile.BodyFat, v => MetricDisplay.Format(v, "%"), "Enter a DEXA, scale or other value on the Body tab.")
                 <div class="value-row">
                     <dt>Fat-free mass</dt>
@@ -299,6 +312,19 @@
             </dd>
         </div>
     };
+
+    private static readonly IReadOnlyList<string> ThresholdCodes = [MetricCodes.Lt1Hr, MetricCodes.Lt2Hr, MetricCodes.Vt1Hr, MetricCodes.Vt2Hr];
+
+    /// <summary>Pinned threshold metrics the screen doesn't show a row for, because the other pair is in use.</summary>
+    private IEnumerable<string> InactiveThresholdPins()
+    {
+        var shown = new[]
+        {
+            profile!.LowerThreshold?.MetricCode ?? MetricCodes.Lt1Hr,
+            profile.UpperThreshold?.MetricCode ?? MetricCodes.Lt2Hr,
+        };
+        return ThresholdCodes.Where(c => !shown.Contains(c) && Data.Pins?.ContainsKey(c) == true);
+    }
 
     private RenderFragment PinButton(string text, string label, Func<Task> save) => __builder =>
     {
