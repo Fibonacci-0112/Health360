@@ -10,7 +10,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 | `Health360.Domain` units and UUIDv7 ids, with FsCheck property tests | **Done.** `Units/` and `Ids/UuidV7` port `packages/domain`, with the same factors and property tests (FsCheck) |
 | `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | **Auth and user-scoped queries done** (see [API authentication](#api-authentication)), with `/me` and `/profiles/{id}` as the first endpoints. **Test Claude call started:** `POST /ai/hello` (see [Claude calls](#claude-calls)), tested against recorded responses only. The live run is deferred to Phase 1's first AI endpoint (`ai-label-ocr`, PLAN.md §3), because nothing before it calls Claude |
 | MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | **Built; run on Android (emulator) and Windows** (see [MAUI app](#maui-app)): sign-in by emailed code, onboarding with every unit type and locale defaults, the five tabs and Settings (units, rejected writes with retry and discard, sign-out), syncing over the existing `me`, `household` and `reference` streams. The app's services (everything below the BlazorWebView) were run against `supabase start` and the local PowerSync: emailed-code sign-in, the profile arriving over `me`, onboarding reaching the server, an RLS-rejected write quarantined without blocking the queue, and a second user never receiving the first user's rows. Run on Windows and in the Android emulator (sign-in, onboarding, notes) |
-| Throwaway `notes` table on Android and Windows | **Done on Android and Windows** (see [Notes sync test](#notes-sync-test)): the Today tab adds and lists notes through the local database. Two-device sync, kill-while-offline on both targets, and the two-user check passed |
+| Throwaway `notes` table on Android and Windows | **Done on Android and Windows** (see [Notes sync test](#notes-sync-test)): the Today tab adds and lists notes through the local database. Two-device sync, kill-while-offline on both targets, and the two-user check passed. The two-client leak test also runs on the .NET sync stack (see [Two-client sync test](#two-client-sync-test)) |
 | `tools/drift` against the PowerSync .NET schema | **Done for `AppSchema`** (see [Schema drift](#schema-drift)): runs in CI's database job next to `tools/codegen/check-drift.mjs`, which still checks the TypeScript client schema. The C# contracts are not compared yet |
 
 ## What the scaffold contains
@@ -95,7 +95,7 @@ Tests: `AiHelloTests` runs the real SDK against `FakeAnthropic`, an HTTP handler
 - `SupabaseConnector` gives PowerSync the access token and the PowerSync URL, and logs only the op, table and error code of a quarantined write (no ids, no row data).
 - `LocalDatabase` binds the database to the user who owns it. `ConnectAsync(userId)` clears it first when another user (or nobody known) owned it, including pending uploads and `failed_uploads`; `DisconnectAsync` keeps everything for the same user's return; `ClearAsync` is for a sign-out the user asked for. The owner is kept in MAUI `Preferences` (`PreferencesOwnerStore`). Connections retry every 2 s, as in the prototype.
 
-Not done yet: the two-device and kill-while-offline checks of the gate.
+The two-device and kill-while-offline checks of the gate were run on Android and Windows ([Notes sync test](#notes-sync-test)); [Two-client sync test](#two-client-sync-test) repeats the leak and offline checks against a real server in CI.
 
 `Profiles` holds the profile queries the app shell and onboarding use: a watched query for the signed-in user's row, the onboarding save and the unit-preference update. PowerSync tables are views with `INSTEAD OF` triggers, whose row counts SQLite reports as 0, so a save first checks that the row exists in the same transaction and throws if it doesn't (a save that changed nothing is never shown as done). `FailedUploads` lists the quarantine for Settings without the row data.
 
@@ -144,6 +144,23 @@ The throwaway `notes` table (PLAN.md §3) ports the prototype's `NotesTest`; don
 
 Tests: `NotesTests` in `Health360.LocalDb.Tests` (id, local date across midnight UTC, trimming, the queued PUT, empty notes write nothing, order) and in `Health360.UI.Tests` (adding, the disabled Add, a synced note appearing). **Run on Windows** against `supabase start` and the local PowerSync (2026-10-30): emailed-code sign-in and onboarding; a note reached Postgres within about 2 s; a note added with PowerSync stopped survived killing the app and synced once PowerSync was back; two users signed in one after the other on the same device each saw only their own notes. **Run on Android** (emulator, x86_64) against the same stack: the same account on Android and Windows saw each other's notes almost at once (well under the 5 s target); a note added in airplane mode survived killing the app and reached Windows within about 0.5 s of reconnecting. This meets the exit criteria's device checks, so the PowerSync .NET gate passes and no fallback ADR is needed.
 
+## Two-client sync test
+
+`tests/Health360.Sync.Tests` ports `e2e/sync` to the app's own .NET sync stack: each device is a real PowerSync database in a temporary file with `LocalDatabase`, `SupabaseConnector` and `PostgrestWriter`, exactly as `AddLocalDatabase` wires them (only the session and owner store are in memory). Users are created through the Auth admin API with the service-role key, which only the test harness holds; the devices sign in with a password and then use only the publishable key and their own access token. The users are deleted afterwards. Two users, Alex (devices A1 and A2) and Blake (B), share one fixture; each test makes its own rows, so they pass in any order.
+
+It checks that each device starts with only its own profile and household; that a note written offline on A1 reaches A2 within 5 s of reconnecting (measured from `ConnectAsync`, with the app's 2 s retry delay); that B never receives A's rows (B waits for its own note to come back first, so the stream has caught up); that jsonb goes up as an object and the server recomputes `height_cm`; that an offline edit to a note another device deleted is quarantined as `PGRST116` and stays rejected on retry; that a consent delete RLS silently blocks is quarantined as `42501` and sync puts the row back; that a forged write into another profile is quarantined (`42501`) without blocking the next write, and the connector's log line holds no id or note text; and, beyond the prototype's test, that a second user signing in on the same install without a sign-out gets a cleared database and the first user's unsent write never reaches the server.
+
+Every test is skipped unless `SYNC_E2E=1` (trait `Category=Sync`), so the main `dotnet test` run skips them; CI's sync job runs them after the TypeScript ones, against the same stack and environment:
+
+```sh
+supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,storage-api,postgres-meta
+docker compose -f powersync/docker-compose.yml up -d
+SYNC_E2E=1 SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_ANON_KEY=<ANON_KEY> SUPABASE_SERVICE_ROLE_KEY=<SERVICE_ROLE_KEY> \
+  POWERSYNC_URL=http://127.0.0.1:8080 dotnet test --project tests/Health360.Sync.Tests
+```
+
+The keys are the ones `supabase status -o env` prints. **Run locally** (2026-10-31, Linux, `supabase start` with CLI 2.122.0 and PowerSync 1.27.2): 8 of 8 passed, three runs in a row, about 26 s each. With the `notes` stream loosened to every row (`SELECT * FROM notes`), the leak test and the account-switch test failed, as they should.
+
 ## Running it
 
 ```sh
@@ -189,6 +206,7 @@ The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54
 |---|---|---|
 | `.NET build, format, tests` | Linux | locked restore, `dotnet format --verify-no-changes`, Release build, `dotnet test` on `Health360.Core.slnf` |
 | `Database (pgTAP, lint, drift)` | Linux | also `tools/drift` (`AppSchema` against the migrations) and the API's database tests (`Category=Database`) against `supabase db start` |
+| `Two-client sync (Supabase + PowerSync)` | Linux | the TypeScript `e2e/sync` tests, then `tests/Health360.Sync.Tests` (`SYNC_E2E=1`) against `supabase start` and the local PowerSync |
 | `MAUI app (Android build)` | Linux | `maui-android` workload, Android SDK components, Release build |
 | `MAUI app (Windows build)` | Windows | `maui-windows` workload, Release build |
 
@@ -205,6 +223,7 @@ The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54
 - PowerSync reads rows with Dapper, which emits IL at run time. .NET 10 file-based apps (`dotnet run app.cs`) default to `PublishAot`, which turns dynamic code off, so a scratch harness needs `#:property PublishAot=false`. The MAUI app runs on Mono (Android) and CoreCLR (Windows) and is unaffected.
 - bUnit's synchronous `Click()`, `Change()` and `Submit()` can race the app's background re-renders (sync status, watched queries): an event lands on a handler a concurrent render just replaced and is lost, which made about half the component-test runs fail. The UI tests await `ClickAsync`, `SubmitAsync` and `TriggerEventAsync` instead (`AppTestContext`). Awaiting alone still left a gap between finding the element and dispatching to it, where a background render could replace the handler (`UnknownEventHandlerIdException`, about 1 run in 20). The helpers now take a finder and run the find and the dispatch together on the renderer's dispatcher, so pass `() => cut.Find(...)`, not an element found earlier. Assert anything a background render updates (such as the rejected-writes badge) inside `WaitForAssertion`.
 - With invariant globalization (every project except the MAUI app and those that set `UseCultureData`), Windows can't resolve an IANA time zone id such as `America/Chicago`: `FindSystemTimeZoneById` needs ICU to map it to a Windows id and throws `TimeZoneNotFoundException`. Linux reads IANA ids from tzdata, so the Linux CI runner never sees it. Tests in invariant projects build their zones with `TimeZoneInfo.CreateCustomTimeZone`; only projects that keep culture data (the MAUI app and `Health360.UI.Tests`) look zones up by IANA id.
+- If `supabase start` fails pulling from `public.ecr.aws` ("Data limit exceeded"), `SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io` pulls the same images from Docker Hub.
 - `Directory.Build.props` is read before the project file, so a condition there on a property the project sets (such as `UseMaui`) is always false. Put such settings in `Directory.Build.targets`.
 - The Windows targets set the MAUI app's `PackageVersion` from `ApplicationDisplayVersion`, while Android keeps the `1.0.0` default. Visual Studio evaluates both target frameworks and fails with "Unable to read project information for 'Health360.Maui': The property PackageVersion was expected to have a single value across all target frameworks". The project sets `Version` to `$(ApplicationDisplayVersion)` so both agree; the command line, which builds one framework, doesn't hit it.
 - A `workloadVersion` in `global.json` makes every build fail ("Workload version ... was not found") unless that workload set is installed, including builds that use no workloads. That's why the version is pinned on `dotnet workload install` instead.

@@ -31,7 +31,7 @@ The repository holds the new **.NET solution** (Phase 0b, [ADR 0002](docs/adr/00
 | `packages/api` | supabase-js upload writer and typed Edge Function clients |
 | `supabase` | Migrations, RLS, pgTAP tests, Edge Functions |
 | `powersync` | Sync Streams and local PowerSync config |
-| `e2e/sync` | Two-client leak and offline tests |
+| `e2e/sync` | Two-client leak and offline tests (prototype; the .NET port is `tests/Health360.Sync.Tests`) |
 | `tools` | Codegen for Edge Functions, schema drift check, local DB test runner |
 
 ## Quick start

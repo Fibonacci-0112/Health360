@@ -1,0 +1,221 @@
+using System.Diagnostics;
+using Health360.Sync.Tests.Support;
+
+namespace Health360.Sync.Tests;
+
+/// <summary>
+/// Phase 0b exit criteria (PLAN.md §3), through the app's own .NET sync stack: a note written offline
+/// reaches a second device within about 5 seconds of reconnecting, and user B never receives it. pgTAP
+/// proves the RLS half; this proves the Sync Streams half. Ports e2e/sync/src/sync.test.ts. Each test
+/// makes its own rows, so they pass in any order.
+/// </summary>
+[Trait("Category", "Sync")]
+public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixture>, IAsyncLifetime
+{
+    private Device A1 => fx.A1;
+
+    private Device A2 => fx.A2;
+
+    private Device B => fx.B;
+
+    public ValueTask InitializeAsync()
+    {
+        Assert.SkipUnless(SyncBackend.Enabled, $"Set {SyncBackend.EnableVariable}=1 and the stack's settings to run the sync tests.");
+        return ValueTask.CompletedTask;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (!SyncBackend.Enabled)
+        {
+            return;
+        }
+
+        // A test that failed while a device was offline mustn't leave it offline for the next one.
+        foreach (var device in new[] { A1, A2, B })
+        {
+            await device.ConnectAsync();
+        }
+    }
+
+    [Fact]
+    public async Task EachDeviceStartsWithOnlyItsOwnProfileAndHousehold()
+    {
+        Assert.Equal([fx.Alex.ProfileId], await IdsAsync(A1, "SELECT id AS Id FROM profiles"));
+        Assert.Equal([fx.Alex.ProfileId], await IdsAsync(A2, "SELECT id AS Id FROM profiles"));
+        Assert.Equal([fx.Blake.ProfileId], await IdsAsync(B, "SELECT id AS Id FROM profiles"));
+        Assert.Equal([fx.Blake.ProfileId], await IdsAsync(B, "SELECT profile_id AS Id FROM household_members"));
+    }
+
+    [Fact]
+    public async Task AnOfflineNoteReachesTheSecondDeviceWithinAboutFiveSeconds()
+    {
+        await A1.DrainAsync();
+        await A1.DisconnectAsync();
+        var id = await A1.AddNoteAsync("written offline");
+        Assert.Equal(1, await A1.PendingAsync());
+
+        var elapsed = Stopwatch.StartNew();
+        await A1.Local.ConnectAsync(fx.Alex.UserId);
+        await Wait.ForAsync(A2.NotesAsync, notes => notes.Any(n => n.Id == id), TimeSpan.FromSeconds(15));
+        elapsed.Stop();
+
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5), $"Took {elapsed.Elapsed.TotalSeconds:0.0} s.");
+        Assert.Equal("written offline", (await A2.NotesAsync()).Single(n => n.Id == id).Body);
+        await A1.DrainAsync();
+    }
+
+    [Fact]
+    public async Task UserBNeverReceivesAnotherUsersRows()
+    {
+        var alexs = await A1.AddNoteAsync("alex's");
+        await A2.SyncedAsync("notes", alexs);
+
+        // B writes a note of its own and waits for the server's copy. Once it has it, B's stream has
+        // caught up past A's write, so anything of A's that leaked would be here too.
+        var blakes = await B.AddNoteAsync("blake's");
+        await B.SyncedAsync("notes", blakes);
+
+        Assert.All(await IdsAsync(B, "SELECT profile_id AS Id FROM notes"), p => Assert.Equal(fx.Blake.ProfileId, p));
+        Assert.DoesNotContain(await B.NotesAsync(), n => n.Id == alexs);
+        Assert.Empty(await IdsAsync(B, "SELECT id AS Id FROM profiles WHERE id = ?", fx.Alex.ProfileId));
+        Assert.Empty(await IdsAsync(B, "SELECT row_id AS Id FROM ps_oplog WHERE row_id = ?", alexs));
+        Assert.DoesNotContain(await A2.NotesAsync(), n => n.Id == blakes);
+    }
+
+    [Fact]
+    public async Task ProfileEditsUploadWithServerTypes()
+    {
+        // jsonb goes up as an object, not a string of JSON, and the server recomputes the canonical
+        // height from what was entered (the 1 cm sent here is overwritten).
+        await A1.Db.Execute(
+            "UPDATE profiles SET unit_prefs = ?, height = 70, height_unit = 'in', height_cm = 1 WHERE id = ?",
+            ["""{"load":"lb"}""", fx.Alex.ProfileId]);
+        await A1.DrainAsync();
+
+        var row = await Wait.ForAsync(
+            () => A2.Db.Get<ProfileRow>("SELECT unit_prefs AS UnitPrefs, height_cm AS HeightCm FROM profiles"),
+            r => r.HeightCm > 100);
+        Assert.Equal("""{"load":"lb"}""", System.Text.Json.Nodes.JsonNode.Parse(row.UnitPrefs!)!.ToJsonString());
+        Assert.Equal(177.8, row.HeightCm!.Value, 10);
+        Assert.Empty(await FailedAsync(A1, fx.Alex.ProfileId));
+    }
+
+    [Fact]
+    public async Task AnOfflineEditToANoteAnotherDeviceDeletedIsQuarantinedNotLost()
+    {
+        var id = await A1.AddNoteAsync("to be deleted");
+        await A2.SyncedAsync("notes", id);
+
+        await A1.DisconnectAsync();
+        await A1.Db.Execute("UPDATE notes SET body = 'edited offline' WHERE id = ?", [id]);
+        await A2.Db.Execute("DELETE FROM notes WHERE id = ?", [id]);
+        await A2.DrainAsync();
+
+        await A1.ConnectAsync();
+        await A1.DrainAsync();
+        var failed = Assert.Single(await FailedAsync(A1, id));
+        Assert.Equal(("PATCH", PostgrestWriter.NoRow), (failed.Op, failed.ErrorCode));
+        // The server's state wins: the note is gone here too.
+        await Wait.ForAsync(async () => await IdsAsync(A1, "SELECT id AS Id FROM notes WHERE id = ?", id), ids => ids.Length == 0);
+
+        // Retrying sends the saved edit again; the note is still gone, so it stays quarantined.
+        Assert.Equal(RetryResult.Rejected, await Uploads.RetryFailedUploadAsync(A1.Db, failed.Id, A1.Writer, TimeProvider.System, TestContext.Current.CancellationToken));
+        Assert.Single(await FailedAsync(A1, id));
+    }
+
+    [Fact]
+    public async Task ADeleteRlsSilentlyBlocksIsQuarantinedNotReportedAsDone()
+    {
+        // Consents keep their history: users may insert them, never delete them.
+        var id = Guid.CreateVersion7().ToString();
+        await B.Db.Execute(
+            "INSERT INTO consents (id, profile_id, kind, version, granted, decided_at) VALUES (?, ?, 'tos', '1', 1, ?)",
+            [id, fx.Blake.ProfileId, DateTimeOffset.UtcNow.ToString("O")]);
+        await B.DrainAsync();
+        await B.SyncedAsync("consents", id);
+
+        await B.Db.Execute("DELETE FROM consents WHERE id = ?", [id]);
+        await B.DrainAsync();
+
+        var failed = Assert.Single(await FailedAsync(B, id));
+        Assert.Equal(("DELETE", PostgrestWriter.Denied), (failed.Op, failed.ErrorCode));
+        // The server still has it, so sync puts it back.
+        await Wait.ForAsync(async () => await IdsAsync(B, "SELECT id AS Id FROM consents WHERE id = ?", id), ids => ids.Length == 1);
+    }
+
+    [Fact]
+    public async Task AForgedWriteIsQuarantinedWithoutBlockingTheQueue()
+    {
+        // B writes into A's profile: RLS rejects it (42501), so it is parked in failed_uploads, and B's
+        // next, valid write still goes through.
+        var forged = await B.AddNoteAsync("forged", fx.Alex.ProfileId);
+        var after = await B.AddNoteAsync("after");
+        await B.DrainAsync();
+
+        var failed = Assert.Single(await FailedAsync(B, forged));
+        Assert.Equal(("PUT", "42501"), (failed.Op, failed.ErrorCode));
+        // The connector logs the table and code only: no ids, no row data.
+        var logged = Assert.Single(B.Log.Messages, m => m.Contains("42501", StringComparison.Ordinal) && m.Contains("notes", StringComparison.Ordinal));
+        Assert.DoesNotContain(forged, logged, StringComparison.Ordinal);
+        Assert.DoesNotContain("forged", logged, StringComparison.Ordinal);
+
+        // The server's state wins: the forged row disappears locally, the valid one stays.
+        await B.SyncedAsync("notes", after);
+        await Wait.ForAsync(B.NotesAsync, notes => notes.All(n => n.Id != forged));
+        Assert.Contains(await B.NotesAsync(), n => n.Id == after);
+        // Nor did it reach A: by the time A's next write is back on A's devices, it would be there too.
+        var marker = await A1.AddNoteAsync("marker");
+        await A2.SyncedAsync("notes", marker);
+        Assert.DoesNotContain(await A2.NotesAsync(), n => n.Id == forged);
+    }
+
+    [Fact]
+    public async Task AnotherUserSigningInNeverInheritsTheFirstUsersRowsOrUnsentWrites()
+    {
+        // A third install, used by Alex, then by Blake without a sign-out in between (Alex's session
+        // expired while the app was closed, say).
+        await using var shared = Device.Create(fx.Backend, fx.Alex);
+        await shared.ConnectAsync();
+        await shared.DisconnectAsync();
+        var unsent = await shared.AddNoteAsync("alex's, never sent");
+        Assert.Equal(1, await shared.PendingAsync());
+
+        shared.SignInAs(fx.Blake);
+        await shared.ConnectAsync();
+
+        Assert.Equal(0, await shared.PendingAsync());
+        Assert.Equal(0, await Uploads.FailedUploadCountAsync(shared.Db));
+        Assert.Equal([fx.Blake.ProfileId], await IdsAsync(shared, "SELECT id AS Id FROM profiles"));
+        Assert.All(await IdsAsync(shared, "SELECT profile_id AS Id FROM notes"), p => Assert.Equal(fx.Blake.ProfileId, p));
+
+        // Alex's note never reached the server: by the time Alex's next write reaches Alex's other
+        // device, the unsent one would have too.
+        var marker = await A1.AddNoteAsync("marker");
+        await A2.SyncedAsync("notes", marker);
+        Assert.DoesNotContain(await A2.NotesAsync(), n => n.Id == unsent);
+    }
+
+    private static async Task<string[]> IdsAsync(Device device, string sql, params object[] args) =>
+        [.. (await device.Db.GetAll<Device.Row>(sql, args)).Select(r => r.Id)];
+
+    private static async Task<FailedRow[]> FailedAsync(Device device, string rowId) =>
+        await device.Db.GetAll<FailedRow>(
+            "SELECT id AS Id, op AS Op, error_code AS ErrorCode FROM failed_uploads WHERE row_id = ?", [rowId]);
+
+    public sealed class FailedRow
+    {
+        public string Id { get; set; } = "";
+
+        public string Op { get; set; } = "";
+
+        public string? ErrorCode { get; set; }
+    }
+
+    public sealed class ProfileRow
+    {
+        public string? UnitPrefs { get; set; }
+
+        public double? HeightCm { get; set; }
+    }
+}

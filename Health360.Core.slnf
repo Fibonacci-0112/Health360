@@ -11,6 +11,7 @@
       "tests/Health360.Drift.Tests/Health360.Drift.Tests.csproj",
       "tests/Health360.LocalDb.Tests/Health360.LocalDb.Tests.csproj",
       "tests/Health360.Server.Tests/Health360.Server.Tests.csproj",
+      "tests/Health360.Sync.Tests/Health360.Sync.Tests.csproj",
       "tests/Health360.UI.Tests/Health360.UI.Tests.csproj",
       "tools/drift/Health360.Drift.csproj"
     ]
