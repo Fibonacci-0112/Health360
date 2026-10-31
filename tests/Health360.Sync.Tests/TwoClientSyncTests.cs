@@ -204,7 +204,7 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
             INSERT INTO measurements (id, profile_id, metric_code, category, value, unit, value_canonical, measured_at, local_date, source)
             VALUES (?, ?, 'max_hr', 'physiology', 190, 'bpm', 190, '2026-10-01T07:00:00Z', '2026-10-01', 'lab')
             """,
-            [measured]);
+            [measured, profile]);
         await A1.DrainAsync();
         await A2.SyncedAsync("measurements", measured);
         await Wait.ForAsync(() => IdsAsync(A2, "SELECT id AS Id FROM metric_definitions WHERE code = 'max_hr'"), ids => ids.Length == 1);
