@@ -109,7 +109,7 @@ public sealed partial class BodyData : IDisposable
                 System.Globalization.DateTimeStyles.None, out var birth) ? birth : null,
             profile.HeightCm,
             Domain.Physiology.ActivityLevels.TryParse(profile.ActivityLevel, out var level) ? level : null,
-            PhysiologyPrefsJson.Parse(profile.PhysiologyPrefs).TakesHeartRateLoweringMedication));
+            profile.TakesHrLoweringMedication != 0));
     }
 
     /// <summary>Saves values measured together to the local database; they upload when online.</summary>

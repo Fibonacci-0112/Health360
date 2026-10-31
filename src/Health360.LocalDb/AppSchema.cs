@@ -32,7 +32,8 @@ public static class AppSchema
         ("currency", ColumnType.Text),
         ("activity_level", ColumnType.Text),
         ("physiology_prefs", ColumnType.Text),
-        ("onboarded_at", ColumnType.Text));
+        ("onboarded_at", ColumnType.Text),
+        ("takes_hr_lowering_medication", ColumnType.Integer));
 
     public static Table Households { get; } = Synced("households",
         ("name", ColumnType.Text));
@@ -155,6 +156,7 @@ public static class AppSchema
             {
                 ["unit_prefs"] = ServerColumnType.Json,
                 ["physiology_prefs"] = ServerColumnType.Json,
+                ["takes_hr_lowering_medication"] = ServerColumnType.Boolean,
             },
             ["consents"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
             {

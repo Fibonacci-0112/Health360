@@ -246,7 +246,7 @@ Deleting a measurement re-resolves straight away: the next measured value, then 
 - **Thresholds:** lactate thresholds (LT1 and LT2) when both have a value, otherwise ventilatory ones (VT1 and VT2) when both do. Zones need both of a pair (see above).
 - **RMR retest flag:** the weight "then" is the trend on or before the test date. With no weigh-in by then, only the 12-month rule applies.
 - **VO₂max estimate:** Jackson only without a measured resting HR, and only with a PA-R answer. The app doesn't ask the PA-R questions yet, so for now VO₂max shows only measured values.
-- **Medication flag:** `profiles.physiology_prefs.heartRateLoweringMedication`. When it's true, Tanaka gives nothing and zones need a measured max HR (or a measured basis above it).
+- **Medication flag:** `profiles.takes_hr_lowering_medication`. When it's true, Tanaka gives nothing and zones need a measured max HR (or a measured basis above it).
 
 The golden checks are in `PhysiologyProfileTests` (Domain) and, through the screens, `PhysiologyTests` (UI): a lab RMR changes maintenance and deleting it falls back, and a measured max HR changes the zones and deleting it falls back.
 
