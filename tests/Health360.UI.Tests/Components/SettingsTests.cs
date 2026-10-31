@@ -67,6 +67,20 @@ public sealed class SettingsTests : AppTestContext
     }
 
     [Fact]
+    public async Task SavedDisappearsOnceAFieldIsEditedAgain()
+    {
+        var cut = await SettingsAsync(Metric);
+        cut.WaitForAssertion(() => cut.Find("#details-birth"), Wait);
+        await ChangeAsync(cut, "#details-birth", "1985-12-01");
+        await SubmitAsync(cut, "#details-birth");
+        cut.WaitForAssertion(() => Assert.Equal("Saved.", cut.Find("#details-birth").Closest("form")!.QuerySelector("[role=status]")!.TextContent), Wait);
+
+        await ChangeAsync(cut, "#details-birth", "1985-12-02");
+
+        cut.WaitForAssertion(() => Assert.Equal("", cut.Find("#details-birth").Closest("form")!.QuerySelector("[role=status]")!.TextContent), Wait);
+    }
+
+    [Fact]
     public async Task ChoosingTheSelectedOptionAgainClearsIt()
     {
         var cut = await SettingsAsync(Metric, "sex_for_calcs = 'female', activity_level = 'light'");

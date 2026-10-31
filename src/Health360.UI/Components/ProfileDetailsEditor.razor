@@ -42,7 +42,7 @@
     {
         <p class="error" role="alert">@error</p>
     }
-    <p class="muted" role="status">@(saved ? "Saved." : "")</p>
+    <p class="muted" role="status">@(saved == Current ? "Saved." : "")</p>
     <button type="submit" class="primary" disabled="@busy" aria-busy="@(busy ? "true" : "false")">Save details</button>
 </form>
 
@@ -63,7 +63,8 @@
     private string? sex;
     private string? activity;
     private string? error;
-    private bool saved;
+    // The values as last saved, so "Saved." disappears as soon as anything is edited again.
+    private (string?, string?, string?, string?, string?, string?)? saved;
     private bool busy;
 
     protected override void OnParametersSet()
@@ -108,6 +109,9 @@
         shownHeight = (heightCm, heightFeet, heightInches);
     }
 
+    private (string?, string?, string?, string?, string?, string?) Current =>
+        (birthDate, sex, activity, heightCm, heightFeet, heightInches);
+
     private static string Number(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
 
     private bool HeightEdited => shownHeight != (heightCm, heightFeet, heightInches);
@@ -115,7 +119,7 @@
     private async Task SaveAsync()
     {
         error = null;
-        saved = false;
+        saved = null;
         if (loaded is null)
         {
             error = "Your profile hasn't reached this device yet.";
@@ -159,9 +163,10 @@
         try
         {
             await Profiles.SetDetailsAsync(form);
-            saved = true;
             loaded = new ProfileRow { Id = loaded.Id, Height = height, HeightUnit = heightUnit, HeightCm = canonical };
             ShowHeight(loaded);
+            birthDate = form.BirthDate;
+            saved = Current;
         }
         catch (Exception failure) when (failure is not OperationCanceledException)
         {
