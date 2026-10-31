@@ -24,6 +24,7 @@ public sealed partial class BodyData : IDisposable
     private CancellationTokenSource? measurementsWatch;
     private string? watchedProfile;
     private bool measurementsFailed;
+    private bool pinsFailed;
     private bool definitionsFailed;
 
     public BodyData(PowerSyncDatabase db, ProfileService profiles, TimeProvider clock, ILogger<BodyData> logger)
@@ -43,12 +44,18 @@ public sealed partial class BodyData : IDisposable
     /// <summary>The profile's measurements, newest first; null until the local query has answered.</summary>
     public IReadOnlyList<MeasurementRow>? Measurements { get; private set; }
 
+    /// <summary>
+    /// The profile's pins by metric code (rows that can't be read are left out); null until the local query has
+    /// answered. A pin stays when its measurement is deleted; the resolver then reports it as unavailable.
+    /// </summary>
+    public IReadOnlyDictionary<string, MetricPinRow>? Pins { get; private set; }
+
     /// <summary>Metrics by code. Empty until the reference stream has synced to this device.</summary>
     public IReadOnlyDictionary<string, MetricDefinition> Definitions { get; private set; } =
         new Dictionary<string, MetricDefinition>(StringComparer.Ordinal);
 
     /// <summary>True when a watched query failed; what's shown may then be out of date.</summary>
-    public bool Failed => measurementsFailed || definitionsFailed;
+    public bool Failed => measurementsFailed || pinsFailed || definitionsFailed;
 
     /// <summary>
     /// Restarts a watch that failed, so leaving a screen and coming back retries. Pages call it when they open.
@@ -60,7 +67,7 @@ public sealed partial class BodyData : IDisposable
         bool restartDefinitions;
         lock (watchLock)
         {
-            restartMeasurements = measurementsFailed;
+            restartMeasurements = measurementsFailed || pinsFailed;
             restartDefinitions = definitionsFailed;
             if (restartMeasurements)
             {
@@ -86,12 +93,13 @@ public sealed partial class BodyData : IDisposable
     /// <summary>Today on this device, the day new entries default to and the profile is computed for.</summary>
     public DateOnly Today => DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
 
-    /// <summary>The profile as of today; null until the profile and its measurements have loaded.</summary>
+    /// <summary>The profile as of today; null until the profile, its measurements and its pins have loaded.</summary>
     public PhysiologyProfile? Profile()
     {
         var profile = profiles.Profile;
         var rows = Measurements;
-        if (profile is null || rows is null)
+        var pins = Pins;
+        if (profile is null || rows is null || pins is null)
         {
             return null;
         }
@@ -110,7 +118,8 @@ public sealed partial class BodyData : IDisposable
             profile.HeightCm,
             Domain.Physiology.ActivityLevels.TryParse(profile.ActivityLevel, out var level) ? level : null,
             profile.TakesHrLoweringMedication != 0,
-            profile.ActivityRating is { } rating ? (int)rating : null));
+            profile.ActivityRating is { } rating ? (int)rating : null,
+            pins.Where(p => p.Value.ToPin() is not null).ToDictionary(p => p.Key, p => p.Value.ToPin()!, StringComparer.Ordinal)));
     }
 
     /// <summary>Saves values measured together to the local database; they upload when online.</summary>
@@ -118,6 +127,16 @@ public sealed partial class BodyData : IDisposable
         MeasurementStore.AddAsync(db, RequireProfile().Id, entries, clock);
 
     public Task DeleteAsync(string id) => MeasurementStore.DeleteAsync(db, RequireProfile().Id, id);
+
+    /// <summary>Uses this measurement for its metric whatever the resolver's order says, until unpinned.</summary>
+    public Task PinMeasurementAsync(string measurementId) =>
+        MetricPins.PinMeasurementAsync(db, RequireProfile().Id, measurementId, clock);
+
+    /// <summary>Uses the estimate for <paramref name="metricCode"/> even when measured values exist, until unpinned.</summary>
+    public Task PinEstimateAsync(string metricCode) => MetricPins.PinEstimateAsync(db, RequireProfile().Id, metricCode, clock);
+
+    /// <summary>Goes back to the resolver's order for <paramref name="metricCode"/>.</summary>
+    public Task UnpinAsync(string metricCode) => MetricPins.UnpinAsync(db, RequireProfile().Id, metricCode);
 
     public Task SetHeartRateLoweringMedicationAsync(bool value) =>
         Profiles.SetHeartRateLoweringMedicationAsync(db, RequireProfile().Id, value);
@@ -141,7 +160,7 @@ public sealed partial class BodyData : IDisposable
     private ProfileRow RequireProfile() =>
         profiles.Profile ?? throw new InvalidOperationException("The profile hasn't synced to this device yet.");
 
-    /// <summary>Watches the measurements of the current profile, and stops watching the previous one's.</summary>
+    /// <summary>Watches the measurements and pins of the current profile, and stops watching the previous one's.</summary>
     private void Follow()
     {
         var profileId = profiles.Profile?.Id;
@@ -160,6 +179,7 @@ public sealed partial class BodyData : IDisposable
             measurementsWatch = null;
             watchedProfile = profileId;
             Measurements = null;
+            Pins = null;
             if (profileId is not null)
             {
                 started = measurementsWatch = new CancellationTokenSource();
@@ -171,6 +191,7 @@ public sealed partial class BodyData : IDisposable
         {
             var token = started.Token;
             _ = Task.Run(() => WatchMeasurementsAsync(profileId!, token), CancellationToken.None);
+            _ = Task.Run(() => WatchPinsAsync(profileId!, token), CancellationToken.None);
         }
     }
 
@@ -206,6 +227,52 @@ public sealed partial class BodyData : IDisposable
                 if (!cancellationToken.IsCancellationRequested)
                 {
                     measurementsFailed = true;
+                }
+            }
+
+            Changed?.Invoke();
+        }
+    }
+
+    private async Task WatchPinsAsync(string profileId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var rows in MetricPins.Watch(db, profileId, cancellationToken).ConfigureAwait(false))
+            {
+                lock (watchLock)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    // The id is derived from the metric, so there is at most one row per metric; indexing, not
+                    // ToDictionary, so a malformed synced row can't break the watch.
+                    var pins = new Dictionary<string, MetricPinRow>(StringComparer.Ordinal);
+                    foreach (var row in rows)
+                    {
+                        pins[row.MetricCode] = row;
+                    }
+
+                    Pins = pins;
+                    pinsFailed = false;
+                }
+
+                Changed?.Invoke();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error) when (error is not ObjectDisposedException)
+        {
+            LogWatchFailed(logger, "pins", error.GetType().Name);
+            lock (watchLock)
+            {
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    pinsFailed = true;
                 }
             }
 

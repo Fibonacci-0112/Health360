@@ -194,6 +194,65 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
     }
 
     [Fact]
+    public async Task PinsSetOfflineOnTwoDevicesConvergeOnOneRowOutliveTheirValueAndNeverReachB()
+    {
+        var profile = fx.Alex.ProfileId;
+        var pinId = MetricPins.IdFor(profile, "max_hr");
+        var measured = Guid.CreateVersion7().ToString();
+        await A1.Db.Execute(
+            """
+            INSERT INTO measurements (id, profile_id, metric_code, category, value, unit, value_canonical, measured_at, local_date, source)
+            VALUES (?, ?, 'max_hr', 'physiology', 190, 'bpm', 190, '2026-10-01T07:00:00Z', '2026-10-01', 'lab')
+            """,
+            [measured]);
+        await A1.DrainAsync();
+        await A2.SyncedAsync("measurements", measured);
+        await Wait.ForAsync(() => IdsAsync(A2, "SELECT id AS Id FROM metric_definitions WHERE code = 'max_hr'"), ids => ids.Length == 1);
+
+        // Both of Alex's devices pin max HR while A2 is offline: A1 the measurement, A2 the estimate. The id is
+        // derived from the profile and metric, so A2's upload upserts the row A1 made rather than being rejected
+        // as a second pin for the metric. The later upload wins, on both devices.
+        await A2.DrainAsync();
+        await A2.DisconnectAsync();
+        await MetricPins.PinEstimateAsync(A2.Db, profile, "max_hr", TimeProvider.System);
+        await MetricPins.PinMeasurementAsync(A1.Db, profile, measured, TimeProvider.System);
+        await A1.DrainAsync();
+        await A1.SyncedAsync("metric_pins", pinId);
+
+        await A2.ConnectAsync();
+        await A2.DrainAsync();
+        foreach (var device in new[] { A1, A2 })
+        {
+            await Wait.ForAsync(() => MetricPins.ListAsync(device.Db, profile), pins => pins is [{ Target: "estimate", MeasurementId: null }]);
+        }
+
+        Assert.Empty(await FailedAsync(A1, pinId));
+        Assert.Empty(await FailedAsync(A2, pinId));
+
+        // Deleting the pinned value keeps the pin on every device, so the app can say the choice is gone.
+        await MetricPins.PinMeasurementAsync(A1.Db, profile, measured, TimeProvider.System);
+        await A1.DrainAsync();
+        await Wait.ForAsync(() => MetricPins.ListAsync(A2.Db, profile), pins => pins is [{ Target: "measurement" }]);
+        await Measurements.DeleteAsync(A1.Db, profile, measured);
+        await A1.DrainAsync();
+        await Wait.ForAsync(() => IdsAsync(A2, "SELECT id AS Id FROM measurements WHERE id = ?", measured), ids => ids.Length == 0);
+        var kept = Assert.Single(await MetricPins.ListAsync(A2.Db, profile));
+        Assert.Equal(("measurement", measured), (kept.Target, kept.MeasurementId));
+
+        // B's own write coming back means B's stream has caught up past A's; Alex's pin never arrived.
+        var marker = await B.AddNoteAsync("marker");
+        await B.SyncedAsync("notes", marker);
+        Assert.Empty(await IdsAsync(B, "SELECT id AS Id FROM metric_pins"));
+        Assert.Empty(await IdsAsync(B, "SELECT row_id AS Id FROM ps_oplog WHERE row_id = ?", pinId));
+
+        // Unpinning reaches the other device too, and leaves Alex's profile as other tests expect it.
+        await MetricPins.UnpinAsync(A1.Db, profile, "max_hr");
+        await A1.DrainAsync();
+        await Wait.ForAsync(() => MetricPins.ListAsync(A2.Db, profile), pins => pins.Length == 0);
+        Assert.Empty(await FailedAsync(A1, pinId));
+    }
+
+    [Fact]
     public async Task AnOfflineEditToANoteAnotherDeviceDeletedIsQuarantinedNotLost()
     {
         var id = await A1.AddNoteAsync("to be deleted");

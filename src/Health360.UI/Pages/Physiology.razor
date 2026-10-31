@@ -32,7 +32,7 @@
         <section class="card" aria-labelledby="values-title">
             <h2 id="values-title">In use now</h2>
             <dl class="values">
-                @Row("Resting metabolic rate", profile.Rmr, v => MetricDisplay.Energy(v, prefs.Energy) + "/day", RmrMissing())
+                @Row("Resting metabolic rate", MetricCodes.Rmr, profile.Rmr, v => MetricDisplay.Energy(v, prefs.Energy) + "/day", RmrMissing())
                 <div class="value-row">
                     <dt>Maintenance energy</dt>
                     <dd>
@@ -51,18 +51,18 @@
                         }
                     </dd>
                 </div>
-                @Row("Max heart rate", profile.MaxHr, v => MetricDisplay.Format(v, "bpm"), MaxHrMissing())
-                @Row("Resting heart rate", profile.RestingHr, v => MetricDisplay.Format(v, "bpm"),
+                @Row("Max heart rate", MetricCodes.MaxHr, profile.MaxHr, v => MetricDisplay.Format(v, "bpm"), MaxHrMissing())
+                @Row("Resting heart rate", MetricCodes.RestingHr, profile.RestingHr, v => MetricDisplay.Format(v, "bpm"),
                     "Not estimated. Enter morning readings; without one, zones use % of max heart rate.")
-                @Row("Lactate threshold HR", profile.Lthr, v => MetricDisplay.Format(v, "bpm"),
+                @Row("Lactate threshold HR", MetricCodes.Lthr, profile.Lthr, v => MetricDisplay.Format(v, "bpm"),
                     "Enter a lab test or a 30-minute time trial (average HR of the last 20 minutes).")
-                @Row("VO₂max", profile.Vo2Max, v => MetricDisplay.Format(v, "ml/kg/min"),
+                @Row("VO₂max", MetricCodes.Vo2Max, profile.Vo2Max, v => MetricDisplay.Format(v, "ml/kg/min"),
                     Vo2MaxMissing())
-                @Row(ThresholdName(profile.LowerThreshold, "LT1"), profile.LowerThreshold, v => MetricDisplay.Format(v, "bpm"),
+                @Row(ThresholdName(profile.LowerThreshold, "LT1"), profile.LowerThreshold?.MetricCode ?? MetricCodes.Lt1Hr, profile.LowerThreshold, v => MetricDisplay.Format(v, "bpm"),
                     "From a lab lactate or gas-exchange test. Not estimated.")
-                @Row(ThresholdName(profile.UpperThreshold, "LT2"), profile.UpperThreshold, v => MetricDisplay.Format(v, "bpm"),
+                @Row(ThresholdName(profile.UpperThreshold, "LT2"), profile.UpperThreshold?.MetricCode ?? MetricCodes.Lt2Hr, profile.UpperThreshold, v => MetricDisplay.Format(v, "bpm"),
                     "From a lab lactate or gas-exchange test. Not estimated.")
-                @Row("Body fat", profile.BodyFat, v => MetricDisplay.Format(v, "%"), "Enter a DEXA, scale or other value on the Body tab.")
+                @Row("Body fat", MetricCodes.BodyFatPercent, profile.BodyFat, v => MetricDisplay.Format(v, "%"), "Enter a DEXA, scale or other value on the Body tab.")
                 <div class="value-row">
                     <dt>Fat-free mass</dt>
                     <dd>
@@ -78,6 +78,14 @@
                     </dd>
                 </div>
             </dl>
+            <p class="muted small">
+                To use a value other than the one chosen automatically, open "Other values on file" and choose it. It stays
+                in use, even when newer values are entered, until you go back to the best value.
+            </p>
+            @if (pinError is not null)
+            {
+                <p class="error" role="alert">@pinError</p>
+            }
         </section>
 
         <section class="card" aria-labelledby="zones-title">
@@ -206,6 +214,8 @@
 
     private PhysiologyProfile? profile;
     private string sport = "run";
+    private bool savingPin;
+    private string? pinError;
     private bool savingMedication;
     private string? medicationError;
     private int medicationRender;
@@ -225,7 +235,7 @@
     private HeartRateZones? Zones() =>
         profile?.ZonesFor(Enum.GetValues<ZoneSport>().First(s => HeartRateZoneRules.Code(s) == sport));
 
-    private RenderFragment Row(string name, ProfileValue? value, Func<double, string> format, string missing) => __builder =>
+    private RenderFragment Row(string name, string code, ProfileValue? value, Func<double, string> format, string missing) => __builder =>
     {
         <div class="value-row">
             <dt>@name</dt>
@@ -233,6 +243,12 @@
                 @if (value is null)
                 {
                     <span class="muted">@missing</span>
+                    @if (Data.Pins?.ContainsKey(code) == true)
+                    {
+                        @* The resolver had nothing at all to fall back to; the pin is still stored, so say so. *@
+                        <span class="error small">The value you chose is no longer available.</span>
+                        @PinButton("Clear my choice", $"Clear your choice for {name}", () => Data.UnpinAsync(code))
+                    }
                 }
                 else
                 {
@@ -247,9 +263,14 @@
                         <span class="badge-retest">Retest?</span>
                     }
                     <span class="muted small">@Origin(r)</span>
+                    @if (r.Pinned)
+                    {
+                        @PinButton("Go back to the best value", $"Go back to the best value for {name}", () => Data.UnpinAsync(code))
+                    }
                     @if (r.PinUnavailable)
                     {
                         <span class="error small">The value you chose is no longer available, so the next best is used.</span>
+                        @PinButton("Clear my choice", $"Clear your choice for {name}", () => Data.UnpinAsync(code))
                     }
                     @if (r.PassedOver.Count > 0 || r.EstimatePassedOver is not null)
                     {
@@ -258,11 +279,18 @@
                             <ul>
                                 @foreach (var other in r.PassedOver)
                                 {
-                                    <li>@format(other.Value): @SourceText(other)</li>
+                                    var id = other.Id.ToString();
+                                    <li>
+                                        @format(other.Value): @SourceText(other)
+                                        @PinButton("Use this", $"Use {format(other.Value)} ({SourceText(other)}) for {name}", () => Data.PinMeasurementAsync(id))
+                                    </li>
                                 }
                                 @if (r.EstimatePassedOver is { } estimate)
                                 {
-                                    <li>@format(estimate.Value): estimate, @estimate.Method</li>
+                                    <li>
+                                        @format(estimate.Value): estimate, @estimate.Method
+                                        @PinButton("Use this", $"Use the estimate, {format(estimate.Value)}, for {name}", () => Data.PinEstimateAsync(value.MetricCode))
+                                    </li>
                                 }
                             </ul>
                         </details>
@@ -272,13 +300,37 @@
         </div>
     };
 
+    private RenderFragment PinButton(string text, string label, Func<Task> save) => __builder =>
+    {
+        <button type="button" class="secondary compact" aria-label="@label" disabled="@savingPin" @onclick="() => SavePinAsync(save)">@text</button>
+    };
+
+    private async Task SavePinAsync(Func<Task> save)
+    {
+        savingPin = true;
+        pinError = null;
+        try
+        {
+            await save();
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            pinError = "Couldn't save your choice on this device. Please try again.";
+        }
+        finally
+        {
+            savingPin = false;
+        }
+    }
+
     /// <summary>Where a resolved value came from: "Lab, 1 Mar 2026" or "Mifflin-St Jeor equation, ± 5.35".</summary>
     private static string Origin(Resolution resolution) =>
-        resolution.Measurement is { } measured
-            ? SourceText(measured) + (resolution.Pinned ? ", your choice" : "")
+        (resolution.Measurement is { } measured
+            ? SourceText(measured)
             : resolution.Estimate!.StandardError is { } se
                 ? $"{resolution.Estimate.Method} equation, standard error ± {MetricDisplay.Number(se, 2)}"
-                : $"{resolution.Estimate.Method} equation";
+                : $"{resolution.Estimate.Method} equation")
+        + (resolution.Pinned ? ", your choice" : "");
 
     private static string SourceText(Measured measured) =>
         $"{MetricDisplay.SourceName(MeasurementSources.Code(measured.Source))}, {MetricDisplay.Date(measured.MeasuredOn)}";

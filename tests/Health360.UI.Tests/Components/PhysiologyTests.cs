@@ -145,4 +145,100 @@ public sealed class PhysiologyTests : AppTestContext
         var row = Assert.Single(await Measurements.ListAsync(App.Database.Db, ProfileId), r => r.MetricCode == "threshold_pace");
         Assert.Equal((270.0, "s_per_km"), (row.Value, row.Unit));
     }
+
+    private static AngleSharp.Dom.IElement ValueRow(IRenderedComponent<Routes> cut, string name) =>
+        cut.FindAll(".value-row").Single(e => e.QuerySelector("dt")!.TextContent == name);
+
+    private static AngleSharp.Dom.IElement Button(IRenderedComponent<Routes> cut, string label) =>
+        cut.FindAll("button").Single(e => e.GetAttribute("aria-label") == label);
+
+    [Fact]
+    public async Task PinningAnOlderLabValueKeepsItInUseUntilGoingBackToTheBestValue()
+    {
+        var cut = await PhysiologyAsync();
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000d1", ProfileId, "max_hr", 192, "bpm", 192, "2025-03-01", "lab");
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000d2", ProfileId, "max_hr", 200, "bpm", 200, "2026-10-01", "lab");
+        // The newest lab value wins: zone 2 starts at 73% of 200 = 146.
+        cut.WaitForAssertion(() => Assert.Contains("146 bpm", cut.Find("table.zones").TextContent, StringComparison.Ordinal), Wait);
+
+        await ClickAsync(() => Button(cut, "Use 192 bpm (Lab, 1 Mar 2025) for Max heart rate"));
+
+        // 73% of 192 = 140.16.
+        cut.WaitForAssertion(() => Assert.Contains("140 bpm", cut.Find("table.zones").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Contains("Lab, 1 Mar 2025, your choice", ValueRow(cut, "Max heart rate").TextContent, StringComparison.Ordinal);
+        var pin = Assert.Single(await MetricPins.ListAsync(App.Database.Db, ProfileId));
+        Assert.Equal(("max_hr", "measurement", "0192f0c0-0000-7000-8000-0000000000d1"), (pin.MetricCode, pin.Target, pin.MeasurementId));
+
+        // A newer value doesn't replace a pinned one.
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000d3", ProfileId, "max_hr", 205, "bpm", 205, "2026-10-29", "lab");
+        cut.WaitForAssertion(() => Assert.Contains("205 bpm", ValueRow(cut, "Max heart rate").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Contains("140 bpm", cut.Find("table.zones").TextContent, StringComparison.Ordinal);
+
+        await ClickAsync(() => Button(cut, "Go back to the best value for Max heart rate"));
+
+        // 73% of 205 = 149.65.
+        cut.WaitForAssertion(() => Assert.Contains("150 bpm", cut.Find("table.zones").TextContent, StringComparison.Ordinal), Wait);
+        Assert.DoesNotContain("your choice", ValueRow(cut, "Max heart rate").TextContent, StringComparison.Ordinal);
+        Assert.Empty(await MetricPins.ListAsync(App.Database.Db, ProfileId));
+    }
+
+    [Fact]
+    public async Task TheEstimateCanBePinnedOverAMeasuredValue()
+    {
+        var cut = await PhysiologyAsync();
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000d4", ProfileId, "max_hr", 200, "bpm", 200, "2026-10-01", "field_test");
+        cut.WaitForAssertion(() => Assert.Contains("146 bpm", cut.Find("table.zones").TextContent, StringComparison.Ordinal), Wait);
+
+        await ClickAsync(() => Button(cut, "Use the estimate, 187 bpm, for Max heart rate"));
+
+        cut.WaitForAssertion(() => Assert.Contains("137 bpm", cut.Find("table.zones").TextContent, StringComparison.Ordinal), Wait);
+        var row = ValueRow(cut, "Max heart rate").TextContent;
+        Assert.Contains("Estimate", row, StringComparison.Ordinal);
+        Assert.Contains("equation, your choice", row, StringComparison.Ordinal);
+        Assert.Equal("estimate", Assert.Single(await MetricPins.ListAsync(App.Database.Db, ProfileId)).Target);
+    }
+
+    [Fact]
+    public async Task APinWhoseValueWasDeletedIsReportedAndCanBeCleared()
+    {
+        var cut = await PhysiologyAsync();
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000d5", ProfileId, "max_hr", 200, "bpm", 200, "2026-10-01", "lab");
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000d6", ProfileId, "max_hr", 195, "bpm", 195, "2026-09-01", "lab");
+        await MetricPins.PinMeasurementAsync(App.Database.Db, ProfileId, "0192f0c0-0000-7000-8000-0000000000d6", TimeProvider.System);
+        cut.WaitForAssertion(() => Assert.Contains("your choice", ValueRow(cut, "Max heart rate").TextContent, StringComparison.Ordinal), Wait);
+
+        // Deleted (on this device or, once synced, another): the next best is used and the user is told.
+        await Measurements.DeleteAsync(App.Database.Db, ProfileId, "0192f0c0-0000-7000-8000-0000000000d6");
+
+        cut.WaitForAssertion(() => Assert.Contains("no longer available, so the next best is used", ValueRow(cut, "Max heart rate").TextContent,
+            StringComparison.Ordinal), Wait);
+        Assert.Contains("200 bpm", ValueRow(cut, "Max heart rate").TextContent, StringComparison.Ordinal);
+        Assert.Single(await MetricPins.ListAsync(App.Database.Db, ProfileId));
+
+        await ClickAsync(() => Button(cut, "Clear your choice for Max heart rate"));
+
+        cut.WaitForAssertion(() => Assert.DoesNotContain("no longer available", ValueRow(cut, "Max heart rate").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(await MetricPins.ListAsync(App.Database.Db, ProfileId));
+    }
+
+    [Fact]
+    public async Task APinWithNothingLeftToFallBackOnIsStillReported()
+    {
+        // Resting HR has no estimate, so once its only value is deleted there is no value at all.
+        var cut = await PhysiologyAsync();
+        await App.Database.SeedMeasurementAsync("0192f0c0-0000-7000-8000-0000000000d7", ProfileId, "resting_hr", 52, "bpm", 52, "2026-10-29");
+        await MetricPins.PinMeasurementAsync(App.Database.Db, ProfileId, "0192f0c0-0000-7000-8000-0000000000d7", TimeProvider.System);
+        cut.WaitForAssertion(() => Assert.Contains("your choice", ValueRow(cut, "Resting heart rate").TextContent, StringComparison.Ordinal), Wait);
+
+        await Measurements.DeleteAsync(App.Database.Db, ProfileId, "0192f0c0-0000-7000-8000-0000000000d7");
+
+        cut.WaitForAssertion(() => Assert.Contains("The value you chose is no longer available.", ValueRow(cut, "Resting heart rate").TextContent,
+            StringComparison.Ordinal), Wait);
+        Assert.Contains("Not estimated", ValueRow(cut, "Resting heart rate").TextContent, StringComparison.Ordinal);
+
+        await ClickAsync(() => Button(cut, "Clear your choice for Resting heart rate"));
+
+        cut.WaitForAssertion(() => Assert.DoesNotContain("no longer available", ValueRow(cut, "Resting heart rate").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(await MetricPins.ListAsync(App.Database.Db, ProfileId));
+    }
 }

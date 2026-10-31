@@ -233,6 +233,8 @@ Implements PLAN.md §2.8 for each metric:
 
 Pinning a measurement, rather than a source tier, lets a user keep an older lab value they trust. When the sync window arrives, pinned measurements and current winners must stay synced at any age.
 
+Pins are stored in `metric_pins`, one row per profile and metric (target `measurement` with its id, or `estimate`). The row id is a UUIDv8 from SHA-256 of `health360/metric_pins/<profile id>/<metric code>` (`UuidV8.FromName`; the server's `private.metric_pin_id` checks it), so the same metric pinned on two offline devices ends as one row, the later upload winning. Deleting a pinned measurement keeps the pin; the Physiology screen then shows that the choice is no longer available (with the next value in use, or none) and offers to clear it. The screen pins from each value's "Other values on file" and unpins with "Go back to the best value" (`PhysiologyTests`).
+
 Deleting a measurement re-resolves straight away: the next measured value, then the estimate (`ResolverTests`).
 
 ## Putting the profile together

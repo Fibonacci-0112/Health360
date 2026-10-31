@@ -114,6 +114,18 @@ public static class AppSchema
         ("effective_from", ColumnType.Text),
         ("group_id", ColumnType.Text));
 
+    /// <summary>
+    /// U: the value the user chose for one metric, a measurement or the estimate (PLAN.md §2.8). One row per profile
+    /// and metric, with an id derived from both (<see cref="MetricPins.IdFor"/>). The server copies <c>category</c>
+    /// from the metric.
+    /// </summary>
+    public static Table MetricPinsTable { get; } = Synced("metric_pins",
+        ("profile_id", ColumnType.Text),
+        ("metric_code", ColumnType.Text),
+        ("category", ColumnType.Text),
+        ("target", ColumnType.Text),
+        ("measurement_id", ColumnType.Text));
+
     /// <summary>Phase 0 throwaway table that proves sync on every target.</summary>
     public static Table Notes { get; } = Synced("notes",
         ("profile_id", ColumnType.Text),
@@ -140,7 +152,7 @@ public static class AppSchema
     public static IReadOnlyList<Table> Tables { get; } =
         [
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
-            MeasurementGroups, Measurements, ZoneSets, Notes, FailedUploadsTable,
+            MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, Notes, FailedUploadsTable,
         ];
 
     public static Schema Schema { get; } = new([.. Tables]);
@@ -183,7 +195,7 @@ public static class AppSchema
     /// <summary>Tables the client may write. Everything else synced is read-only on the client.</summary>
     public static IReadOnlySet<string> UploadableTables { get; } =
         new HashSet<string>(
-            ["profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "notes"],
+            ["profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins", "notes"],
             StringComparer.Ordinal);
 
     private static Table Synced(string name, params (string Name, ColumnType Type)[] columns) =>
