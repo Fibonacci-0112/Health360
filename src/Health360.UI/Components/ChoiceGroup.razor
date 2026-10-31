@@ -4,7 +4,7 @@
     {
         var selected = option == Value;
         <button type="button" role="radio" aria-checked="@(selected ? "true" : "false")"
-                class="chip @(selected ? "on" : "")" @onclick="() => Choose(option)">
+                class="chip @(selected ? "on" : "")" disabled="@Disabled" @onclick="() => Choose(option)">
             @(Labels.TryGetValue(option, out var label) ? label : option)
         </button>
     }
@@ -25,6 +25,10 @@
 
     [Parameter]
     public bool AllowNone { get; set; }
+
+    /// <summary>Locks the choices, for example while the answer is being saved.</summary>
+    [Parameter]
+    public bool Disabled { get; set; }
 
     /// <summary>The id of the element that names the group.</summary>
     [Parameter, EditorRequired]

@@ -132,7 +132,7 @@
                 participated regularly in recreation or work requiring modest physical activity? Or that you participated
                 regularly in heavy physical exercise?
             </span>
-            <ChoiceGroup LabelledBy="activity-q1" Options="RegularCodes" Labels="RegularNames" Value="@regular"
+            <ChoiceGroup LabelledBy="activity-q1" Disabled="savingRating" Options="RegularCodes" Labels="RegularNames" Value="@regular"
                          ValueChanged="code => { regular = code; followUp = null; }" />
             <p class="muted small">
                 Modest: walking, calisthenics, bowling, weight lifting, yard work. Heavy: jogging, swimming, cycling, rowing,
@@ -141,7 +141,7 @@
             @if (FollowUp() is var (question, options, labels))
             {
                 <span class="label" id="activity-q2">@question</span>
-                <ChoiceGroup LabelledBy="activity-q2" Options="options" Labels="labels" Value="@followUp" ValueChanged="code => followUp = code" />
+                <ChoiceGroup LabelledBy="activity-q2" Disabled="savingRating" Options="options" Labels="labels" Value="@followUp" ValueChanged="code => followUp = code" />
             }
 
             <div class="choices">
@@ -394,7 +394,7 @@
             ? "Enter a lab or field test result. The estimate that uses a resting heart rate isn't available yet."
             : profile.Inputs.ActivityRating is null
                 ? "Enter a lab or field test result, or answer the activity questions below for an estimate."
-                : "Enter a lab or field test result. An estimate needs your birth date, sex, height and a weigh-in.";
+                : "Enter a lab or field test result. An estimate needs your birth date and sex, plus a body-fat value or your height and a weigh-in.";
 
     private async Task SaveRatingAsync(int? rating)
     {
