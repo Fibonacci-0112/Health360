@@ -1,6 +1,6 @@
 # Phase 0: foundation and risk tests
 
-> **Stack change (2026-10-30):** [ADR 0002](adr/0002-dotnet-maui-blazor.md) moves Health360 to .NET MAUI (Android, Windows) and an ASP.NET Core API, and drops the web app, Apple and Linux desktop. This page records the **TypeScript prototype**. Its database, RLS and sync results still apply: the migrations, pgTAP tests and `powersync/sync-config.yaml` carry over. The Expo and Tauri findings are history. The .NET foundation is Phase 0b in [PLAN.md §3](PLAN.md).
+> **Stack change (2026-10-30):** [ADR 0002](adr/0002-dotnet-maui-blazor.md) moves Health360 to .NET MAUI (Android, Windows) and an ASP.NET Core API, and drops the web app, Apple and Linux desktop. This page records the **TypeScript prototype**, which has since been removed (see [Running it](#running-it)). Its database, RLS and sync results still apply: the migrations, pgTAP tests and `powersync/sync-config.yaml` carry over. The Expo and Tauri findings are history. The .NET foundation is Phase 0b in [PLAN.md §3](PLAN.md).
 
 Status of [PLAN.md §3 Phase 0](PLAN.md). The code is done and tested in CI and locally. What's left needs your accounts and devices: cloud projects, the Android dev build, and the six-target check.
 
@@ -54,33 +54,9 @@ Both failure paths also worked as designed: the rejected writes in 3 and 4 were 
 - **`ai-hello` without `ANTHROPIC_API_KEY`** answers 503 `not_configured` instead of crashing on start.
 - **Lost edits.** An update that matched no row (hidden by RLS, or deleted on another device) used to look like success. It now goes to `failed_uploads`, and a retried transaction no longer duplicates entries there.
 
-## Running it locally
+## Running it
 
-Prerequisites: Node 22.18 or later (for its built-in TypeScript stripping), pnpm 10, Docker, the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started), and Deno 2 for Edge Function tests.
-
-```sh
-pnpm install
-pnpm typecheck && pnpm lint && pnpm test
-
-supabase start                                    # Postgres, Auth, REST; applies migrations and seed.sql
-supabase test db                                  # pgTAP
-DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres pnpm drift:check
-
-docker compose -f powersync/docker-compose.yml up -d   # PowerSync on :8080
-
-# Two-client leak and offline tests (keys from `supabase status`):
-SYNC_E2E=1 SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=... \
-  POWERSYNC_URL=http://127.0.0.1:8080 pnpm --filter @health360/e2e-sync test
-
-cp apps/app/.env.example apps/app/.env            # fill in the anon key
-pnpm --filter @health360/app web                  # sign-in codes arrive in Mailpit: http://127.0.0.1:54324
-```
-
-Without Docker images for Supabase, `pnpm db:test:local` runs the migrations and pgTAP against a plain local Postgres with pgTAP installed (`tools/db/test-local.sh`).
-
-Edge Function: `cd supabase/functions/ai-hello && deno test`. After changing `packages/domain` or `packages/schemas`, run `pnpm codegen`; CI fails if the copy in `supabase/functions/_shared/generated` is stale.
-
-Desktop: `pnpm --filter @health360/desktop dev` (needs Rust, and on Linux the WebKitGTK 4.1 dev packages listed in the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)).
+The prototype was removed on 2026-10-31, after the PowerSync .NET gate passed ([phase0b.md](phase0b.md#notes-sync-test)). Its code (`apps/`, `packages/`, `e2e/sync/`, `supabase/functions/`, `tools/codegen/`) is in the git history before that date. To run the backend and the .NET app locally, see [phase0b.md](phase0b.md#running-it). Without Docker, `bash tools/db/test-local.sh` runs the migrations and pgTAP tests against a plain local Postgres with pgTAP installed.
 
 ## Cloud setup (needs your accounts)
 
@@ -92,6 +68,9 @@ Desktop: `pnpm --filter @health360/desktop dev` (needs Rust, and on Linux the We
    alter default privileges in schema public grant select on tables to powersync_role;
    ```
    Turn on Supabase auth in the instance's client-auth settings and deploy `powersync/sync-config.yaml`.
+
+Steps 3 to 6 below set up the removed prototype and are kept for the record; the .NET app's build settings are in [phase0b.md](phase0b.md#maui-app).
+
 3. **Edge Function:** `supabase secrets set ANTHROPIC_API_KEY=...`, `supabase functions deploy ai-hello`, then call it once while signed in (`callAiHello` in `packages/api`). That's the live structured-output call; CI only uses recorded responses.
 4. **App config:** set `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY` and `EXPO_PUBLIC_POWERSYNC_URL` for each build. If PowerSync or Supabase use a custom domain, add it to `connect-src` in `apps/desktop/src-tauri/tauri.conf.json`.
 5. **Android dev client:** `cd apps/app && eas build --profile development --platform android`.

@@ -21,8 +21,8 @@ public enum SessionStatus
 }
 
 /// <summary>
-/// A valid signature only proves Auth issued the token at some point. Asking Auth for the user, as
-/// <c>authenticateUser</c> does in the Edge Functions, also rejects tokens of signed-out sessions
+/// A valid signature only proves Auth issued the token at some point. Asking Auth for the user
+/// also rejects tokens of signed-out sessions
 /// and deleted users before they expire. Confirmed sessions are cached briefly, so a sign-out takes
 /// effect within <see cref="SupabaseAuthOptions.SessionCacheDuration"/>.
 /// </summary>

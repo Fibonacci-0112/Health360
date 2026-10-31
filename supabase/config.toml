@@ -161,8 +161,8 @@ site_url = "http://localhost:8081"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-# Expo web dev server, the Tauri webview, and the native app scheme.
-additional_redirect_urls = ["http://localhost:8081", "http://tauri.localhost", "tauri://localhost", "health360://"]
+# The native app scheme. Sign-in uses emailed codes, so the app itself needs no redirect.
+additional_redirect_urls = ["health360://"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -379,8 +379,9 @@ authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
 allow_dynamic_registration = false
 
+# No Edge Functions: the ASP.NET Core API (src/Health360.Server) replaces them (ADR 0002).
 [edge_runtime]
-enabled = true
+enabled = false
 # Supported request policies: `oneshot`, `per_worker`.
 # `per_worker` (default) — enables hot reload during local development.
 # `oneshot` — fallback mode if hot reload causes issues (e.g. in large repos or with symlinks).
@@ -389,12 +390,6 @@ policy = "per_worker"
 inspector_port = 8083
 # The Deno major version to use.
 deno_version = 2
-
-[edge_runtime.secrets]
-ANTHROPIC_API_KEY = "env(ANTHROPIC_API_KEY)"
-
-[functions.ai-hello]
-verify_jwt = true
 
 [analytics]
 enabled = true

@@ -76,7 +76,7 @@ Health360/
   e2e/                      maestro/ windows/
   docs/                     PLAN.md FEATURES.md adr/
 ```
-The repository still holds the Phase 0 TypeScript prototype (`apps/`, `packages/`, `supabase/functions/`, `tools/codegen/`, `e2e/sync/`). Phase 0b (§3) replaces it with this layout (the solution and `src/`/`tests/` projects are scaffolded; status in [phase0b.md](phase0b.md)); `supabase/migrations`, `supabase/tests` and `powersync/` carry over unchanged.
+The Phase 0 TypeScript prototype (`apps/`, `packages/`, `supabase/functions/`, `tools/codegen/`, `e2e/sync/`) was removed on 2026-10-31, after the PowerSync .NET gate passed; it remains in the git history. `supabase/migrations`, `supabase/tests` and `powersync/` carried over unchanged. Phase 0b status is in [phase0b.md](phase0b.md).
 
 ### 2.3 Data model (Postgres; compact)
 
@@ -301,7 +301,7 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
 - An API request with the anon key, an expired token or another user's ids is rejected or sees no data (integration tests).
 - CI is green.
 - **PowerSync .NET gate:** if the beta SDK fails these criteria, the fallback (a SQLite outbox uploaded through the API plus a pull of changed rows) is recorded in an ADR before Phase 1.
-- The TypeScript prototype is removed once the gate passes.
+- The TypeScript prototype is removed once the gate passes. **Done** (2026-10-31).
 
 ### Phase 1: MVP
 1. **Body and photos**

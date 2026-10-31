@@ -13,23 +13,6 @@ permissions:
   contents: read
 
 jobs:
-  checks:
-    name: Typecheck, lint, unit tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm test
-      - name: Edge Functions use an up-to-date copy of packages/domain and packages/schemas
-        run: pnpm codegen:check
-
   dotnet:
     name: .NET build, format, tests
     runs-on: ubuntu-latest
@@ -83,40 +66,17 @@ jobs:
       - run: dotnet workload install maui-windows --version 10.0.403
       - run: dotnet build src/Health360.Maui -c Release -f net10.0-windows10.0.19041.0 -p:ContinuousIntegrationBuild=true
 
-  functions:
-    name: Edge Functions (Deno)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-      - working-directory: supabase/functions/ai-hello
-        run: |
-          deno check index.ts handler.ts
-          deno test --no-prompt
-
   database:
     name: Database (pgTAP, lint, drift)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
       - uses: supabase/setup-cli@v1
         with:
           version: 2.122.0
-      - run: pnpm install --frozen-lockfile
       - run: supabase db start
       - run: supabase test db
       - run: supabase db lint --level warning --fail-on error
-      - name: Client schema matches Postgres
-        run: pnpm drift:check
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -139,15 +99,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
       - uses: supabase/setup-cli@v1
         with:
           version: 2.122.0
-      - run: pnpm install --frozen-lockfile
       - name: Start Supabase (database, auth and REST only)
         run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,storage-api,postgres-meta
       - name: Export Supabase settings
@@ -169,16 +123,11 @@ jobs:
           done
           docker compose -f powersync/docker-compose.yml logs powersync
           exit 1
-      - name: Leak and offline tests
-        run: pnpm --filter @health360/e2e-sync test
-        env:
-          SYNC_E2E: '1'
-          POWERSYNC_URL: http://127.0.0.1:8080
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      # The same checks through the MAUI app's sync stack (Health360.LocalDb), on the same stack.
-      - name: Leak and offline tests (.NET)
+      # Leak and offline tests through the MAUI app's sync stack (Health360.LocalDb).
+      - name: Leak and offline tests
         run: dotnet test --project tests/Health360.Sync.Tests -c Release -p:ContinuousIntegrationBuild=true
         env:
           DOTNET_NOLOGO: '1'

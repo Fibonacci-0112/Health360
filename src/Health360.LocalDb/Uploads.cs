@@ -24,8 +24,7 @@ public enum RetryResult
 }
 
 /// <summary>
-/// Uploads the local write queue and keeps the <c>failed_uploads</c> quarantine (PLAN.md §4). Ports
-/// <c>packages/local-db/src/upload.ts</c>; keep the two identical while the prototype exists.
+/// Uploads the local write queue and keeps the <c>failed_uploads</c> quarantine (PLAN.md §4).
 /// </summary>
 public static partial class Uploads
 {

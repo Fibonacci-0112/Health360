@@ -19,7 +19,7 @@ public sealed record ServerColumn(string Table, string Column, string DataType);
 /// </summary>
 public static class SchemaDrift
 {
-    /// <summary>How PowerSync stores each Postgres type the migrations use. Same map as check-drift.mjs.</summary>
+    /// <summary>How PowerSync stores each Postgres type the migrations use.</summary>
     private static readonly Dictionary<string, ColumnType> SqliteType = new(StringComparer.Ordinal)
     {
         ["text"] = ColumnType.Text,

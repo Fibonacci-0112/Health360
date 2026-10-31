@@ -72,7 +72,7 @@ public sealed class OnboardingFormValidator : AbstractValidator<OnboardingForm>
 public sealed record HeightValue(double Height, string HeightUnit, double HeightCm);
 
 /// <summary>
-/// The height fields as typed. Ports <c>apps/app/src/features/onboarding/height.ts</c>: numbers are read
+/// The height fields as typed. Ports the prototype's <c>height.ts</c>: numbers are read
 /// as JavaScript's <c>Number</c> reads them after a decimal comma becomes a point.
 /// </summary>
 public sealed record HeightEntry(string? Cm = null, string? Feet = null, string? Inches = null)

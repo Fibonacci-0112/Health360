@@ -1,6 +1,6 @@
 # Phase 0b: .NET foundation
 
-Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0002-dotnet-maui-blazor.md)). The deliverables and exit criteria are in [PLAN.md §3](PLAN.md). The TypeScript prototype ([phase0.md](phase0.md)) stays in place and in CI until the PowerSync .NET gate passes.
+Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0002-dotnet-maui-blazor.md)). The deliverables and exit criteria are in [PLAN.md §3](PLAN.md). The TypeScript prototype ([phase0.md](phase0.md)) stayed in place and in CI until the PowerSync .NET gate passed, and was removed on 2026-10-31. Where this page says a part "ports" prototype code, that code is in the git history before that date.
 
 ## Status
 
@@ -11,7 +11,8 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 | `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | **Auth and user-scoped queries done** (see [API authentication](#api-authentication)), with `/me` and `/profiles/{id}` as the first endpoints. **Test Claude call started:** `POST /ai/hello` (see [Claude calls](#claude-calls)), tested against recorded responses only. The live run is deferred to Phase 1's first AI endpoint (`ai-label-ocr`, PLAN.md §3), because nothing before it calls Claude |
 | MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | **Built; run on Android (emulator) and Windows** (see [MAUI app](#maui-app)): sign-in by emailed code, onboarding with every unit type and locale defaults, the five tabs and Settings (units, rejected writes with retry and discard, sign-out), syncing over the existing `me`, `household` and `reference` streams. The app's services (everything below the BlazorWebView) were run against `supabase start` and the local PowerSync: emailed-code sign-in, the profile arriving over `me`, onboarding reaching the server, an RLS-rejected write quarantined without blocking the queue, and a second user never receiving the first user's rows. Run on Windows and in the Android emulator (sign-in, onboarding, notes) |
 | Throwaway `notes` table on Android and Windows | **Done on Android and Windows** (see [Notes sync test](#notes-sync-test)): the Today tab adds and lists notes through the local database. Two-device sync, kill-while-offline on both targets, and the two-user check passed. The two-client leak test also runs on the .NET sync stack (see [Two-client sync test](#two-client-sync-test)) |
-| `tools/drift` against the PowerSync .NET schema | **Done for `AppSchema`** (see [Schema drift](#schema-drift)): runs in CI's database job next to `tools/codegen/check-drift.mjs`, which still checks the TypeScript client schema. The C# contracts are not compared yet |
+| `tools/drift` against the PowerSync .NET schema | **Done for `AppSchema`** (see [Schema drift](#schema-drift)): runs in CI's database job. The C# contracts are not compared yet |
+| Remove the TypeScript prototype once the gate passes | **Done** (2026-10-31): `apps/`, `packages/`, `e2e/sync/`, `supabase/functions/`, `tools/codegen/` and the pnpm workspace are gone, and so are their CI jobs |
 
 ## What the scaffold contains
 
@@ -24,7 +25,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 
 ## Units and ids
 
-`src/Health360.Domain/Units` ports `packages/domain/src/units` and `Ids/UuidV7.cs` ports `src/ids`. The TypeScript copy stays the prototype's source until the prototype is retired; keep the two identical.
+`src/Health360.Domain/Units` ports `packages/domain/src/units` and `Ids/UuidV7.cs` ports `src/ids`. Stored rows were written by both stacks, so don't change the factors, the evaluation order or the codes.
 
 - Units are `Unit` singletons (`Unit.Pound`, `Unit.Parse("lb")`) carrying the database code. Unit preferences are enums, and `UnitPrefOptions` maps them to the codes stored in `profiles.unit_prefs` (the same codes as `UNIT_PREF_OPTIONS`).
 - Conversions evaluate `value × a.num × b.den / (a.den × b.num)` in the same order as the TypeScript, so both stacks produce the same doubles. This was checked bit for bit against the TypeScript on about 38,700 inputs (conversions, rounding, stone/feet display, pace, protein ratio, UUIDv7 bytes, locale defaults).
@@ -85,7 +86,7 @@ Tests: `AiHelloTests` runs the real SDK against `FakeAnthropic`, an HTTP handler
 
 ## Local database
 
-`src/Health360.LocalDb` ports `packages/local-db` (schema and upload queue) and the upload writer in `packages/api`. It is a plain `net10.0` library, not part of the MAUI project, so it builds and is tested in `Health360.Core.slnf` on Linux; the MAUI app only supplies the platform SQLite (`src/Health360.Maui/Data`). Keep it identical to the TypeScript while both exist.
+`src/Health360.LocalDb` ports `packages/local-db` (schema and upload queue) and the upload writer in `packages/api`. It is a plain `net10.0` library, not part of the MAUI project, so it builds and is tested in `Health360.Core.slnf` on Linux; the MAUI app only supplies the platform SQLite (`src/Health360.Maui/Data`).
 
 - **SDK:** `PowerSync.Common` and `PowerSync.Maui` 1.0.0, pinned together in `Directory.Packages.props`. The README still calls the SDK beta, so the gate in PLAN.md §3 stands.
 - `AppSchema` mirrors `schema.ts` table for table: the same columns and types, `failed_uploads` local only, and the same `ServerColumnTypes`, `InsertOnlyTables` and `UploadableTables`.
@@ -150,7 +151,7 @@ Tests: `NotesTests` in `Health360.LocalDb.Tests` (id, local date across midnight
 
 It checks that each device starts with only its own profile and household; that a note written offline on A1 reaches A2 within 5 s of reconnecting (measured from `ConnectAsync`, with the app's 2 s retry delay); that B never receives A's rows (B waits for its own note to come back first, so the stream has caught up); that jsonb goes up as an object and the server recomputes `height_cm`; that an offline edit to a note another device deleted is quarantined as `PGRST116` and stays rejected on retry; that a consent delete RLS silently blocks is quarantined as `42501` and sync puts the row back; that a forged write into another profile is quarantined (`42501`) without blocking the next write, and the connector's log line holds no id or note text; and, beyond the prototype's test, that a second user signing in on the same install without a sign-out gets a cleared database and the first user's unsent write never reaches the server.
 
-Every test is skipped unless `SYNC_E2E=1` (trait `Category=Sync`), so the main `dotnet test` run skips them; CI's sync job runs them after the TypeScript ones, against the same stack and environment:
+Every test is skipped unless `SYNC_E2E=1` (trait `Category=Sync`), so the main `dotnet test` run skips them; CI's sync job runs them against this stack and environment:
 
 ```sh
 supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,storage-api,postgres-meta
@@ -169,6 +170,18 @@ dotnet test --solution Health360.Core.slnf
 dotnet format Health360.Core.slnf --verify-no-changes
 dotnet run --project src/Health360.Server      # http://localhost:5080/health; needs the settings in "API authentication"
 ```
+
+The local backend (Docker and the Supabase CLI):
+
+```sh
+supabase start                                          # Postgres, Auth, REST; applies migrations and seed.sql
+supabase test db                                        # pgTAP
+supabase db lint --level warning --fail-on error
+HEALTH360_DRIFT_DATABASE='Host=127.0.0.1;Port=54322;Username=postgres;Password=postgres;Database=postgres' dotnet run --project tools/drift
+docker compose -f powersync/docker-compose.yml up -d    # PowerSync on :8080
+```
+
+Without Docker, `bash tools/db/test-local.sh` runs the migrations and pgTAP tests against a plain local Postgres with pgTAP installed.
 
 The MAUI app needs a workload:
 
@@ -206,7 +219,7 @@ The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54
 |---|---|---|
 | `.NET build, format, tests` | Linux | locked restore, `dotnet format --verify-no-changes`, Release build, `dotnet test` on `Health360.Core.slnf` |
 | `Database (pgTAP, lint, drift)` | Linux | also `tools/drift` (`AppSchema` against the migrations) and the API's database tests (`Category=Database`) against `supabase db start` |
-| `Two-client sync (Supabase + PowerSync)` | Linux | the TypeScript `e2e/sync` tests, then `tests/Health360.Sync.Tests` (`SYNC_E2E=1`) against `supabase start` and the local PowerSync |
+| `Two-client sync (Supabase + PowerSync)` | Linux | `tests/Health360.Sync.Tests` (`SYNC_E2E=1`) against `supabase start` and the local PowerSync |
 | `MAUI app (Android build)` | Linux | `maui-android` workload, Android SDK components, Release build |
 | `MAUI app (Windows build)` | Windows | `maui-windows` workload, Release build |
 

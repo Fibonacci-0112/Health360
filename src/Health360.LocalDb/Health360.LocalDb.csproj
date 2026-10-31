@@ -2,7 +2,7 @@
 
   <!--
     The app's offline database: the PowerSync client schema, the upload connector and the
-    failed_uploads quarantine (ports packages/local-db and packages/api's writer). A plain library,
+    failed_uploads quarantine. A plain library,
     not part of the MAUI project, so it builds and is tested on every OS without a workload; the
     MAUI app supplies the platform's SQLite factory and the signed-in session.
   -->

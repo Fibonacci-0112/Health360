@@ -7,8 +7,7 @@ namespace Health360.LocalDb;
 
 /// <summary>
 /// Uploads through PostgREST with the user's own session, so every write passes the same RLS the
-/// pgTAP tests check. PUT is an upsert because PowerSync replays a whole row for inserts. Ports
-/// <c>packages/api/src/writer.ts</c>.
+/// pgTAP tests check. PUT is an upsert because PowerSync replays a whole row for inserts.
 /// </summary>
 /// <param name="http">A client whose base address is the Supabase project URL.</param>
 /// <param name="session">The signed-in session whose access token every request carries.</param>

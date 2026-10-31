@@ -6,7 +6,7 @@ namespace Health360.Sync.Tests;
 /// <summary>
 /// Phase 0b exit criteria (PLAN.md §3), through the app's own .NET sync stack: a note written offline
 /// reaches a second device within about 5 seconds of reconnecting, and user B never receives it. pgTAP
-/// proves the RLS half; this proves the Sync Streams half. Ports e2e/sync/src/sync.test.ts. Each test
+/// proves the RLS half; this proves the Sync Streams half. Each test
 /// makes its own rows, so they pass in any order.
 /// </summary>
 [Trait("Category", "Sync")]

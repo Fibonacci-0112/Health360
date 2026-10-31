@@ -2,8 +2,7 @@
 
   <!--
     Schema-drift check (PLAN.md §2.2, §4): compares the PowerSync client schema (Health360.LocalDb's
-    AppSchema) with the tables a migrated Postgres publishes to PowerSync. Replaces
-    tools/codegen/check-drift.mjs once the TypeScript prototype is gone.
+    AppSchema) with the tables a migrated Postgres publishes to PowerSync.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>

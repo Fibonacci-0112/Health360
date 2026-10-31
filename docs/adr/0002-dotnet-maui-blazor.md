@@ -49,7 +49,7 @@ The API was chosen so that deterministic calculations and AI-output validation a
 - **PowerSync .NET is beta** (v0.1.x in May 2026). Phase 0b tests it on Android and Windows. If it fails, the fallback is recorded in a new ADR.
 - **A new server to secure and host:** the API runs as its own ASP.NET Core app (a small container or VPS). It validates the Supabase JWT and the signed-in user on every request and calls Postgres as that user, so RLS still applies. The service-role key is used only for admin jobs and never reaches a client.
 - **No over-the-air updates:** Android fixes ship through Google Play (or an APK), Windows fixes through the installer's auto-update, and API fixes by redeploying the API.
-- **Retired:** the Expo app (including its web/PWA build), the Tauri shell, Supabase Edge Functions, and the TypeScript `packages/*`. They remain in the repository as the Phase 0 prototype until Phase 0b replaces them ([phase0.md](../phase0.md)).
+- **Retired:** the Expo app (including its web/PWA build), the Tauri shell, Supabase Edge Functions, and the TypeScript `packages/*`. They stayed in the repository as the Phase 0 prototype until Phase 0b replaced them, and were removed on 2026-10-31 ([phase0.md](../phase0.md)).
 - **Carried over unchanged:** the Postgres migrations, RLS policies and pgTAP tests, `powersync/sync-config.yaml`, the data model, the unit conventions and exact conversion factors, and the privacy and AI rules.
 - **Desktop:** MAUI on WinUI 3, unpackaged, with an installer and auto-updater (Velopack), so a code-signing certificate stays optional for family use.
 - **CI:** Linux runners for most jobs; a Windows runner for the Windows build and smoke tests.

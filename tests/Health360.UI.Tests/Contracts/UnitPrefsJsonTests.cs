@@ -5,7 +5,7 @@ namespace Health360.UI.Tests.Contracts;
 
 public class UnitPrefsJsonTests
 {
-    // JSON.stringify(METRIC_PREFS) in packages/domain: the prototype reads what this app writes.
+    // What the Phase 0 prototype wrote (JSON.stringify(METRIC_PREFS)), so stored rows still read back.
     private const string MetricJson =
         """{"bodyWeight":"kg","load":"kg","height":"cm","circumference":"cm","distance":"km","shortDistance":"m","pace":"min_per_km","foodMass":"g","volume":"ml","energy":"kcal","temperature":"C","glucose":"mmol/L","labValues":"si","proteinRatio":"g_per_kg"}""";
 

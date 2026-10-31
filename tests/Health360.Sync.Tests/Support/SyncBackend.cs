@@ -6,8 +6,8 @@ using System.Text.Json.Nodes;
 namespace Health360.Sync.Tests.Support;
 
 /// <summary>
-/// The local stack (<c>supabase start</c> plus <c>powersync/docker-compose.yml</c>), from the same
-/// environment variables as e2e/sync. Users are made through the Auth admin API with the service-role
+/// The local stack (<c>supabase start</c> plus <c>powersync/docker-compose.yml</c>), from environment
+/// variables. Users are made through the Auth admin API with the service-role
 /// key, which only this test harness holds; every device signs in with a password and from then on
 /// uses the publishable key and its own access token, as the app does. Without <c>SYNC_E2E=1</c> the
 /// tests are skipped.
