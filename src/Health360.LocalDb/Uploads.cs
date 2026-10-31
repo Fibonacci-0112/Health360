@@ -197,6 +197,14 @@ public static partial class Uploads
         switch (op)
         {
             case UpdateType.PUT:
+                if (AppSchema.NullableOnPut.TryGetValue(table, out var nullable))
+                {
+                    foreach (var column in nullable.Where(c => !data.ContainsKey(c)))
+                    {
+                        data[column] = null;
+                    }
+                }
+
                 await writer.PutAsync(table, id, data, cancellationToken).ConfigureAwait(false);
                 break;
             case UpdateType.PATCH:

@@ -87,6 +87,7 @@ public class MetricPinsTests
         Assert.DoesNotContain(writes, w => w.Op == "PATCH");
         var last = writes[^1];
         Assert.Equal(("PUT", "estimate"), (last.Op, last.Data!["target"]!.GetValue<string>()));
+        Assert.True(last.Data.ContainsKey("measurement_id"), "measurement_id must be sent: " + last.Data.ToJsonString());
         Assert.Null(last.Data["measurement_id"]?.GetValue<string>());
     }
 

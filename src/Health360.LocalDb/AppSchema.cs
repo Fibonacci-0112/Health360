@@ -192,6 +192,18 @@ public static class AppSchema
     /// </summary>
     public static IReadOnlySet<string> InsertOnlyTables { get; } = new HashSet<string>(["consents"], StringComparer.Ordinal);
 
+    /// <summary>
+    /// Columns a PUT must send even when null. PowerSync leaves null columns out of a queued insert, and the upload
+    /// is an upsert that merges into an existing row, so a column left out keeps the server's old value. For these
+    /// columns that would be wrong: re-pinning a metric to the estimate on a device that hadn't seen another
+    /// device's pin to a measurement would keep that measurement_id, fail the target check and be quarantined.
+    /// </summary>
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>> NullableOnPut { get; } =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            ["metric_pins"] = ["measurement_id"],
+        };
+
     /// <summary>Tables the client may write. Everything else synced is read-only on the client.</summary>
     public static IReadOnlySet<string> UploadableTables { get; } =
         new HashSet<string>(
