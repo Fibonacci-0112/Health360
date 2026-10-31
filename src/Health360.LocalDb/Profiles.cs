@@ -36,6 +36,9 @@ public sealed class ProfileRow
     /// age-predicted max HR when it is set (PLAN.md §2.5).
     /// </summary>
     public long TakesHrLoweringMedication { get; set; }
+
+    /// <summary>The PA-R code (0–7) from the activity questionnaire, or null when it hasn't been answered.</summary>
+    public long? ActivityRating { get; set; }
 }
 
 /// <summary>
@@ -47,7 +50,8 @@ public static class Profiles
     private const string MineSql =
         "SELECT id AS Id, display_name AS DisplayName, unit_prefs AS UnitPrefs, onboarded_at AS OnboardedAt, " +
         "height AS Height, height_unit AS HeightUnit, height_cm AS HeightCm, birth_date AS BirthDate, " +
-        "sex_for_calcs AS SexForCalcs, activity_level AS ActivityLevel, takes_hr_lowering_medication AS TakesHrLoweringMedication " +
+        "sex_for_calcs AS SexForCalcs, activity_level AS ActivityLevel, takes_hr_lowering_medication AS TakesHrLoweringMedication, " +
+        "activity_rating AS ActivityRating " +
         "FROM profiles WHERE user_id = ?";
 
     /// <summary>The user's profile now and after every change (an empty array until it has synced).</summary>
@@ -105,6 +109,20 @@ public static class Profiles
     /// </summary>
     public static Task SetHeartRateLoweringMedicationAsync(IPowerSyncDatabase db, string profileId, bool value) =>
         UpdateAsync(db, profileId, "UPDATE profiles SET takes_hr_lowering_medication = ? WHERE id = ?", [value ? 1 : 0, profileId]);
+
+    /// <summary>
+    /// Sets the PA-R code (0–7) scored from the activity questionnaire, or clears it with null. A column of its own,
+    /// so the upload carries only this column.
+    /// </summary>
+    public static Task SetActivityRatingAsync(IPowerSyncDatabase db, string profileId, int? rating)
+    {
+        if (rating is < 0 or > Domain.Physiology.Vo2Max.MaxActivityCode)
+        {
+            throw new ArgumentOutOfRangeException(nameof(rating), rating, "PA-R runs 0–7");
+        }
+
+        return UpdateAsync(db, profileId, "UPDATE profiles SET activity_rating = ? WHERE id = ?", [rating, profileId]);
+    }
 
     // PowerSync tables are views with INSTEAD OF triggers, whose row counts SQLite reports as 0, so the
     // row is checked for in the same transaction instead.

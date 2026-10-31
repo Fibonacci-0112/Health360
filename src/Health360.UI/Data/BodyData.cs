@@ -109,7 +109,8 @@ public sealed partial class BodyData : IDisposable
                 System.Globalization.DateTimeStyles.None, out var birth) ? birth : null,
             profile.HeightCm,
             Domain.Physiology.ActivityLevels.TryParse(profile.ActivityLevel, out var level) ? level : null,
-            profile.TakesHrLoweringMedication != 0));
+            profile.TakesHrLoweringMedication != 0,
+            profile.ActivityRating is { } rating ? (int)rating : null));
     }
 
     /// <summary>Saves values measured together to the local database; they upload when online.</summary>
@@ -120,6 +121,9 @@ public sealed partial class BodyData : IDisposable
 
     public Task SetHeartRateLoweringMedicationAsync(bool value) =>
         Profiles.SetHeartRateLoweringMedicationAsync(db, RequireProfile().Id, value);
+
+    public Task SetActivityRatingAsync(int? rating) =>
+        Profiles.SetActivityRatingAsync(db, RequireProfile().Id, rating);
 
     public void Dispose()
     {

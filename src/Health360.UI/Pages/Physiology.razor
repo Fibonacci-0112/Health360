@@ -57,7 +57,7 @@
                 @Row("Lactate threshold HR", profile.Lthr, v => MetricDisplay.Format(v, "bpm"),
                     "Enter a lab test or a 30-minute time trial (average HR of the last 20 minutes).")
                 @Row("VO₂max", profile.Vo2Max, v => MetricDisplay.Format(v, "ml/kg/min"),
-                    "Enter a lab or field test result. Estimates without a test aren't available yet.")
+                    Vo2MaxMissing())
                 @Row(ThresholdName(profile.LowerThreshold, "LT1"), profile.LowerThreshold, v => MetricDisplay.Format(v, "bpm"),
                     "From a lab lactate or gas-exchange test. Not estimated.")
                 @Row(ThresholdName(profile.UpperThreshold, "LT2"), profile.UpperThreshold, v => MetricDisplay.Format(v, "bpm"),
@@ -108,6 +108,54 @@
             else
             {
                 <p class="muted">@ZonesMissing()</p>
+            }
+        </section>
+
+        <section class="card" aria-labelledby="activity-title">
+            <h2 id="activity-title">Physical activity rating</h2>
+            <p class="muted small">
+                Without a resting heart rate, VO₂max can be estimated from your age, sex, BMI or body fat, and these answers
+                (Jackson et al., 1990). The questions and their scoring (0–7) are from the NHANES Cardiovascular Fitness
+                Procedures Manual, Appendix E. Think about your usual activity over the last month.
+            </p>
+            @if (profile.Inputs.ActivityRating is { } rating)
+            {
+                <p>Your rating: <span class="strong">@rating</span> <span class="muted small">(@RatingText(rating))</span></p>
+            }
+            else
+            {
+                <p class="muted">Not answered yet, so VO₂max isn't estimated from it.</p>
+            }
+
+            <span class="label" id="activity-q1">
+                Would you say that you did little or no regular recreation, sport, or physical activity? Or that you
+                participated regularly in recreation or work requiring modest physical activity? Or that you participated
+                regularly in heavy physical exercise?
+            </span>
+            <ChoiceGroup LabelledBy="activity-q1" Options="RegularCodes" Labels="RegularNames" Value="@regular"
+                         ValueChanged="code => { regular = code; followUp = null; }" />
+            <p class="muted small">
+                Modest: walking, calisthenics, bowling, weight lifting, yard work. Heavy: jogging, swimming, cycling, rowing,
+                tennis, basketball.
+            </p>
+            @if (FollowUp() is var (question, options, labels))
+            {
+                <span class="label" id="activity-q2">@question</span>
+                <ChoiceGroup LabelledBy="activity-q2" Options="options" Labels="labels" Value="@followUp" ValueChanged="code => followUp = code" />
+            }
+
+            <div class="choices">
+                <button type="button" class="primary" disabled="@(ScoredRating() is null || savingRating)" @onclick="() => SaveRatingAsync(ScoredRating())">
+                    Save answers
+                </button>
+                @if (profile.Inputs.ActivityRating is not null)
+                {
+                    <button type="button" class="secondary" disabled="@savingRating" @onclick="() => SaveRatingAsync(null)">Clear my rating</button>
+                }
+            </div>
+            @if (ratingError is not null)
+            {
+                <p class="error" role="alert">@ratingError</p>
             }
         </section>
 
@@ -276,6 +324,97 @@
         profile!.Inputs.TakesHeartRateLoweringMedication
             ? "Enter a measured max heart rate: with the medication setting on, zones aren't based on an age estimate."
             : "Enter your birth date in your profile, or a measured max heart rate, threshold or lab test.";
+
+    private static readonly IReadOnlyList<string> RegularCodes = ["none", "modest", "heavy"];
+
+    private static readonly IReadOnlyDictionary<string, string> RegularNames = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["none"] = "Little or no activity",
+        ["modest"] = "Modest activity",
+        ["heavy"] = "Heavy exercise",
+    };
+
+    private static readonly IReadOnlyDictionary<string, string> ExertionNames = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        [nameof(DailyExertion.AvoidsWalkingOrExertion)] = "I avoid walking or exertion (always use the elevator, drive whenever possible instead of walking)",
+        [nameof(DailyExertion.WalksForPleasure)] = "I walk for pleasure, routinely use stairs, occasionally exercise enough to cause heavy breathing or perspiration",
+    };
+
+    private static readonly IReadOnlyDictionary<string, string> ModestNames = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        [nameof(ModestActivityTime.TenToSixtyMinutes)] = "10 to 60 minutes per week",
+        [nameof(ModestActivityTime.MoreThanSixtyMinutes)] = "More than 60 minutes per week",
+    };
+
+    private static readonly IReadOnlyDictionary<string, string> HeavyNames = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        [nameof(HeavyActivityTime.LessThanThirtyMinutes)] = "Less than 30 minutes per week",
+        [nameof(HeavyActivityTime.ThirtyToSixtyMinutes)] = "30 to 60 minutes per week",
+        [nameof(HeavyActivityTime.OneToThreeHours)] = "1 to 3 hours per week",
+        [nameof(HeavyActivityTime.MoreThanThreeHours)] = "More than 3 hours per week",
+    };
+
+    private string? regular;
+    private string? followUp;
+    private bool savingRating;
+    private string? ratingError;
+
+    private (string Question, IReadOnlyList<string> Options, IReadOnlyDictionary<string, string> Labels)? FollowUp() => regular switch
+    {
+        "none" => ("Which describes you better?", [.. ExertionNames.Keys], ExertionNames),
+        "modest" => ("How much time per week?", [.. ModestNames.Keys], ModestNames),
+        "heavy" => ("How much time per week?", [.. HeavyNames.Keys], HeavyNames),
+        _ => null,
+    };
+
+    /// <summary>The PA-R code for the answers given so far, scored by Health360.Domain; null until both are answered.</summary>
+    private int? ScoredRating() => (regular, followUp) switch
+    {
+        ("none", { } f) => PhysicalActivityRating.Code(Enum.Parse<DailyExertion>(f)),
+        ("modest", { } f) => PhysicalActivityRating.Code(Enum.Parse<ModestActivityTime>(f)),
+        ("heavy", { } f) => PhysicalActivityRating.Code(Enum.Parse<HeavyActivityTime>(f)),
+        _ => null,
+    };
+
+    /// <summary>The answers a stored code stands for (NHANES Appendix E, p. E-3).</summary>
+    private static string RatingText(int rating) => rating switch
+    {
+        0 => "little or no activity, avoids walking or exertion",
+        1 => "little or no activity, walks for pleasure and uses stairs",
+        2 => "modest activity, 10–60 minutes a week",
+        3 => "modest activity, more than 60 minutes a week",
+        4 => "heavy exercise, less than 30 minutes a week",
+        5 => "heavy exercise, 30–60 minutes a week",
+        6 => "heavy exercise, 1–3 hours a week",
+        _ => "heavy exercise, more than 3 hours a week",
+    };
+
+    private string Vo2MaxMissing() =>
+        profile!.RestingHr is not null
+            ? "Enter a lab or field test result. The estimate that uses a resting heart rate isn't available yet."
+            : profile.Inputs.ActivityRating is null
+                ? "Enter a lab or field test result, or answer the activity questions below for an estimate."
+                : "Enter a lab or field test result. An estimate needs your birth date, sex, height and a weigh-in.";
+
+    private async Task SaveRatingAsync(int? rating)
+    {
+        savingRating = true;
+        ratingError = null;
+        try
+        {
+            await Data.SetActivityRatingAsync(rating);
+            regular = null;
+            followUp = null;
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            ratingError = "Couldn't save your answers on this device. Please try again.";
+        }
+        finally
+        {
+            savingRating = false;
+        }
+    }
 
     private async Task SetMedicationAsync(ChangeEventArgs e)
     {

@@ -33,7 +33,8 @@ public static class AppSchema
         ("activity_level", ColumnType.Text),
         ("physiology_prefs", ColumnType.Text),
         ("onboarded_at", ColumnType.Text),
-        ("takes_hr_lowering_medication", ColumnType.Integer));
+        ("takes_hr_lowering_medication", ColumnType.Integer),
+        ("activity_rating", ColumnType.Integer));
 
     public static Table Households { get; } = Synced("households",
         ("name", ColumnType.Text));
