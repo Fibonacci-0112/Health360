@@ -98,7 +98,7 @@ public sealed class PhotoUploaderTests
         var storage = new FakePhotoStorage { Offline = true };
         using var uploader = new PhotoUploader(t.Db, files, storage, Clock);
         var first = await AddAsync(uploader);
-        await AddAsync(uploader, "back");
+        var second = await AddAsync(uploader, "back");
 
         var offline = await uploader.ProcessAsync(Ct);
 
@@ -113,7 +113,9 @@ public sealed class PhotoUploaderTests
         var online = await uploader.ProcessAsync(Ct);
 
         Assert.Equal(new PhotoUploadReport(2, 0, false), online);
-        Assert.StartsWith($"{Profile}/{first}", storage.Uploads[0].Path, StringComparison.Ordinal);
+        // The fixed clock gives both the same timestamp, so which goes first is a tie; both must arrive.
+        Assert.Equal(4, storage.Uploads.Count);
+        Assert.All(new[] { first, second }, id => Assert.Contains(storage.Uploads, u => u.Path == $"{Profile}/{id}.jpg"));
         Assert.Empty(files.List());
     }
 

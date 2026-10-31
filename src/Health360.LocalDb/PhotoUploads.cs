@@ -23,7 +23,7 @@ public sealed record PhotoUploadReport(int Uploaded, int Failed, bool Stopped);
 /// The offline upload queue for progress photos (PLAN.md §3, step 1.1). Adding a photo strips its metadata on the
 /// device, keeps the stripped files in the app's private storage, and writes the <c>progress_photos</c> row and a
 /// local-only <c>photo_uploads</c> entry in one transaction. The row goes up through the normal upload queue; the
-/// files go up from here when there is a connection, in the order they were taken. A file may reach Storage
+/// files go up from here when there is a connection, oldest first. A file may reach Storage
 /// before its row: the bucket's policies depend only on the profile folder.
 /// <para>
 /// The queue belongs to the local database's owner like everything else in it: the entries are cleared with the
