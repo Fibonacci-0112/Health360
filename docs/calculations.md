@@ -88,11 +88,29 @@ The paper fits two models, N-Ex %fat and N-Ex BMI, each with resting HR (I) and 
 
 The paper also prints the men's equations with the sex term folded in: intercepts 56.376 (%fat) and 67.350 (BMI). A property test checks they agree. Several secondary sources print the %fat coefficient as 0.522; the paper says **0.552**.
 
-- **PA-R** is the NASA/Johnson Space Center physical activity scale, an integer from 0 to 7; 7 means running more than 10 miles a week. The paper doesn't print the scale itself; it cites Ross, R. M. and Jackson, A. S. (1990), *Exercise Concepts, Calculations, and Computer Applications*, Benchmark Press, pp. 95–103, 109. **The scale's wording must be checked against that source before the app asks for it.** The five onboarding activity levels are not PA-R and are not mapped onto it.
+- **PA-R** is the NASA/Johnson Space Center physical activity rating, an integer from 0 to 7. The paper doesn't print the scale; it cites Ross, R. M. and Jackson, A. S. (1990), *Exercise Concepts, Calculations, and Computer Applications*, Benchmark Press. The questionnaire and its scoring are taken from the **NHANES Cardiovascular Fitness Procedures Manual** (CDC, NHANES 1999–2004), Appendix E, pp. E-1 and E-3 ([cdc.gov](https://wwwn.cdc.gov/nchs/data/nhanes/public/2003/manuals/cv_99-04.pdf)), which cites both sources. NHANES Appendix F uses the same BMI equation to predict VO₂max. `PhysicalActivityRating` implements the scoring. The five onboarding activity levels are not PA-R and are not mapped onto it.
+
 - **%fat:** the paper measured it from three skinfolds. The app accepts %fat from any source (DEXA, scale, Navy method), which adds that method's error.
 - **Which model:** %fat when body fat is known (the paper's more accurate model), otherwise BMI (`Vo2Max.Jackson`). It is used only when there is no resting HR; with one, PLAN.md §2.8 calls for Nes et al. (2011), which isn't implemented yet.
 - **Population:** 2,009 NASA employees (9.7% women) aged 18–70, VO₂peak 20–70. The models underestimate fit people: for measured VO₂peak above 55 the cross-validation SE was 10.7 (%fat) and 12.1 (BMI). Show the estimate with its SE, labelled as an estimate.
 - **Invalid inputs:** PA-R outside 0–7, negative age, BMI not positive, or %fat outside [0, 100) are rejected. A result that isn't positive gives no estimate.
+
+**The PA-R questions** (NHANES, Appendix E, p. E-1), asked in this order, with only the follow-up that applies:
+1. "Would you say that you did little or no regular recreation, sport, or physical activity? OR Would you say that you participated regularly in recreation or work requiring modest physical activity? OR Would you say that you participated regularly in heavy physical exercise?" Modest activities include walking, calisthenics, bowling, weight lifting and yard work. Heavy activities include jogging, swimming, cycling, rowing, tennis and basketball.
+2. Little or no activity: "Would you say that you avoid walking or exertion (for example, always use the elevator, drive whenever possible instead of walking)? OR Would you say that you walk for pleasure, routinely use stairs, occasionally exercise sufficiently to cause heavy breathing or perspiration?"
+3. Modest activity: "for 10 to 60 minutes per week? OR More than 60 minutes per week?"
+4. Heavy exercise: "less than 30 minutes per week, 30 to 60 minutes per week, 1 to 3 hours per week, or more than 3 hours per week?"
+
+| Answers | PA-R |
+|---|---|
+| Little or no activity, avoids walking or exertion | 0 |
+| Little or no activity, walks for pleasure, uses stairs, occasionally exercises hard | 1 |
+| Modest activity, 10–60 min/week | 2 |
+| Modest activity, > 60 min/week | 3 |
+| Heavy exercise, < 30 min/week | 4 |
+| Heavy exercise, 30–60 min/week | 5 |
+| Heavy exercise, 1–3 h/week | 6 |
+| Heavy exercise, > 3 h/week | 7 |
 
 Golden values: BMI, male, PA-R 5, 40 y, BMI 25 → 42.865; female, PA-R 3, 35 y, BMI 22 → 32.203. %fat, male, PA-R 5, 40 y, 20% → 41.721; female, PA-R 4, 30 y, 28% → 32.743.
 
@@ -210,4 +228,3 @@ Step 1.1 proves that entering a lab RMR changes the physiology profile's mainten
 These are in PLAN.md §2.8 but not implemented, because they couldn't be checked against primary sources yet:
 - **Non-exercise VO₂max, Nes et al. (2011)**, *Med Sci Sports Exerc* 43(11):2024–2030 ([doi:10.1249/MSS.0b013e31821d3f6f](https://doi.org/10.1249/MSS.0b013e31821d3f6f)). The full text is paywalled. The equations and the PA-index scoring need checking against the paper.
 - **LTHR estimate (about 90% of max HR).** No primary source found yet for the 90% figure. Until there is one it stays unimplemented. Zones don't depend on it, because the LTHR estimate never sets zones.
-- **The PA-R activity scale's wording** for the Jackson estimate (Ross and Jackson, 1990). The equations are implemented; the question the app asks is not.
