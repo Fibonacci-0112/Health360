@@ -226,7 +226,7 @@ You can enter values from lab tests, field tests or a device. Anything you haven
 | LTHR | Lab lactate test, or a 30-minute solo time trial (average HR of the last 20 minutes) | About 90% of max HR, marked low confidence. Off when max HR is only age-predicted and the medication flag is set (§2.5) |
 | LT1/LT2 or VT1/VT2 (HR, pace or power) | Lab lactate or gas-exchange test | LT2 is taken as LTHR. LT1 is not estimated |
 | FTP (W), threshold pace | 20-minute test (95% of average power), recent race | Not estimated; power and pace zones stay off |
-| HR zones (per sport) | Your own boundaries, or a lab report | Derived, best basis first: lab thresholds, a measured or test-derived LTHR (Friel), HR reserve (Karvonen), % of max HR. The LTHR estimate never sets zones |
+| HR zones (per sport) | Your own boundaries, or a lab report | Derived, best basis first: lab thresholds, a measured or test-derived LTHR (Friel, run and bike only), HR reserve (Karvonen), % of max HR, with the bands in [calculations.md](calculations.md). The LTHR estimate never sets zones |
 | Metabolic test: VO₂, VCO₂, RER, lactate per stage; FatMax and crossover point | Gas-exchange test with stages | Per-stage values are not estimated. Without a test, the fat/carb split uses the population curve (§2.9), and FatMax and the crossover point are shown only from a test |
 
 **How the app picks a value** (`Health360.Domain/Physiology`)

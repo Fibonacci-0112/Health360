@@ -2,7 +2,7 @@
 
 The exact rules `Health360.Domain` implements for the body and physiology screens, with their sources. Code, tests and this page must agree; change them together. General rules are in [PLAN.md §2.8](PLAN.md) and the units rules in §2.6. Every formula here takes canonical units (kg, cm, years). Convert with `Health360.Domain/Units` and never through a rounded display value.
 
-Status: what's below is implemented and tested in `Health360.Domain` (`Body/`, `Physiology/`). Not yet specified: HR zones (Friel, Karvonen, % of max HR), the LTHR estimate, and the non-exercise VO₂max estimators (Nes et al., 2011; Jackson et al., 1990). They wait until their coefficients are checked against the papers, not secondary sources.
+Status: what's below is implemented and tested in `Health360.Domain` (`Body/`, `Physiology/`). Not yet specified: the LTHR estimate and the non-exercise VO₂max estimators (Nes et al., 2011; Jackson et al., 1990). They wait until their coefficients are checked against the papers, not secondary sources (see [Still to specify](#still-to-specify)).
 
 ## Navy method (body fat from circumferences)
 
@@ -105,6 +105,66 @@ These values sit well above the common 1.2–1.9 multipliers, whose primary sour
 
 **Maintenance energy** = resolved RMR × PAL used. FAO defines PAL against BMR, measured fasted and fully at rest. The app multiplies it by RMR, whether measured or from Mifflin-St Jeor or Katch-McArdle, and RMR runs slightly higher than BMR. The result is labelled an estimate and its inputs are shown ("RMR 1,720 kcal (lab, Mar 2026) × 1.85"). A measured RMR still gives an **estimated** maintenance figure, because the multiplier is an estimate.
 
+## Heart-rate zones
+
+`HeartRateZoneRules.Derive` picks the best basis the resolved values allow (PLAN.md §2.8) and returns each zone's lower bound in bpm. That's what `zone_sets.boundaries` stores for metric `hr`: zone 1 first, strictly ascending, and zone i holds heart rates ≥ its lower bound and below the next zone's. The last zone has no far end. Boundaries are kept unrounded; round them only for display.
+
+**Order, best first:**
+1. **Lab thresholds**, when LT1 (or VT1) and LT2 (or VT2) heart rates are both measured and LT1 < LT2.
+2. **LTHR (Friel)**, from a measured or test-derived LTHR. Without one, a measured LT2/VT2 is taken as LTHR (§2.8). Friel publishes zones for run and bike only, so other sports skip this basis.
+3. **Heart rate reserve (Karvonen)**, when max HR and a measured resting HR are known and resting < max.
+4. **% of max HR.**
+
+Only measured values (any source tier) feed bases 1–3; estimated thresholds, LTHR and resting HR are ignored, so **the LTHR estimate never sets zones**. Max HR may be the Tanaka estimate, except when the heart-rate-lowering medication flag is set (PLAN.md §2.5). Then an estimated max HR is not used, and with no measured value there are no HR zones. Inputs that would give zones that don't ascend (LT1 ≥ LT2, resting ≥ max) skip that basis instead.
+
+**Reading whole-percent ranges.** Both sources give bands as whole percentages ("85% to 89%", then "90% to 94%"). The app reads a band "a–b" as [a, b + 1), so each zone starts at its own first percentage and there are no gaps. So Friel's zone 5c ("more than 106%") starts at 107%. Every lower bound is computed as offset + percent × (base / 100).
+
+### Lab thresholds: three zones
+
+**Source:** Seiler, K. S. and Kjerland, G. Ø. (2006). Quantifying training intensity distribution in elite endurance athletes: is there evidence for an "optimal" distribution? *Scand J Med Sci Sports* 16(1):49–56 ([doi:10.1111/j.1600-0838.2004.00418.x](https://doi.org/10.1111/j.1600-0838.2004.00418.x)). VT1 and VT2 delineate three intensity zones.
+
+| Zone | Starts at |
+|---|---|
+| 1 | 0 (below LT1/VT1) |
+| 2 | LT1/VT1 |
+| 3 | LT2/VT2 |
+
+Golden value: LT1 140, LT2 165 → 0, 140, 165.
+
+### LTHR: Friel
+
+**Source:** Friel, J. *Joe Friel's Quick Guide to Setting Zones*, TrainingPeaks ([trainingpeaks.com](https://www.trainingpeaks.com/learn/articles/joe-friel-s-quick-guide-to-setting-zones/)), which gives % of LTHR for run and bike. Friel's own site revised the guide in September 2025 ([joefrieltraining.com](https://joefrieltraining.com/a-quick-guide-to-setting-zones/)) and now gives the table as an image, which we haven't checked. Re-check before changing anything here.
+
+| Zone | Run (% of LTHR) | Bike (% of LTHR) |
+|---|---|---|
+| 1 | < 85 | < 81 |
+| 2 | 85–89 | 81–89 |
+| 3 | 90–94 | 90–93 |
+| 4 | 95–99 | 94–99 |
+| 5a | 100–102 | 100–102 |
+| 5b | 103–106 | 103–106 |
+| 5c | > 106 | > 106 |
+
+Lower bounds used (%): run 0, 85, 90, 95, 100, 103, 107; bike 0, 81, 90, 94, 100, 103, 107. Golden values: run LTHR 170 → 0, 144.5, 153, 161.5, 170, 175.1, 181.9; bike LTHR 160 → 0, 129.6, 144, 150.4, 160, 164.8, 171.2.
+
+### Heart rate reserve and % of max HR: Garber et al. (2011)
+
+**Sources:**
+- Karvonen, M. J., Kentala, E. and Mustala, O. (1957). The effects of training on heart rate; a longitudinal study. *Ann Med Exp Biol Fenn* 35(3):307–315. Target HR = resting HR + fraction × (max HR − resting HR).
+- Bands: Garber, C. E. et al. (2011). American College of Sports Medicine position stand. Quantity and quality of exercise for developing and maintaining cardiorespiratory, musculoskeletal, and neuromotor fitness in apparently healthy adults. *Med Sci Sports Exerc* 43(7):1334–1359 ([doi:10.1249/MSS.0b013e318213fefb](https://doi.org/10.1249/MSS.0b013e318213fefb)), Table 4.
+
+| Zone (Garber's intensity) | %HRR | %HRmax |
+|---|---|---|
+| Very light | < 30 | < 57 |
+| Light | 30–39 | 57–63 |
+| Moderate | 40–59 | 64–76 |
+| Vigorous | 60–89 | 77–95 |
+| Near-maximal to maximal | ≥ 90 | ≥ 96 |
+
+Zone 1 starts at resting HR for heart rate reserve (0% HRR) and at 0 for % of max HR. Golden values: max 190, resting 60 → 60, 99, 112, 138, 177; max 180 → 0, 102.6, 115.2, 138.6, 172.8.
+
+The intensity names are Garber's. They aren't the same scale as Friel's zone numbers, so the UI must show the basis next to the zones.
+
 ## Resolver (which value is used)
 
 Implements PLAN.md §2.8 for each metric:
@@ -122,4 +182,11 @@ Deleting a measurement re-resolves straight away: the next measured value, then 
 
 ## What the 1.1 exit criterion proves
 
-Step 1.1 proves that entering a lab RMR changes the physiology profile's maintenance estimate at once, and that deleting it falls back to the next value or the estimate. It also proves that a measured max HR replaces the Tanaka estimate. Nutrition targets built on this come in step 1.3 and have their own integration test (PLAN.md §3).
+Step 1.1 proves that entering a lab RMR changes the physiology profile's maintenance estimate at once, and that deleting it falls back to the next value or the estimate. It also proves that a measured max HR replaces the Tanaka estimate, and that the zones derived from max HR follow it (`HeartRateZoneRules.Derive`). Nutrition targets built on this come in step 1.3 and have their own integration test (PLAN.md §3).
+
+## Still to specify
+
+These are in PLAN.md §2.8 but not implemented, because their coefficients couldn't be checked against the original papers yet:
+- **Non-exercise VO₂max, Nes et al. (2011)**, *Med Sci Sports Exerc* 43(11):2024–2030 ([doi:10.1249/MSS.0b013e31821d3f6f](https://doi.org/10.1249/MSS.0b013e31821d3f6f)). The full text is paywalled. The equations and the PA-index scoring need checking against the paper.
+- **Non-exercise VO₂max, Jackson et al. (1990)**, *Med Sci Sports Exerc* 22(6):863–870 ([doi:10.1249/00005768-199012000-00021](https://doi.org/10.1249/00005768-199012000-00021)). The full text is paywalled. Secondary sources disagree on the %fat model's fat coefficient (0.552 or 0.522), and the paper reports more than one fit (for example, a men-only %fat model), so the model and its coefficients must come from the paper itself.
+- **LTHR estimate (about 90% of max HR).** No primary source found yet for the 90% figure. Until there is one it stays unimplemented. Zones don't depend on it, because the LTHR estimate never sets zones.
