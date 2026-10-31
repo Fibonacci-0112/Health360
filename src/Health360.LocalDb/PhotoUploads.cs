@@ -76,6 +76,9 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         byte[] thumbnail,
         CancellationToken cancellationToken = default)
     {
+        // Read before anything else (stripping takes a while), so a clear that begins at any point during this add
+        // is seen when it takes the lock.
+        var before = Volatile.Read(ref generation);
         ArgumentException.ThrowIfNullOrEmpty(profileId);
         ArgumentNullException.ThrowIfNull(photo);
         ArgumentNullException.ThrowIfNull(thumbnail);
@@ -96,7 +99,6 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         var now = Timestamps.UtcNow(clock);
         // Held from the first file to the commit, so clearing the account's data can't land in between and leave an
         // entry without its files (or this account's row in the next account's database).
-        var before = Volatile.Read(ref generation);
         await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
