@@ -1,3 +1,128 @@
 @page "/body"
+@using Health360.Domain.Physiology
+@implements IDisposable
+@inject BodyData Data
+@inject ProfileService Profiles
 
-<ComingSoon Title="Body" Section="1.5" />
+@* Body tab (FEATURES.md §1.5): weight with its trend, body measurements and vitals, the Navy-method estimate,
+   and everything entered, newest first. Progress photos arrive in their own change. *@
+<div class="page">
+    <div class="page-head">
+        <h1>Body</h1>
+        <NavLink class="top-link" href="body/physiology">Physiology profile</NavLink>
+    </div>
+
+    @if (Data.Failed)
+    {
+        <p class="error" role="alert">Couldn't read your measurements on this device. Leave this tab and come back to try again.</p>
+    }
+
+    @if (Data.Measurements is null || profile is null)
+    {
+        <p class="muted" role="status">Loading measurements</p>
+    }
+    else
+    {
+        var prefs = Profiles.UnitPrefs;
+        <section class="card" aria-labelledby="weight-title">
+            <h2 id="weight-title">Weight</h2>
+            @if (profile.WeightKg is { } trendKg)
+            {
+                <p class="headline">
+                    <span class="strong">@MetricDisplay.BodyWeight(trendKg, prefs.BodyWeight)</span>
+                    <span class="muted">trend on @MetricDisplay.Date(profile.WeightTrend[^1].LocalDate)</span>
+                </p>
+            }
+            <WeightChart IdPrefix="weight" Points="profile.WeightTrend" Unit="prefs.BodyWeight" />
+        </section>
+
+        <MeasurementForm IdPrefix="add-weight" Title="Add a weigh-in" Metrics="WeightOnly" />
+
+        <section class="card" aria-labelledby="navy-title">
+            <h2 id="navy-title">Body fat estimate (Navy method)</h2>
+            @if (profile.Navy is { } navy)
+            {
+                <p class="headline">
+                    <span class="strong">@MetricDisplay.Number(navy.PercentFat, 1)%</span>
+                    <span class="badge-estimate">Estimate</span>
+                </p>
+                <p class="muted small">
+                    Likely between @MetricDisplay.Number(Math.Max(0, navy.PercentFat - navy.StandardError), 1)% and
+                    @MetricDisplay.Number(navy.PercentFat + navy.StandardError, 1)% (± @MetricDisplay.Number(navy.StandardError, 2), the
+                    equation's standard error). From your height and your newest @NavySites() measurements
+                    (Hodgdon and Beckett, 1984). It's its own series, never mixed with scale or DEXA values.
+                </p>
+            }
+            else
+            {
+                <p class="muted">@NavyNeeds()</p>
+            }
+        </section>
+
+        <MeasurementForm IdPrefix="add-body" Title="Add a measurement" Metrics="BodyMetrics" />
+
+        <MeasurementList IdPrefix="body" Title="Entered" Rows="BodyRows" />
+    }
+</div>
+
+@code {
+    private static readonly IReadOnlyList<string> WeightOnly = [MetricCodes.Weight];
+
+    /// <summary>Body measurements and vitals the form offers, in order (weight has its own form).</summary>
+    private static readonly IReadOnlyList<string> BodyMetrics =
+    [
+        MetricCodes.BodyFatPercent, "fat_mass", "lean_mass",
+        MetricCodes.WaistAtNavel, MetricCodes.WaistAtNarrowest, MetricCodes.Neck, MetricCodes.Hip,
+        "circ_chest", "circ_upper_arm", "circ_thigh", "circ_calf",
+        MeasurementForm.BloodPressure, "spo2", "glucose", "body_temperature", "hrv_rmssd", "steps",
+    ];
+
+    private PhysiologyProfile? profile;
+
+    private IReadOnlyList<Health360.LocalDb.MeasurementRow> BodyRows =>
+        [.. (Data.Measurements ?? []).Where(r => Data.Definitions.TryGetValue(r.MetricCode, out var d) && d.Category == "body")];
+
+    protected override void OnInitialized()
+    {
+        Data.Changed += Refresh;
+        Profiles.Changed += Refresh;
+    }
+
+    protected override void OnParametersSet() => profile = Data.Profile();
+
+    private string NavySites() =>
+        profile?.Inputs.Sex == Sex.Female ? "neck, narrowest-waist and hip" : "neck and waist-at-the-navel";
+
+    private string NavyNeeds()
+    {
+        var inputs = profile!.Inputs;
+        if (inputs.Sex is null || inputs.HeightCm is null)
+        {
+            return "Needs your height and the sex used for calculations, from your profile.";
+        }
+
+        string[] sites = inputs.Sex == Sex.Female
+            ? [MetricCodes.Neck, MetricCodes.WaistAtNarrowest, MetricCodes.Hip]
+            : [MetricCodes.Neck, MetricCodes.WaistAtNavel];
+        if (sites.All(code => inputs.Measurements.Any(m => m.MetricCode == code)))
+        {
+            return "Your newest measurements don't give a usable estimate. Check that each was measured at its site and the waist is larger than the neck.";
+        }
+
+        return inputs.Sex == Sex.Female
+            ? "Add your neck, waist at the narrowest point, and hips to see it."
+            : "Add your neck and your waist at the navel to see it.";
+    }
+
+    private void Refresh() => _ = InvokeAsync(() =>
+    {
+        profile = Data.Profile();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Data.Changed -= Refresh;
+        Profiles.Changed -= Refresh;
+    }
+}

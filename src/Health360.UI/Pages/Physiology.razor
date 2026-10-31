@@ -1,0 +1,306 @@
+@page "/body/physiology"
+@using Health360.Domain.Physiology
+@implements IDisposable
+@inject BodyData Data
+@inject ProfileService Profiles
+
+@* The physiology profile (PLAN.md §2.8): measured values first, estimates otherwise, and always which one is in
+   use. Everything shown is computed by Health360.Domain from the entered values, so entering or deleting one
+   changes it at once. *@
+<div class="page">
+    <div class="page-head">
+        <h1>Physiology profile</h1>
+        <NavLink class="top-link" href="body">Body</NavLink>
+    </div>
+    <p class="muted">
+        Values you enter from a lab, a field test or a device are used first. Anything missing is estimated from a
+        published equation where one exists, and labelled as an estimate. This is wellness information, not a diagnosis.
+    </p>
+
+    @if (Data.Failed)
+    {
+        <p class="error" role="alert">Couldn't read your measurements on this device. Leave this screen and come back to try again.</p>
+    }
+
+    @if (Data.Measurements is null || profile is null)
+    {
+        <p class="muted" role="status">Loading your profile</p>
+    }
+    else
+    {
+        var prefs = Profiles.UnitPrefs;
+        <section class="card" aria-labelledby="values-title">
+            <h2 id="values-title">In use now</h2>
+            <dl class="values">
+                @Row("Resting metabolic rate", profile.Rmr, v => MetricDisplay.Energy(v, prefs.Energy) + "/day", RmrMissing())
+                <div class="value-row">
+                    <dt>Maintenance energy</dt>
+                    <dd>
+                        @if (profile.Maintenance is { } maintenance)
+                        {
+                            <span class="strong">@MetricDisplay.Energy(maintenance.Kcal, prefs.Energy)/day</span>
+                            <span class="badge-estimate">Estimate</span>
+                            <span class="muted small">
+                                RMR @MetricDisplay.Energy(maintenance.Rmr.Value, prefs.Energy) (@Origin(maintenance.Rmr)) × @MetricDisplay.Number(maintenance.Pal, 3)
+                                (@ActivityName(maintenance.Level), FAO/WHO/UNU 2004)
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="muted">@(profile.Rmr is null ? "Needs a resting metabolic rate." : "Needs your activity level, from your profile.")</span>
+                        }
+                    </dd>
+                </div>
+                @Row("Max heart rate", profile.MaxHr, v => MetricDisplay.Format(v, "bpm"), MaxHrMissing())
+                @Row("Resting heart rate", profile.RestingHr, v => MetricDisplay.Format(v, "bpm"),
+                    "Not estimated. Enter morning readings; without one, zones use % of max heart rate.")
+                @Row("Lactate threshold HR", profile.Lthr, v => MetricDisplay.Format(v, "bpm"),
+                    "Enter a lab test or a 30-minute time trial (average HR of the last 20 minutes).")
+                @Row("VO₂max", profile.Vo2Max, v => MetricDisplay.Format(v, "ml/kg/min"),
+                    "Enter a lab or field test result. Estimates without a test aren't available yet.")
+                @Row(ThresholdName(profile.LowerThreshold, "LT1"), profile.LowerThreshold, v => MetricDisplay.Format(v, "bpm"),
+                    "From a lab lactate or gas-exchange test. Not estimated.")
+                @Row(ThresholdName(profile.UpperThreshold, "LT2"), profile.UpperThreshold, v => MetricDisplay.Format(v, "bpm"),
+                    "From a lab lactate or gas-exchange test. Not estimated.")
+                @Row("Body fat", profile.BodyFat, v => MetricDisplay.Format(v, "%"), "Enter a DEXA, scale or other value on the Body tab.")
+                <div class="value-row">
+                    <dt>Fat-free mass</dt>
+                    <dd>
+                        @if (profile.FatFreeMassKg is { } ffm)
+                        {
+                            <span class="strong">@MetricDisplay.BodyWeight(ffm, prefs.BodyWeight)</span>
+                            <span class="muted small">Trend weight × (1 − body fat). As measured or estimated as the body fat it comes from.</span>
+                        }
+                        else
+                        {
+                            <span class="muted">Needs a weigh-in and a body-fat value.</span>
+                        }
+                    </dd>
+                </div>
+            </dl>
+        </section>
+
+        <section class="card" aria-labelledby="zones-title">
+            <h2 id="zones-title">Heart-rate zones</h2>
+            <span class="label" id="zones-sport">Sport</span>
+            <ChoiceGroup LabelledBy="zones-sport" Options="SportCodes" Labels="SportNames" Value="@sport" ValueChanged="code => sport = code ?? sport" />
+            @if (Zones() is { } zones)
+            {
+                <p class="muted small">
+                    @zones.Method. @ZoneBasisText(zones)
+                </p>
+                <table class="zones">
+                    <thead>
+                        <tr><th scope="col">Zone</th><th scope="col">From</th><th scope="col">Up to</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var zone in zones.Zones)
+                        {
+                            <tr>
+                                <th scope="row">@zone.Name</th>
+                                <td>@MetricDisplay.Format(zone.LowerBpm, "bpm")</td>
+                                <td>@(zone.UpperBpm is { } upper ? MetricDisplay.Format(upper, "bpm") : "and above")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            else
+            {
+                <p class="muted">@ZonesMissing()</p>
+            }
+        </section>
+
+        <section class="card" aria-labelledby="medication-title">
+            <h2 id="medication-title">Medication</h2>
+            <label class="check">
+                <input type="checkbox" checked="@profile.Inputs.TakesHeartRateLoweringMedication" disabled="@savingMedication"
+                       @onchange="SetMedicationAsync" />
+                I take medication that lowers my heart rate (a beta blocker, for example)
+            </label>
+            <p class="muted small">
+                When this is on, nothing is worked out from age-predicted max heart rate. Zones then need a measured max heart rate.
+            </p>
+            @if (medicationError is not null)
+            {
+                <p class="error" role="alert">@medicationError</p>
+            }
+        </section>
+
+        <MeasurementForm IdPrefix="add-physiology" Title="Add a test result or value" Metrics="PhysiologyMetrics" DefaultSource="lab" />
+
+        <MeasurementList IdPrefix="physiology" Title="Entered" Rows="PhysiologyRows" />
+    }
+</div>
+
+@code {
+    private static readonly IReadOnlyList<string> PhysiologyMetrics =
+    [
+        MetricCodes.Rmr, MetricCodes.MaxHr, MetricCodes.RestingHr, MetricCodes.Lthr, MetricCodes.Vo2Max, "vo2max_absolute",
+        MetricCodes.Lt1Hr, MetricCodes.Lt2Hr, MetricCodes.Vt1Hr, MetricCodes.Vt2Hr,
+        "ftp", "lt1_power", "lt2_power", "vt1_power", "vt2_power",
+        "threshold_pace", "lt1_pace", "lt2_pace", "vt1_pace", "vt2_pace",
+        "fat_mass_arms", "fat_mass_legs", "fat_mass_trunk", "lean_mass_arms", "lean_mass_legs", "lean_mass_trunk",
+        "bone_mineral_content", "bmd", "bmd_t_score", "bmd_z_score", "vat_mass", "android_fat_pct", "gynoid_fat_pct", "almi",
+    ];
+
+    private static readonly IReadOnlyList<string> SportCodes = ["run", "bike", "swim", "row", "other"];
+
+    private static readonly IReadOnlyDictionary<string, string> SportNames = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["run"] = "Run",
+        ["bike"] = "Bike",
+        ["swim"] = "Swim",
+        ["row"] = "Row",
+        ["other"] = "Other",
+    };
+
+    private PhysiologyProfile? profile;
+    private string sport = "run";
+    private bool savingMedication;
+    private string? medicationError;
+
+    private IReadOnlyList<Health360.LocalDb.MeasurementRow> PhysiologyRows =>
+        [.. (Data.Measurements ?? []).Where(r => Data.Definitions.TryGetValue(r.MetricCode, out var d) && d.Category == "physiology")];
+
+    protected override void OnInitialized()
+    {
+        Data.Changed += Refresh;
+        Profiles.Changed += Refresh;
+    }
+
+    protected override void OnParametersSet() => profile = Data.Profile();
+
+    private HeartRateZones? Zones() =>
+        profile?.ZonesFor(Enum.GetValues<ZoneSport>().First(s => HeartRateZoneRules.Code(s) == sport));
+
+    private RenderFragment Row(string name, ProfileValue? value, Func<double, string> format, string missing) => __builder =>
+    {
+        <div class="value-row">
+            <dt>@name</dt>
+            <dd>
+                @if (value is null)
+                {
+                    <span class="muted">@missing</span>
+                }
+                else
+                {
+                    var r = value.Resolution;
+                    <span class="strong">@format(r.Value)</span>
+                    @if (r.IsEstimate)
+                    {
+                        <span class="badge-estimate">Estimate</span>
+                    }
+                    @if (value.RetestSuggested)
+                    {
+                        <span class="badge-retest">Retest?</span>
+                    }
+                    <span class="muted small">@Origin(r)</span>
+                    @if (r.PinUnavailable)
+                    {
+                        <span class="error small">The value you chose is no longer available, so the next best is used.</span>
+                    }
+                    @if (r.PassedOver.Count > 0 || r.EstimatePassedOver is not null)
+                    {
+                        <details class="passed-over">
+                            <summary>Other values on file</summary>
+                            <ul>
+                                @foreach (var other in r.PassedOver)
+                                {
+                                    <li>@format(other.Value): @SourceText(other)</li>
+                                }
+                                @if (r.EstimatePassedOver is { } estimate)
+                                {
+                                    <li>@format(estimate.Value): estimate, @estimate.Method</li>
+                                }
+                            </ul>
+                        </details>
+                    }
+                }
+            </dd>
+        </div>
+    };
+
+    /// <summary>Where a resolved value came from: "Lab, 1 Mar 2026" or "Mifflin-St Jeor equation, ± 5.35".</summary>
+    private static string Origin(Resolution resolution) =>
+        resolution.Measurement is { } measured
+            ? SourceText(measured) + (resolution.Pinned ? ", your choice" : "")
+            : resolution.Estimate!.StandardError is { } se
+                ? $"{resolution.Estimate.Method} equation, standard error ± {MetricDisplay.Number(se, 2)}"
+                : $"{resolution.Estimate.Method} equation";
+
+    private static string SourceText(Measured measured) =>
+        $"{MetricDisplay.SourceName(MeasurementSources.Code(measured.Source))}, {MetricDisplay.Date(measured.MeasuredOn)}";
+
+    private static string ThresholdName(ProfileValue? value, string fallback) =>
+        value is null ? $"{fallback} heart rate" : MetricDisplay.Name(value.MetricCode);
+
+    private static string ActivityName(ActivityLevel level) => level switch
+    {
+        ActivityLevel.Sedentary => "mostly sitting",
+        ActivityLevel.Light => "light",
+        ActivityLevel.Moderate => "moderate",
+        ActivityLevel.Active => "active",
+        ActivityLevel.VeryActive => "very active",
+        _ => level.ToString(),
+    };
+
+    private string RmrMissing() =>
+        profile!.WeightKg is null ? "Needs a weigh-in (Body tab), plus your height, birth date and sex from your profile."
+        : "Needs your height, birth date and sex from your profile.";
+
+    private string MaxHrMissing() =>
+        profile!.Inputs.TakesHeartRateLoweringMedication
+            ? "Not estimated while the medication setting below is on. Enter a measured value."
+            : "Needs your birth date, from your profile.";
+
+    private string ZoneBasisText(HeartRateZones zones)
+    {
+        var estimated = zones.Inputs.Where(i => i.IsEstimate).Select(i => i.Estimate!.Method).ToList();
+        var basis = zones.Basis switch
+        {
+            ZoneBasis.Lab => "From your lab thresholds.",
+            ZoneBasis.Lthr => "From your lactate threshold heart rate.",
+            ZoneBasis.HeartRateReserve => "From your heart rate reserve (max minus resting).",
+            _ => "From your max heart rate.",
+        };
+        return estimated.Count == 0
+            ? basis
+            : $"{basis} The max heart rate is an estimate ({string.Join(", ", estimated)}; individuals vary by about ±10 bpm), so a measured value would make these more accurate.";
+    }
+
+    private string ZonesMissing() =>
+        profile!.Inputs.TakesHeartRateLoweringMedication
+            ? "Enter a measured max heart rate: with the medication setting on, zones aren't based on an age estimate."
+            : "Enter your birth date in your profile, or a measured max heart rate, threshold or lab test.";
+
+    private async Task SetMedicationAsync(ChangeEventArgs e)
+    {
+        savingMedication = true;
+        medicationError = null;
+        try
+        {
+            await Data.SetHeartRateLoweringMedicationAsync(e.Value is true);
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            medicationError = "Couldn't save this setting on this device. Please try again.";
+        }
+        finally
+        {
+            savingMedication = false;
+        }
+    }
+
+    private void Refresh() => _ = InvokeAsync(() =>
+    {
+        profile = Data.Profile();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Data.Changed -= Refresh;
+        Profiles.Changed -= Refresh;
+    }
+}

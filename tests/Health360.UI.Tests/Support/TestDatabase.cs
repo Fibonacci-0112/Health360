@@ -45,6 +45,62 @@ public sealed class TestDatabase : IAsyncDisposable
             await tx.Execute("DELETE FROM ps_crud WHERE id = (SELECT max(id) FROM ps_crud)");
         });
 
+    /// <summary>
+    /// Metric definitions as the reference stream brings them down, copied from the migration
+    /// (20261031000001_body_measurements.sql) for the metrics the screens' tests use.
+    /// </summary>
+    public Task SeedMetricsAsync() =>
+        Db.WriteTransaction(async tx =>
+        {
+            (string Code, string Category, string Units, string Canonical, double? Min, double? Max)[] metrics =
+            [
+                ("weight", "body", "[\"kg\", \"lb\"]", "kg", 0, null),
+                ("body_fat_pct", "body", "[\"%\"]", "%", 0, 100),
+                ("circ_neck", "body", "[\"cm\", \"in\"]", "cm", 0, null),
+                ("circ_waist_navel", "body", "[\"cm\", \"in\"]", "cm", 0, null),
+                ("circ_waist_narrowest", "body", "[\"cm\", \"in\"]", "cm", 0, null),
+                ("circ_hip", "body", "[\"cm\", \"in\"]", "cm", 0, null),
+                ("bp_systolic", "body", "[\"mmHg\"]", "mmHg", 0, null),
+                ("bp_diastolic", "body", "[\"mmHg\"]", "mmHg", 0, null),
+                ("rmr", "physiology", "[\"kcal\", \"kJ\"]", "kcal", 0, null),
+                ("max_hr", "physiology", "[\"bpm\"]", "bpm", 0, null),
+                ("resting_hr", "physiology", "[\"bpm\"]", "bpm", 0, null),
+                ("lthr", "physiology", "[\"bpm\"]", "bpm", 0, null),
+                ("vo2max", "physiology", "[\"ml/kg/min\"]", "ml/kg/min", 0, null),
+                ("threshold_pace", "physiology", "[\"s_per_km\", \"s_per_mi\"]", "s_per_km", 0, null),
+            ];
+            foreach (var (code, category, units, canonical, min, max) in metrics)
+            {
+                await tx.Execute(
+                    "INSERT INTO metric_definitions (id, code, category, units, canonical_unit, valid_min, valid_max) VALUES (uuid(), ?, ?, ?, ?, ?, ?)",
+                    [code, category, units, canonical, min, max]);
+            }
+
+            await tx.Execute("DELETE FROM ps_crud");
+        });
+
+    /// <summary>A measurement as sync brings it down from another device (not queued for upload here).</summary>
+    public Task SeedMeasurementAsync(string id, string profileId, string metric, double value, string unit, double canonical,
+        string localDate, string source = "manual", string? groupId = null) =>
+        Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute(
+                "INSERT INTO measurements (id, profile_id, metric_code, category, value, unit, value_canonical, measured_at, local_date, group_id, source) " +
+                "VALUES (?, ?, ?, 'body', ?, ?, ?, ?, ?, ?, ?)",
+                [id, profileId, metric, value, unit, canonical, localDate + "T12:00:00.000Z", localDate, groupId, source]);
+            await tx.Execute("DELETE FROM ps_crud");
+        });
+
+    /// <summary>Profile details from onboarding, as synced.</summary>
+    public Task SeedDetailsAsync(string profileId, string sex, string birthDate, double heightCm, string activityLevel) =>
+        Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute(
+                "UPDATE profiles SET sex_for_calcs = ?, birth_date = ?, height = ?, height_unit = 'cm', height_cm = ?, activity_level = ? WHERE id = ?",
+                [sex, birthDate, heightCm, heightCm, activityLevel, profileId]);
+            await tx.Execute("DELETE FROM ps_crud");
+        });
+
     public async ValueTask DisposeAsync()
     {
         await Db.Close();

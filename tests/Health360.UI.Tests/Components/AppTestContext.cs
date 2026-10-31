@@ -41,6 +41,10 @@ public abstract class AppTestContext : BunitContext, IAsyncLifetime
         where T : IComponent =>
         DispatchAsync(() => cut.Find(selector).TriggerEventAsync("onchange", new ChangeEventArgs { Value = value }));
 
+    protected Task CheckAsync<T>(IRenderedComponent<T> cut, string selector, bool value)
+        where T : IComponent =>
+        DispatchAsync(() => cut.Find(selector).TriggerEventAsync("onchange", new ChangeEventArgs { Value = value }));
+
     protected Task ClickAsync(Func<IElement> find) => DispatchAsync(() => find().ClickAsync(new MouseEventArgs()));
 
     protected Task ClickAsync<T>(IRenderedComponent<T> cut, string selector)
@@ -48,6 +52,10 @@ public abstract class AppTestContext : BunitContext, IAsyncLifetime
 
     protected Task SubmitAsync<T>(IRenderedComponent<T> cut)
         where T : IComponent => DispatchAsync(() => cut.Find("form").SubmitAsync(EventArgs.Empty));
+
+    /// <summary>Submits the form that holds <paramref name="selector"/>, for pages with more than one.</summary>
+    protected Task SubmitAsync<T>(IRenderedComponent<T> cut, string selector)
+        where T : IComponent => DispatchAsync(() => cut.Find(selector).Closest("form")!.SubmitAsync(EventArgs.Empty));
 
     private Task DispatchAsync(Func<Task> trigger) => Renderer.Dispatcher.InvokeAsync(trigger);
 
