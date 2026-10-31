@@ -1,4 +1,4 @@
--- The medication flag column: default, owner-only writes, and that it is independent of physiology_prefs.
+-- The medication flag column: default, owner-only writes, and that physiology_prefs is dropped.
 begin;
 create extension if not exists pgtap with schema extensions;
 select plan(7);
@@ -43,7 +43,7 @@ select is(
   (true, '{"load":"lb"}'::jsonb),
   'a write to another column leaves the flag as it was'
 );
-select is((select physiology_prefs from profiles), '{}'::jsonb, 'the flag is not kept in physiology_prefs');
+select hasnt_column('public', 'profiles', 'physiology_prefs', 'the jsonb settings bag is gone');
 
 select pg_temp.login('b');
 select is(
