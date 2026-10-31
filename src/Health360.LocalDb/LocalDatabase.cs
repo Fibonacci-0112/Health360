@@ -41,6 +41,8 @@ public sealed partial class LocalDatabase(
     // The Connect calls not yet finished (guarded by gate), so DisposeAsync can stop them before closing.
     private Task? connecting;
 
+    private bool disposed;
+
     public PowerSyncDatabase Db => db;
 
     /// <summary>
@@ -129,11 +131,23 @@ public sealed partial class LocalDatabase(
         }
     }
 
+    /// <summary>
+    /// Stops syncing and closes the database. Safe to call more than once. The gate is deliberately not
+    /// disposed: a call still queued on it would then never complete, whereas once it gets the gate it
+    /// meets the closed database's own error. A SemaphoreSlim that never handed out its wait handle holds
+    /// nothing that needs disposing.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (disposed)
+            {
+                return;
+            }
+
+            disposed = true;
             // Closing while a Connect is still starting overflows the stack in PowerSync.Common 1.0.0.
             await StopSyncAsync().ConfigureAwait(false);
             await db.Close().ConfigureAwait(false);
@@ -142,8 +156,6 @@ public sealed partial class LocalDatabase(
         {
             gate.Release();
         }
-
-        gate.Dispose();
     }
 
     /// <summary>

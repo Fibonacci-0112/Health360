@@ -147,6 +147,25 @@ public class LocalDatabaseTests
         }
     }
 
+    [Fact]
+    public async Task OverlappingDisposalsAndQueuedCallsAllComplete()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        var owner = new MemoryOwnerStore { Owner = "user-a" };
+        var local = Wrap(t, owner);
+        var timeout = TimeSpan.FromSeconds(10);
+        var ct = TestContext.Current.CancellationToken;
+
+        // Three disposals and a call queued behind them: none may be left waiting on the gate. The queued
+        // call meets the closed database, so it may fail, but it must finish.
+        var disposals = Enumerable.Range(0, 3).Select(_ => local.DisposeAsync().AsTask()).ToArray();
+        var queued = local.DisconnectAsync();
+
+        await Task.WhenAll(disposals).WaitAsync(timeout, ct);
+        await Task.WhenAny(queued).WaitAsync(timeout, ct);
+        Assert.True(t.Db.Closed);
+    }
+
     private sealed class Count
     {
         public long N { get; set; }
