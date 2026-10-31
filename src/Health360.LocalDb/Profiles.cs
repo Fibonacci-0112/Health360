@@ -96,6 +96,24 @@ public static class Profiles
             ]);
     }
 
+    /// <summary>
+    /// Saves the details edited in Settings. The form must already have passed <see cref="ProfileDetailsFormValidator"/>.
+    /// Only columns whose value changes go into the upload, so this can't undo another device's change to a
+    /// different setting.
+    /// </summary>
+    public static Task SetDetailsAsync(IPowerSyncDatabase db, string profileId, ProfileDetailsForm form)
+    {
+        ArgumentNullException.ThrowIfNull(form);
+        return UpdateAsync(
+            db,
+            profileId,
+            """
+            UPDATE profiles SET birth_date = ?, sex_for_calcs = ?, height = ?, height_unit = ?, height_cm = ?, activity_level = ?
+            WHERE id = ?
+            """,
+            [form.BirthDate, form.SexForCalcs, form.Height, form.HeightUnit, form.HeightCm, form.ActivityLevel, profileId]);
+    }
+
     public static Task SetUnitPrefsAsync(IPowerSyncDatabase db, string profileId, Domain.Units.UnitPrefs prefs) =>
         UpdateAsync(db, profileId, "UPDATE profiles SET unit_prefs = ? WHERE id = ?", [UnitPrefsJson.Serialize(prefs), profileId]);
 

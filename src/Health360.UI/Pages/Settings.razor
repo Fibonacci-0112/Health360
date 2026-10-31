@@ -15,6 +15,17 @@
         <p class="error" role="alert">@unitsError</p>
     }
 
+    <h2 id="details-title">About you</h2>
+    <p class="muted">Used for estimates such as resting metabolic rate and max heart rate. Leave any blank.</p>
+    @if (Profiles.Profile is null)
+    {
+        <p class="muted" role="status">Loading your profile</p>
+    }
+    else
+    {
+        <ProfileDetailsEditor IdPrefix="details" />
+    }
+
     @if (Sync.Failed.Count > 0)
     {
         <h2>Changes the server rejected</h2>

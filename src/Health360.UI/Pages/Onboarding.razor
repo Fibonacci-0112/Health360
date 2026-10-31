@@ -46,12 +46,12 @@
 
         <div class="field">
             <span class="label" id="sex-label">Sex used for calculations</span>
-            <ChoiceGroup LabelledBy="sex-label" Options="SexForCalcs.All" Labels="SexLabels" AllowNone @bind-Value="sex" />
+            <ChoiceGroup LabelledBy="sex-label" Options="SexForCalcs.All" Labels="ProfileLabels.Sex" AllowNone @bind-Value="sex" />
         </div>
 
         <div class="field">
             <span class="label" id="activity-label">Activity level</span>
-            <ChoiceGroup LabelledBy="activity-label" Options="ActivityLevels.All" Labels="ActivityLabels" AllowNone @bind-Value="activity" />
+            <ChoiceGroup LabelledBy="activity-label" Options="ActivityLevels.All" Labels="ProfileLabels.Activity" AllowNone @bind-Value="activity" />
         </div>
 
         @if (error is not null)
@@ -65,17 +65,6 @@
 
 @code {
     private static readonly OnboardingFormValidator Validator = new();
-
-    private static readonly Dictionary<string, string> SexLabels = new() { ["female"] = "Female", ["male"] = "Male" };
-
-    private static readonly Dictionary<string, string> ActivityLabels = new()
-    {
-        ["sedentary"] = "Mostly sitting",
-        ["light"] = "Light",
-        ["moderate"] = "Moderate",
-        ["active"] = "Active",
-        ["very_active"] = "Very active",
-    };
 
     private string name = "";
     private UnitPrefs prefs = UnitPrefs.Metric;

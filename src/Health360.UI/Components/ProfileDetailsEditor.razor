@@ -1,0 +1,175 @@
+@using System.Globalization
+@inject ProfileService Profiles
+
+@* Edits the details calculations use after onboarding: birth date, sex, height and activity level. Saves go
+   to the local database and sync when online. A height left as shown is not rewritten, so a value entered
+   in the other unit is never replaced by its rounded display. *@
+<form class="form" @onsubmit="SaveAsync" aria-labelledby="@($"{IdPrefix}-title")">
+    @if (shownIn == HeightUnit.Centimetre)
+    {
+        <div class="field">
+            <label for="@($"{IdPrefix}-height-cm")" class="label">Height (cm)</label>
+            <input id="@($"{IdPrefix}-height-cm")" inputmode="decimal" class="short" @bind="heightCm" />
+        </div>
+    }
+    else
+    {
+        <div class="field">
+            <span class="label" id="@($"{IdPrefix}-height-label")">Height (ft, in)</span>
+            <div class="inline" role="group" aria-labelledby="@($"{IdPrefix}-height-label")">
+                <input aria-label="Feet" inputmode="numeric" placeholder="ft" class="short" @bind="heightFeet" />
+                <input aria-label="Inches" inputmode="decimal" placeholder="in" class="short" @bind="heightInches" />
+            </div>
+        </div>
+    }
+
+    <div class="field">
+        <label for="@($"{IdPrefix}-birth")" class="label">Birth date (YYYY-MM-DD)</label>
+        <input id="@($"{IdPrefix}-birth")" placeholder="1990-04-02" inputmode="numeric" class="short" @bind="birthDate" />
+    </div>
+
+    <div class="field">
+        <span class="label" id="@($"{IdPrefix}-sex-label")">Sex used for calculations</span>
+        <ChoiceGroup LabelledBy="@($"{IdPrefix}-sex-label")" Options="SexForCalcs.All" Labels="ProfileLabels.Sex" AllowNone @bind-Value="sex" />
+    </div>
+
+    <div class="field">
+        <span class="label" id="@($"{IdPrefix}-activity-label")">Activity level</span>
+        <ChoiceGroup LabelledBy="@($"{IdPrefix}-activity-label")" Options="ActivityLevels.All" Labels="ProfileLabels.Activity" AllowNone @bind-Value="activity" />
+    </div>
+
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+    <p class="muted" role="status">@(saved ? "Saved." : "")</p>
+    <button type="submit" class="primary" disabled="@busy" aria-busy="@(busy ? "true" : "false")">Save details</button>
+</form>
+
+@code {
+    private static readonly ProfileDetailsFormValidator Validator = new();
+
+    /// <summary>Prefix for element ids, unique on the page.</summary>
+    [Parameter, EditorRequired]
+    public string IdPrefix { get; set; } = "";
+
+    private ProfileRow? loaded;
+    private HeightUnit shownIn;
+    private (string? Cm, string? Feet, string? Inches) shownHeight;
+    private string? heightCm;
+    private string? heightFeet;
+    private string? heightInches;
+    private string? birthDate;
+    private string? sex;
+    private string? activity;
+    private string? error;
+    private bool saved;
+    private bool busy;
+
+    protected override void OnParametersSet()
+    {
+        // Filled once from the saved row; later syncs don't overwrite what the user is typing.
+        if (loaded is null && Profiles.Profile is { } profile)
+        {
+            loaded = profile;
+            birthDate = profile.BirthDate;
+            sex = profile.SexForCalcs;
+            activity = profile.ActivityLevel;
+            ShowHeight(profile);
+        }
+    }
+
+    private void ShowHeight(ProfileRow profile)
+    {
+        // The unit preference when the form opened; changing it in Settings applies the next time.
+        shownIn = Profiles.UnitPrefs.Height;
+        heightCm = heightFeet = heightInches = null;
+        if (profile.Height is { } height && profile.HeightCm is { } cm)
+        {
+            if (shownIn == HeightUnit.Centimetre)
+            {
+                // As entered when it was entered in cm; otherwise rounded for display only.
+                heightCm = Number(profile.HeightUnit == "cm" ? height : Rounding.RoundTo(cm, 1));
+            }
+            else if (profile.HeightUnit == "in")
+            {
+                var feet = Math.Floor(height / 12);
+                heightFeet = Number(feet);
+                heightInches = Number(height - (feet * 12));
+            }
+            else
+            {
+                var split = Compound.CmToFeetInches(cm, 1);
+                heightFeet = Number(split.Feet);
+                heightInches = Number(split.Inches);
+            }
+        }
+
+        shownHeight = (heightCm, heightFeet, heightInches);
+    }
+
+    private static string Number(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private bool HeightEdited => shownHeight != (heightCm, heightFeet, heightInches);
+
+    private async Task SaveAsync()
+    {
+        error = null;
+        saved = false;
+        if (loaded is null)
+        {
+            error = "Your profile hasn't reached this device yet.";
+            return;
+        }
+
+        double? height = loaded.Height;
+        var heightUnit = loaded.HeightUnit;
+        var canonical = loaded.HeightCm;
+        if (HeightEdited)
+        {
+            try
+            {
+                var parsed = new HeightEntry(heightCm, heightFeet, heightInches).Parse(shownIn);
+                (height, heightUnit, canonical) = (parsed?.Height, parsed?.HeightUnit, parsed?.HeightCm);
+            }
+            catch (FormatException invalid)
+            {
+                error = invalid.Message;
+                return;
+            }
+        }
+
+        var form = new ProfileDetailsForm(
+            BirthDate: string.IsNullOrWhiteSpace(birthDate) ? null : birthDate.Trim(),
+            SexForCalcs: sex,
+            Height: height,
+            HeightUnit: heightUnit,
+            HeightCm: canonical,
+            ActivityLevel: activity);
+        var result = Validator.Validate(form);
+        if (!result.IsValid)
+        {
+            error = result.Errors[0].PropertyName == nameof(ProfileDetailsForm.BirthDate)
+                ? "Birth date must look like 1990-04-02."
+                : "Please check your details.";
+            return;
+        }
+
+        busy = true;
+        try
+        {
+            await Profiles.SetDetailsAsync(form);
+            saved = true;
+            loaded = new ProfileRow { Id = loaded.Id, Height = height, HeightUnit = heightUnit, HeightCm = canonical };
+            ShowHeight(loaded);
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            error = "Couldn't save your details on this device. Please try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}

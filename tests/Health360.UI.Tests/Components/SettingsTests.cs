@@ -9,9 +9,14 @@ namespace Health360.UI.Tests.Components;
 
 public sealed class SettingsTests : AppTestContext
 {
-    private async Task<IRenderedComponent<Routes>> SettingsAsync()
+    private async Task<IRenderedComponent<Routes>> SettingsAsync(string unitPrefs = "{}", string? details = null)
     {
-        await SignedInAndOnboardedAsync();
+        await SignedInAndOnboardedAsync(unitPrefs);
+        if (details is not null)
+        {
+            await App.Database.Db.Execute($"UPDATE profiles SET {details} WHERE id = ?", [ProfileId]);
+        }
+
         var cut = Render<Routes>();
         cut.WaitForAssertion(() => cut.Find("nav.tabs"), Wait);
         Services.GetRequiredService<NavigationManager>().NavigateTo("settings");
@@ -36,6 +41,93 @@ public sealed class SettingsTests : AppTestContext
             var row = await App.Database.Db.Get<Saved>("SELECT unit_prefs AS UnitPrefs FROM profiles WHERE id = ?", [ProfileId]);
             Assert.Equal(TemperatureUnit.Fahrenheit, UnitPrefsJson.Parse(row.UnitPrefs, UnitPrefs.Metric).Temperature);
         }, Wait);
+    }
+
+    private Task<Details> DetailsAsync() => App.Database.Db.Get<Details>(
+        "SELECT birth_date AS BirthDate, sex_for_calcs AS SexForCalcs, height AS Height, height_unit AS HeightUnit, height_cm AS HeightCm, activity_level AS ActivityLevel FROM profiles WHERE id = ?",
+        [ProfileId]);
+
+    private static readonly string Metric = UnitPrefsJson.Serialize(UnitPrefs.Metric);
+
+    [Fact]
+    public async Task EditedDetailsSaveLocally()
+    {
+        var cut = await SettingsAsync(Metric);
+
+        await ChangeAsync(cut, "#details-birth", "1985-12-01");
+        await ChangeAsync(cut, "#details-height-cm", "172,5");
+        await ClickAsync(() => cut.FindAll("[aria-labelledby='details-sex-label'] [role=radio]").Single(b => b.TextContent.Trim() == "Male"));
+        await ClickAsync(() => cut.FindAll("[aria-labelledby='details-activity-label'] [role=radio]").Single(b => b.TextContent.Trim() == "Active"));
+        await SubmitAsync(cut, "#details-birth");
+
+        cut.WaitForAssertion(() => Assert.Contains("Saved.", cut.Markup, StringComparison.Ordinal), Wait);
+        var saved = await DetailsAsync();
+        Assert.Equal(("1985-12-01", "male", 172.5, "cm", 172.5, "active"),
+            (saved.BirthDate, saved.SexForCalcs, saved.Height, saved.HeightUnit, saved.HeightCm, saved.ActivityLevel));
+    }
+
+    [Fact]
+    public async Task ChoosingTheSelectedOptionAgainClearsIt()
+    {
+        var cut = await SettingsAsync(Metric, "sex_for_calcs = 'female', activity_level = 'light'");
+        cut.WaitForAssertion(() => cut.Find("#details-birth"), Wait);
+
+        await ClickAsync(() => cut.FindAll("[aria-labelledby='details-activity-label'] [role=radio]").Single(b => b.TextContent.Trim() == "Light"));
+        await SubmitAsync(cut, "#details-birth");
+
+        cut.WaitForAssertion(() => Assert.Contains("Saved.", cut.Markup, StringComparison.Ordinal), Wait);
+        var saved = await DetailsAsync();
+        Assert.Equal(("female", null), (saved.SexForCalcs, saved.ActivityLevel));
+    }
+
+    [Fact]
+    public async Task AHeightLeftAsShownIsNotRewrittenThroughItsRoundedDisplay()
+    {
+        // Entered as 5 ft 5 in; shown in cm, rounded.
+        var cut = await SettingsAsync(Metric, "height = 65, height_unit = 'in', height_cm = 165.1");
+        cut.WaitForAssertion(() => Assert.Equal("165.1", cut.Find("#details-height-cm").GetAttribute("value")), Wait);
+
+        await ChangeAsync(cut, "#details-birth", "1990-04-02");
+        await SubmitAsync(cut, "#details-birth");
+
+        cut.WaitForAssertion(() => Assert.Contains("Saved.", cut.Markup, StringComparison.Ordinal), Wait);
+        var saved = await DetailsAsync();
+        Assert.Equal((65.0, "in", "1990-04-02"), (saved.Height, saved.HeightUnit, saved.BirthDate));
+    }
+
+    [Fact]
+    public async Task FeetAndInchesShowAsEntered()
+    {
+        var cut = await SettingsAsync(UnitPrefsJson.Serialize(UnitPrefs.DefaultFor("en-US")), "height = 70.5, height_unit = 'in', height_cm = 179.07");
+
+        cut.WaitForAssertion(() => Assert.Equal("5", cut.Find("[aria-label=Feet]").GetAttribute("value")), Wait);
+        Assert.Equal("10.5", cut.Find("[aria-label=Inches]").GetAttribute("value"));
+    }
+
+    [Fact]
+    public async Task AnInvalidBirthDateIsShownAndNothingIsSaved()
+    {
+        var cut = await SettingsAsync(Metric, "birth_date = '1990-04-02'");
+        cut.WaitForAssertion(() => cut.Find("#details-birth"), Wait);
+
+        await ChangeAsync(cut, "#details-birth", "02/04/1990");
+        await SubmitAsync(cut, "#details-birth");
+
+        cut.WaitForAssertion(() => Assert.Contains("Birth date must look like 1990-04-02.", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Equal("1990-04-02", (await DetailsAsync()).BirthDate);
+    }
+
+    [Fact]
+    public async Task AnImplausibleHeightIsShownAndNothingIsSaved()
+    {
+        var cut = await SettingsAsync(Metric);
+        cut.WaitForAssertion(() => cut.Find("#details-height-cm"), Wait);
+
+        await ChangeAsync(cut, "#details-height-cm", "17");
+        await SubmitAsync(cut, "#details-birth");
+
+        cut.WaitForAssertion(() => Assert.Contains("That height looks wrong.", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Null((await DetailsAsync()).Height);
     }
 
     [Fact]
@@ -107,6 +199,21 @@ public sealed class SettingsTests : AppTestContext
 
         cut.WaitForAssertion(() => Assert.Equal("Couldn't sign out. Check your connection and try again.", cut.Find("[role=alert]").TextContent), Wait);
         Assert.Equal("Settings", cut.Find("h1").TextContent);
+    }
+
+    public sealed class Details
+    {
+        public string? BirthDate { get; set; }
+
+        public string? SexForCalcs { get; set; }
+
+        public double? Height { get; set; }
+
+        public string? HeightUnit { get; set; }
+
+        public double? HeightCm { get; set; }
+
+        public string? ActivityLevel { get; set; }
     }
 
     public sealed class Saved
