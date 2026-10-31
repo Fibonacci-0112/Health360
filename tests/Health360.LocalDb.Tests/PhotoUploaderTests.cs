@@ -360,6 +360,33 @@ public sealed class PhotoUploaderTests
     }
 
     [Fact]
+    public async Task AnAddWaitingAcrossAnAccountSwitchIsRefused()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        var owner = new MemoryOwnerStore { Owner = "user-a" };
+        var files = new MemoryPhotoFiles { Gate = new TaskCompletionSource() };
+        using var uploader = new PhotoUploader(t.Db, files, new FakePhotoStorage(), Clock);
+        var database = Database(t, owner, uploader);
+
+        // The first add holds the lock; the second queues behind it, then the switch begins.
+        var first = AddAsync(uploader);
+        await files.Writing.Task.WaitAsync(Ct);
+        var second = AddAsync(uploader, "back");
+        await Task.Delay(50, Ct);
+        var switching = database.BindToUserAsync("user-b");
+        await Task.Delay(50, Ct);
+        files.Gate.SetResult();
+
+        await first;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => second);
+        await switching;
+
+        Assert.Empty(files.List());
+        Assert.Equal(0, await uploader.PendingCountAsync());
+        Assert.Equal(0, (await t.Db.Get<CountRow>("SELECT count(*) AS N FROM progress_photos")).N);
+    }
+
+    [Fact]
     public async Task SweepAlsoRemovesHalfWrittenFiles()
     {
         var root = Path.Combine(Path.GetTempPath(), "health360-photos-" + Guid.NewGuid().ToString("N"));
@@ -410,6 +437,11 @@ public sealed class PhotoUploaderTests
         var http = new HttpClient(server) { BaseAddress = new Uri("http://127.0.0.1:54321/") };
         var session = new FixedSession(new SessionToken("user-a", "user-token"));
         return (new SupabasePhotoStorage(http, session, new MemoryOwnerStore { Owner = owner }, "anon-key"), server);
+    }
+
+    private sealed class CountRow
+    {
+        public long N { get; set; }
     }
 
     private sealed class PhotoRow

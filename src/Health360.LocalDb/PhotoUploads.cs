@@ -51,6 +51,9 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     private int started;
     private int disposed;
 
+    // Changes each time a clear begins, so an add that was waiting for the lock across a clear is refused.
+    private int generation;
+
     /// <summary>Raised after a pass changed the queue, possibly off the UI thread.</summary>
     public event Action? Changed;
 
@@ -62,7 +65,7 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     /// Adds a photo taken (or picked) on this device and returns its id. Both images must be JPEGs already resized and
     /// rotated upright by the platform (the EXIF orientation is removed with the rest of the metadata, so a sideways
     /// original would stay sideways). Throws <see cref="ArgumentException"/> for anything else, before storing
-    /// anything.
+    /// anything, and <see cref="InvalidOperationException"/> if the account's data was cleared while it waited.
     /// </summary>
     public async Task<string> AddAsync(
         string profileId,
@@ -93,9 +96,17 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         var now = Timestamps.UtcNow(clock);
         // Held from the first file to the commit, so clearing the account's data can't land in between and leave an
         // entry without its files (or this account's row in the next account's database).
+        var before = Volatile.Read(ref generation);
         await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // The account was cleared (signed out or switched) while this waited: the photo belongs to whoever
+            // was signed in before, so it must not land in the next account's database.
+            if (Volatile.Read(ref generation) != before)
+            {
+                throw new InvalidOperationException("The account changed before the photo was saved.");
+            }
+
             await files.WriteAsync(PhotoName(id), strippedPhoto, cancellationToken).ConfigureAwait(false);
             await files.WriteAsync(ThumbName(id), strippedThumb, cancellationToken).ConfigureAwait(false);
             await db.WriteTransaction(async tx =>
@@ -263,6 +274,7 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     public async Task ClearAsync(Func<Task> clear)
     {
         ArgumentNullException.ThrowIfNull(clear);
+        Interlocked.Increment(ref generation);
         try
         {
             running?.Cancel();
