@@ -6,7 +6,7 @@ Instructions for Claude Code working in the Health360 repository. Keep this file
 
 Health360 is a household-oriented health and fitness app for nutrition, workouts, body metrics, physiology, and goals. It targets Android and Windows desktop, with offline logging on both. A web (browser) app, Apple (iOS, macOS) and Linux desktop are out of scope ([ADR 0002](docs/adr/0002-dotnet-maui-blazor.md)). Health and fitness values are sensitive personal data.
 
-The repository is in **Phase 0b: .NET foundation** (`docs/phase0b.md` tracks what is and isn't done). The implementation plan describes later phases; do not assume a planned feature is already implemented. Treat the current source, package manifests, migrations, tests, and CI as the facts on the ground. The `notes` table is throwaway Phase 0 scaffolding; do not build features on it.
+The repository is in **Phase 1: MVP**, starting with step 1.1 (Body and photos). Phase 0b, the .NET foundation, met its exit criteria on 2026-10-31; `docs/phase0b.md` records what it built and the work it deferred to Phase 1. The implementation plan describes later phases; do not assume a planned feature is already implemented. Treat the current source, package manifests, migrations, tests, and CI as the facts on the ground. The `notes` table is throwaway Phase 0 scaffolding; do not build features on it.
 
 The Phase 0 TypeScript prototype (Expo, Tauri, Edge Functions) was removed once the PowerSync .NET gate passed. Its code is in the git history, and `docs/phase0.md` records what it proved and what its tests found. Don't reintroduce it, or a TypeScript or Node toolchain, without an ADR.
 

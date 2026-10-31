@@ -1,18 +1,31 @@
 # Phase 0b: .NET foundation
 
+**Complete** (2026-10-31): every exit criterion in [PLAN.md §3](PLAN.md) is met, and Phase 1 has started. Work deferred to Phase 1 is listed under [Carried into Phase 1](#carried-into-phase-1).
+
 Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0002-dotnet-maui-blazor.md)). The deliverables and exit criteria are in [PLAN.md §3](PLAN.md). The TypeScript prototype ([phase0.md](phase0.md)) stayed in place and in CI until the PowerSync .NET gate passed, and was removed on 2026-10-31. Where this page says a part "ports" prototype code, that code is in the git history before that date.
 
 ## Status
 
 | Deliverable | State |
 |---|---|
-| Solution layout (§2.2) and CI: build, format and analyzers, tests | **Scaffolded.** Projects compile, with placeholder tests only |
+| Solution layout (§2.2) and CI: build, format and analyzers, tests | **Done.** CI checks formatting and analyzers, builds and tests the core solution, builds the Android and Windows apps, runs pgTAP, lint, the drift check and the API's database tests, and runs the two-client sync tests against Supabase and PowerSync |
 | `Health360.Domain` units and UUIDv7 ids, with FsCheck property tests | **Done.** `Units/` and `Ids/UuidV7` port `packages/domain`, with the same factors and property tests (FsCheck) |
 | `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | **Auth and user-scoped queries done** (see [API authentication](#api-authentication)), with `/me` and `/profiles/{id}` as the first endpoints. **Test Claude call started:** `POST /ai/hello` (see [Claude calls](#claude-calls)), tested against recorded responses only. The live run is deferred to Phase 1's first AI endpoint (`ai-label-ocr`, PLAN.md §3), because nothing before it calls Claude |
 | MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | **Built; run on Android (emulator) and Windows** (see [MAUI app](#maui-app)): sign-in by emailed code, onboarding with every unit type and locale defaults, the five tabs and Settings (units, rejected writes with retry and discard, sign-out), syncing over the existing `me`, `household` and `reference` streams. The app's services (everything below the BlazorWebView) were run against `supabase start` and the local PowerSync: emailed-code sign-in, the profile arriving over `me`, onboarding reaching the server, an RLS-rejected write quarantined without blocking the queue, and a second user never receiving the first user's rows. Run on Windows and in the Android emulator (sign-in, onboarding, notes) |
 | Throwaway `notes` table on Android and Windows | **Done on Android and Windows** (see [Notes sync test](#notes-sync-test)): the Today tab adds and lists notes through the local database. Two-device sync, kill-while-offline on both targets, and the two-user check passed. The two-client leak test also runs on the .NET sync stack (see [Two-client sync test](#two-client-sync-test)) |
 | `tools/drift` against the PowerSync .NET schema | **Done for `AppSchema`** (see [Schema drift](#schema-drift)): runs in CI's database job. The C# contracts are not compared yet |
 | Remove the TypeScript prototype once the gate passes | **Done** (2026-10-31): `apps/`, `packages/`, `e2e/sync/`, `supabase/functions/`, `tools/codegen/` and the pnpm workspace are gone, and so are their CI jobs |
+
+## Carried into Phase 1
+
+Deferred on purpose, not missed:
+
+- **Live Claude call.** `POST /ai/hello` is tested against recorded responses only. The first live run comes with `ai-label-ocr` (Phase 1, step 3) and needs an Anthropic API key in the server's secrets.
+- **AI usage controls.** Per-profile daily quotas, `ai_generations` usage logging and prompt caching ([Claude calls](#claude-calls)).
+- **Real Auth server for the API's checks.** The `/auth/v1/user` lookup and the JWKS format are tested against a fake that follows Supabase's documented responses ([API authentication](#api-authentication)).
+- **Contracts in the drift check.** `tools/drift` compares `AppSchema` with Postgres, not the C# contracts ([Schema drift](#schema-drift)).
+- **Remove `notes`.** The throwaway table goes, in a new migration, once a real synced table (such as body metrics in step 1.1) replaces it in the sync tests and the Today tab.
+- **Physical Android phone.** The Android checks ran in the emulator.
 
 ## What the scaffold contains
 
@@ -227,7 +240,7 @@ The sign-in code arrives in the local mail catcher (Mailpit, http://127.0.0.1:54
 
 ## Findings
 
-- `PowerSync.Common` 1.0.0 depends on `SQLitePCLRaw.bundle_e_sqlite3` 2.1.10, which has a high-severity advisory (GHSA-2m69-gcr7-jv3q). NuGet's audit warning fails the restore because warnings are errors. `Health360.LocalDb` references the bundle directly, now 3.0.5, which also lifts `SQLitePCLRaw.core` under `Microsoft.Data.Sqlite.Core` 9.0.1 (built against 2.x) to 3.x. The LocalDb and UI tests open a real PowerSync database on it; Android and Windows rely on the MAUI CI builds and are not yet run on a device.
+- `PowerSync.Common` 1.0.0 depends on `SQLitePCLRaw.bundle_e_sqlite3` 2.1.10, which has a high-severity advisory (GHSA-2m69-gcr7-jv3q). NuGet's audit warning fails the restore because warnings are errors. `Health360.LocalDb` references the bundle directly, now 3.0.5, which also lifts `SQLitePCLRaw.core` under `Microsoft.Data.Sqlite.Core` 9.0.1 (built against 2.x) to 3.x. The LocalDb and UI tests open a real PowerSync database on it, and the MAUI app has run on it in the Android emulator and on Windows ([Notes sync test](#notes-sync-test)). It has not yet run on a physical Android phone.
 - The SDK parses each queued write's data (`CrudEntry.OpData`) with Newtonsoft, which turns any text that looks like an ISO date-time into a `DateTime`: `created_at` (or a note that reads like a timestamp) loses its text and UTC offset. `Uploads` reads the op's JSON from `ps_crud` instead; `SendsTimestampsExactlyAsStored` guards it.
 - `PowerSync.Common` ships its native core for Linux, macOS and Windows desktop as content files, so a plain `net10.0` test project can open a real PowerSync database on the Linux CI runner.
 - PowerSync .NET 1.0.0 builds the sync URL as the credentials' endpoint plus `/sync/stream`, and `Uri.ToString()` ends a bare host with `/`, so `http://127.0.0.1:8080/` requested `//sync/stream`, which the service answers with 404. Sync then retried forever and never connected; unit tests with fakes couldn't see it. `SupabaseConnector.Endpoint` trims the trailing slash.
