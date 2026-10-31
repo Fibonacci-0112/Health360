@@ -18,6 +18,21 @@ public sealed class ProfileRow
     public double? Height { get; set; }
 
     public string? HeightUnit { get; set; }
+
+    /// <summary>In cm, as the server recomputes it from <see cref="Height"/> and <see cref="HeightUnit"/>.</summary>
+    public double? HeightCm { get; set; }
+
+    /// <summary><c>YYYY-MM-DD</c>, or null when not given.</summary>
+    public string? BirthDate { get; set; }
+
+    /// <summary>A <c>SexForCalcs</c> code, or null when not given.</summary>
+    public string? SexForCalcs { get; set; }
+
+    /// <summary>An activity level code, or null when not given.</summary>
+    public string? ActivityLevel { get; set; }
+
+    /// <summary>JSON text; read it with <see cref="PhysiologyPrefsJson.Parse"/>.</summary>
+    public string? PhysiologyPrefs { get; set; }
 }
 
 /// <summary>
@@ -28,7 +43,9 @@ public static class Profiles
 {
     private const string MineSql =
         "SELECT id AS Id, display_name AS DisplayName, unit_prefs AS UnitPrefs, onboarded_at AS OnboardedAt, " +
-        "height AS Height, height_unit AS HeightUnit FROM profiles WHERE user_id = ?";
+        "height AS Height, height_unit AS HeightUnit, height_cm AS HeightCm, birth_date AS BirthDate, " +
+        "sex_for_calcs AS SexForCalcs, activity_level AS ActivityLevel, physiology_prefs AS PhysiologyPrefs " +
+        "FROM profiles WHERE user_id = ?";
 
     /// <summary>The user's profile now and after every change (an empty array until it has synced).</summary>
     public static IAsyncEnumerable<ProfileRow[]> WatchMine(PowerSyncDatabase db, string userId, CancellationToken cancellationToken)
@@ -79,6 +96,25 @@ public static class Profiles
     public static Task SetUnitPrefsAsync(IPowerSyncDatabase db, string profileId, Domain.Units.UnitPrefs prefs) =>
         UpdateAsync(db, profileId, "UPDATE profiles SET unit_prefs = ? WHERE id = ?", [UnitPrefsJson.Serialize(prefs), profileId]);
 
+    /// <summary>
+    /// Sets the heart-rate-lowering medication flag in <c>physiology_prefs</c>, keeping every other key. The
+    /// stored JSON is read in the same transaction, so a concurrent change to another key isn't lost.
+    /// </summary>
+    public static async Task SetHeartRateLoweringMedicationAsync(IPowerSyncDatabase db, string profileId, bool value)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentException.ThrowIfNullOrEmpty(profileId);
+        await db.WriteTransaction(async tx =>
+        {
+            var found = await tx.GetOptional<PrefsRow>(
+                "SELECT physiology_prefs AS PhysiologyPrefs FROM profiles WHERE id = ?", [profileId]).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The profile is not in the local database.");
+            await tx.Execute(
+                "UPDATE profiles SET physiology_prefs = ? WHERE id = ?",
+                [PhysiologyPrefsJson.WithMedication(found.PhysiologyPrefs, value), profileId]).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+    }
+
     // PowerSync tables are views with INSTEAD OF triggers, whose row counts SQLite reports as 0, so the
     // row is checked for in the same transaction instead.
     private static async Task UpdateAsync(IPowerSyncDatabase db, string profileId, string sql, object?[] parameters)
@@ -100,6 +136,11 @@ public static class Profiles
     internal sealed class IdRow
     {
         public string Id { get; set; } = "";
+    }
+
+    internal sealed class PrefsRow
+    {
+        public string? PhysiologyPrefs { get; set; }
     }
 }
 

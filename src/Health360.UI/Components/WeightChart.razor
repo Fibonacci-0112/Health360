@@ -1,0 +1,117 @@
+@using System.Globalization
+@using Health360.Domain.Body
+
+@* The weight trend as SVG (ADR 0003): each day's mean weigh-in as a dot, the smoothed trend as a line, dates on a
+   real time axis so gaps show as gaps. Domain computes the trend; this only places points. Screen readers get a
+   description and the same values in a table. *@
+@if (Points.Count == 0)
+{
+    <p class="muted">No weigh-ins yet. Your trend appears here once you add one.</p>
+}
+else
+{
+    var (min, max) = Range();
+    <figure class="chart">
+        <svg viewBox="0 0 @Width @Height" role="img" aria-labelledby="@($"{IdPrefix}-chart-title {IdPrefix}-chart-desc")"
+             preserveAspectRatio="xMidYMid meet">
+            <title id="@($"{IdPrefix}-chart-title")">Weight trend</title>
+            <desc id="@($"{IdPrefix}-chart-desc")">@Description()</desc>
+            @foreach (var tick in new[] { min, (min + max) / 2, max })
+            {
+                <g>
+                    <line class="chart-grid" x1="@N(PadLeft)" x2="@N(Width - PadRight)" y1="@N(Y(tick, min, max))" y2="@N(Y(tick, min, max))" />
+                    <text class="chart-label" x="@N(PadLeft - 6)" y="@N(Y(tick, min, max) + 4)" text-anchor="end">@MetricDisplay.Number(tick, 1)</text>
+                </g>
+            }
+            <text class="chart-label" x="@N(PadLeft)" y="@N(Height - 8)" text-anchor="start">@MetricDisplay.Date(Points[0].LocalDate)</text>
+            @if (Points.Count > 1)
+            {
+                <g>
+                    <text class="chart-label" x="@N(Width - PadRight)" y="@N(Height - 8)" text-anchor="end">@MetricDisplay.Date(Points[^1].LocalDate)</text>
+                    <polyline class="chart-trend" points="@TrendPath(min, max)" />
+                </g>
+            }
+            @foreach (var point in Points)
+            {
+                <circle class="chart-point" cx="@N(X(point.LocalDate))" cy="@N(Y(Chart(point.MeanKg), min, max))" r="3" />
+            }
+        </svg>
+        <figcaption class="muted small">
+            Dots: each day's weigh-ins (@ChartUnit). Line: the smoothed trend, which moves 10% of the way towards each day's weight.
+        </figcaption>
+    </figure>
+    <details class="chart-table">
+        <summary>Show as a table</summary>
+        <table>
+            <thead>
+                <tr><th scope="col">Date</th><th scope="col">Weighed</th><th scope="col">Trend</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var point in Points.Reverse())
+                {
+                    <tr>
+                        <th scope="row">@MetricDisplay.Date(point.LocalDate)</th>
+                        <td>@MetricDisplay.BodyWeight(point.MeanKg, Unit)@(point.Count > 1 ? $" (mean of {point.Count})" : "")</td>
+                        <td>@MetricDisplay.BodyWeight(point.TrendKg, Unit)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </details>
+}
+
+@code {
+    private const double Width = 640;
+    private const double Height = 240;
+    private const double PadLeft = 52;
+    private const double PadRight = 16;
+    private const double PadTop = 12;
+    private const double PadBottom = 30;
+
+    [Parameter, EditorRequired]
+    public string IdPrefix { get; set; } = "";
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<TrendPoint> Points { get; set; } = [];
+
+    [Parameter, EditorRequired]
+    public BodyWeightUnit Unit { get; set; }
+
+    private string ChartUnit => MetricDisplay.ChartWeight(1, Unit).Unit;
+
+    private double Chart(double kg) => MetricDisplay.ChartWeight(kg, Unit).Value;
+
+    /// <summary>The y range over dots and trend; a constant series gets one unit either side (a flat line).</summary>
+    private (double Min, double Max) Range()
+    {
+        var values = Points.SelectMany(p => new[] { Chart(p.MeanKg), Chart(p.TrendKg) }).ToList();
+        var min = values.Min();
+        var max = values.Max();
+        return max - min < 1e-9 ? (min - 1, max + 1) : (min, max);
+    }
+
+    private double X(DateOnly date)
+    {
+        var first = Points[0].LocalDate.DayNumber;
+        var span = Points[^1].LocalDate.DayNumber - first;
+        var plot = Width - PadLeft - PadRight;
+        return span == 0 ? PadLeft + (plot / 2) : PadLeft + ((date.DayNumber - first) / (double)span * plot);
+    }
+
+    private static double Y(double value, double min, double max) =>
+        PadTop + ((max - value) / (max - min) * (Height - PadTop - PadBottom));
+
+    private string TrendPath(double min, double max) =>
+        string.Join(' ', Points.Select(p => $"{N(X(p.LocalDate))},{N(Y(Chart(p.TrendKg), min, max))}"));
+
+    private string Description()
+    {
+        var last = Points[^1];
+        return Points.Count == 1
+            ? $"One weigh-in on {MetricDisplay.Date(last.LocalDate)}: {MetricDisplay.BodyWeight(last.MeanKg, Unit)}."
+            : $"{Points.Count} days with weigh-ins from {MetricDisplay.Date(Points[0].LocalDate)} to {MetricDisplay.Date(last.LocalDate)}. " +
+              $"Trend went from {MetricDisplay.BodyWeight(Points[0].TrendKg, Unit)} to {MetricDisplay.BodyWeight(last.TrendKg, Unit)}.";
+    }
+
+    private static string N(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+}
