@@ -26,6 +26,8 @@ streams:
       - SELECT * FROM measurements WHERE profile_id IN my_profiles
       - SELECT * FROM zone_sets WHERE profile_id IN my_profiles
       - SELECT * FROM metric_pins WHERE profile_id IN my_profiles
+      # Photo metadata only. Only the owner's: photos shared through a 'photos' grant arrive with shared_profile.
+      - SELECT * FROM progress_photos WHERE profile_id IN my_profiles
       - SELECT * FROM notes WHERE profile_id IN my_profiles
 
   # H tables for every household the user belongs to.
