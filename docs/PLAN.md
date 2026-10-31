@@ -291,7 +291,7 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
 **Deliverables**
 - The solution in §2.2, with CI: `dotnet build`, `dotnet test`, formatting and analyzers, `supabase test db`, and the schema-drift check.
 - `Health360.Domain/Units` and UUIDv7 ids ported, with the same exact factors and FsCheck property tests. It comes first because every module depends on it.
-- `Health360.Server`: Supabase JWT and signed-in-user validation on every endpoint, queries as the signed-in user, and one test Claude call with structured output validated against `Health360.Contracts`.
+- `Health360.Server`: Supabase JWT and signed-in-user validation on every endpoint, queries as the signed-in user, and one test Claude call with structured output validated against `Health360.Contracts`. The call is tested against recorded responses; the first run against the live API is deferred to Phase 1's first AI endpoint (`ai-label-ocr`).
 - MAUI app on Android and Windows: tab navigation, login by emailed code, onboarding with per-type unit preferences and locale defaults, PowerSync .NET with the existing streams, and the `failed_uploads` quarantine.
 - A throwaway `notes` table on **both targets**: the Android app and the Windows app.
 
@@ -321,6 +321,7 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
      - Session energy estimates match golden fixtures for time-in-zone, average-HR and no-HR inputs, and editing zones later leaves past sessions unchanged.
 3. **Nutrition and label OCR**
    - Delivers: USDA import, food search, the barcode lookup chain, `ai-label-ocr` with checks and a confirm screen, food logging, recipes, the micronutrient panel, and formula targets.
+   - Also the first Claude call against the live API (deferred from Phase 0b), which needs an Anthropic API key in the server's secrets.
    - **Exit:**
      - ≥90% exact match on serving size, kcal, protein, carbs and fat across a **50+ photo eval set from your own pantry**, measured before any user edits.
      - 18 of 20 common barcodes resolve without OCR.
