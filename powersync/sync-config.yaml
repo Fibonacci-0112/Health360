@@ -10,7 +10,9 @@ streams:
   # U tables for the signed-in user's own profile.
   # For now this syncs all of the user's authorized rows, with no time window (PLAN.md §2.3). The 24-month
   # window comes before Phase 3's high-volume imports or a public release, and must keep pinned and current
-  # physiology values at any age (§2.8). Photo files are not rows here; they have their own cache rule.
+  # physiology values at any age (§2.8): every measurement a metric_pins row points at, with its group. Such a
+  # query must still filter measurements by profile_id: a pin's measurement_id isn't proof of ownership.
+  # Photo files are not rows here; they have their own cache rule.
   # Managed (child) profiles arrive in Phase 4 with their own query on profiles.managed_by.
   me:
     auto_subscribe: true
@@ -23,6 +25,7 @@ streams:
       - SELECT * FROM measurement_groups WHERE profile_id IN my_profiles
       - SELECT * FROM measurements WHERE profile_id IN my_profiles
       - SELECT * FROM zone_sets WHERE profile_id IN my_profiles
+      - SELECT * FROM metric_pins WHERE profile_id IN my_profiles
       - SELECT * FROM notes WHERE profile_id IN my_profiles
 
   # H tables for every household the user belongs to.

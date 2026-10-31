@@ -556,6 +556,20 @@ select:focus-visible {
     font-size: 13px;
 }
 
+.passed-over li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-xs) var(--space-sm);
+    margin-block: var(--space-xs);
+}
+
+button.compact {
+    font-size: 14px;
+    min-height: 36px;
+    padding: var(--space-xs) var(--space-md);
+}
+
 @media (max-width: 599px) {
     .value-row {
         grid-template-columns: 1fr;
