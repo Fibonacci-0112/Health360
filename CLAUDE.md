@@ -54,7 +54,7 @@ Key paths:
 - `supabase/migrations`, `supabase/functions`, `supabase/tests/database` — database, server functions, and pgTAP tests.
 - `supabase/functions/_shared` — hand-written Edge Function helpers (`auth.ts`, `http.ts`) plus `generated/`, the codegen copy of `packages/domain` and `packages/schemas`.
 - `powersync` — sync streams (`sync-config.yaml`) and local service configuration.
-- `e2e/sync` — two-client isolation and offline sync tests.
+- `e2e/sync` — two-client isolation and offline sync tests; `tests/Health360.Sync.Tests` runs the same checks through `Health360.LocalDb` (skipped unless `SYNC_E2E=1`, see `docs/phase0b.md`).
 - `tools/codegen` — Edge Function codegen (`copy-shared.mjs`) and schema-drift check (`check-drift.mjs`); `tools/drift` — the same drift check for the .NET `AppSchema`; `tools/db` — Docker-free local database test runner.
 
 ## Standard development commands
@@ -96,6 +96,7 @@ pnpm --filter @health360/app web
 pnpm --filter @health360/app export:web   # PWA export + service-worker precache
 pnpm --filter @health360/desktop dev
 pnpm --filter @health360/e2e-sync test
+dotnet test --project tests/Health360.Sync.Tests   # needs SYNC_E2E=1 and the same environment
 # For each function in supabase/functions/* (CI currently runs ai-hello):
 cd supabase/functions/ai-hello && deno check index.ts handler.ts && deno test --no-prompt
 ```
