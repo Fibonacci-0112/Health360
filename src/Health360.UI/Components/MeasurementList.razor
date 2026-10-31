@@ -1,0 +1,90 @@
+@inject BodyData Body
+
+@* Entered values, newest first, each as entered (value and unit) with its source and date. Deleting asks first,
+   and says when a value goes together with others entered with it (blood pressure's two numbers). *@
+<section class="history" aria-labelledby="@($"{IdPrefix}-history")">
+    <h2 id="@($"{IdPrefix}-history")">@Title</h2>
+    @if (Rows.Count == 0)
+    {
+        <p class="muted">Nothing entered yet.</p>
+    }
+    else
+    {
+        <ul class="measurement-list">
+            @foreach (var row in Shown)
+            {
+                <li @key="row.Id" class="measurement">
+                    <div class="measurement-text">
+                        <span class="strong">@MetricDisplay.Name(row.MetricCode)</span>
+                        <span>@MetricDisplay.Format(row.Value, row.Unit)</span>
+                        <span class="muted small">@row.LocalDate · @MetricDisplay.SourceName(row.Source)</span>
+                    </div>
+                    @if (confirming == row.Id)
+                    {
+                        <div class="confirm" role="alertdialog" aria-labelledby="@($"{IdPrefix}-confirm-{row.Id}")">
+                            <p id="@($"{IdPrefix}-confirm-{row.Id}")">
+                                @(row.GroupId is null ? "Delete this value?" : "Delete this value and the ones entered with it?")
+                            </p>
+                            <div class="inline">
+                                <button type="button" class="danger" disabled="@busy" @onclick="() => DeleteAsync(row.Id)">Delete</button>
+                                <button type="button" class="secondary" disabled="@busy" @onclick="() => confirming = null">Keep</button>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <button type="button" class="secondary" aria-label="@($"Delete {MetricDisplay.Name(row.MetricCode)} from {row.LocalDate}")"
+                                @onclick="() => { confirming = row.Id; error = null; }">Delete</button>
+                    }
+                </li>
+            }
+        </ul>
+        @if (Rows.Count > Limit && !showAll)
+        {
+            <button type="button" class="secondary" @onclick="() => showAll = true">Show all @Rows.Count</button>
+        }
+    }
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+</section>
+
+@code {
+    private const int Limit = 20;
+
+    [Parameter, EditorRequired]
+    public string IdPrefix { get; set; } = "";
+
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = "";
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<Health360.LocalDb.MeasurementRow> Rows { get; set; } = [];
+
+    private string? confirming;
+    private bool showAll;
+    private bool busy;
+    private string? error;
+
+    private IEnumerable<Health360.LocalDb.MeasurementRow> Shown => showAll ? Rows : Rows.Take(Limit);
+
+    private async Task DeleteAsync(string id)
+    {
+        busy = true;
+        error = null;
+        try
+        {
+            await Body.DeleteAsync(id);
+            confirming = null;
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            error = "Couldn't delete it on this device. Please try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}

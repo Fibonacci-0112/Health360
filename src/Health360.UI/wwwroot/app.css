@@ -445,3 +445,187 @@ button.danger {
     right: 0.75rem;
     top: 0.5rem;
 }
+
+/* Body and physiology */
+.page-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-sm);
+}
+
+.card,
+.measurement-form,
+.history {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding: var(--space-lg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+}
+
+.card p,
+.history p {
+    margin: 0;
+}
+
+.headline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-sm);
+    font-size: 20px;
+}
+
+.badge-estimate,
+.badge-retest {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px var(--space-sm);
+    border-radius: 999px;
+    border: 1px solid var(--muted);
+    color: var(--muted);
+}
+
+.badge-retest {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+select {
+    font: inherit;
+    font-size: 16px;
+    color: var(--text);
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: var(--space-md);
+    min-height: 44px;
+    max-width: 100%;
+}
+
+select:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.check {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    min-height: 44px;
+}
+
+.check input {
+    min-height: auto;
+    width: 20px;
+    height: 20px;
+}
+
+.values {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.value-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 1fr) 2fr;
+    gap: var(--space-sm);
+    padding: var(--space-sm) 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.value-row dt {
+    font-weight: 600;
+}
+
+.value-row dd {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-xs) var(--space-sm);
+}
+
+.passed-over {
+    flex-basis: 100%;
+    font-size: 13px;
+}
+
+@media (max-width: 599px) {
+    .value-row {
+        grid-template-columns: 1fr;
+    }
+}
+
+.zones,
+.chart-table table {
+    border-collapse: collapse;
+    width: 100%;
+    max-width: 480px;
+}
+
+.zones th,
+.zones td,
+.chart-table th,
+.chart-table td {
+    text-align: left;
+    padding: var(--space-xs) var(--space-sm);
+    border-bottom: 1px solid var(--border);
+}
+
+.chart {
+    margin: 0;
+}
+
+.chart svg {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.chart-grid {
+    stroke: var(--border);
+    stroke-width: 1;
+}
+
+.chart-label {
+    fill: var(--muted);
+    font-size: 12px;
+}
+
+.chart-point {
+    fill: var(--muted);
+}
+
+.chart-trend {
+    fill: none;
+    stroke: var(--primary);
+    stroke-width: 2.5;
+}
+
+.measurement-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.measurement {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    padding: var(--space-sm) 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.measurement-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}

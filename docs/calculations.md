@@ -235,6 +235,21 @@ Pinning a measurement, rather than a source tier, lets a user keep an older lab 
 
 Deleting a measurement re-resolves straight away: the next measured value, then the estimate (`ResolverTests`).
 
+## Putting the profile together
+
+`PhysiologyProfile.Build` turns the stored measurements and the profile's fields into what the Body and Physiology screens show. It is a pure function of its inputs and is rebuilt after every change, so entering or deleting a value changes everything that uses it at once. The choices below are this app's, not a published method's:
+
+- **Values:** each measurement's canonical value (`value_canonical`) and its local date. Each metric goes through the resolver on its own (with the user's pin, when there is one).
+- **Body weight in formulas:** the newest point of the weight trend (every weigh-in, whatever its source), not the last raw weigh-in. BMI uses it with the profile height.
+- **Body fat:** measured `body_fat_pct` values only (DEXA, a scale, a value entered by hand). The Navy estimate is shown beside them but isn't stored or resolved. Fat-free mass is trend weight × (1 − resolved %BF / 100), so Katch-McArdle replaces Mifflin-St Jeor as soon as any body-fat value is entered.
+- **Navy estimate:** from the newest neck and waist (and hip, for women) measurements, each taken on its own: the latest day, then the later entry. Men use the waist at the navel and women the waist at the narrowest point, as the equations require. A combination the equation can't use (a waist not larger than the neck) gives no estimate.
+- **Thresholds:** lactate thresholds (LT1 and LT2) when both have a value, otherwise ventilatory ones (VT1 and VT2) when both do. Zones need both of a pair (see above).
+- **RMR retest flag:** the weight "then" is the trend on or before the test date. With no weigh-in by then, only the 12-month rule applies.
+- **VO₂max estimate:** Jackson only without a measured resting HR, and only with a PA-R answer. The app doesn't ask the PA-R questions yet, so for now VO₂max shows only measured values.
+- **Medication flag:** `profiles.physiology_prefs.heartRateLoweringMedication`. When it's true, Tanaka gives nothing and zones need a measured max HR (or a measured basis above it).
+
+The golden checks are in `PhysiologyProfileTests` (Domain) and, through the screens, `PhysiologyTests` (UI): a lab RMR changes maintenance and deleting it falls back, and a measured max HR changes the zones and deleting it falls back.
+
 ## What the 1.1 exit criterion proves
 
 Step 1.1 proves that entering a lab RMR changes the physiology profile's maintenance estimate at once, and that deleting it falls back to the next value or the estimate. It also proves that a measured max HR replaces the Tanaka estimate, and that the zones derived from max HR follow it (`HeartRateZoneRules.Derive`). Nutrition targets built on this come in step 1.3 and have their own integration test (PLAN.md §3).

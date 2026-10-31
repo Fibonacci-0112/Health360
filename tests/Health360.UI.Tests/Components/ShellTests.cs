@@ -54,7 +54,6 @@ public sealed class ShellTests : AppTestContext
     [Theory]
     [InlineData("food", "Food", "1.3")]
     [InlineData("train", "Train", "1.4")]
-    [InlineData("body", "Body", "1.5")]
     [InlineData("plan", "Plan", "1.1")]
     public async Task EachTabHasItsPage(string route, string title, string section)
     {

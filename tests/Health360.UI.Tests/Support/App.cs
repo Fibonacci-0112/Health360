@@ -52,6 +52,7 @@ public sealed class App : IAsyncDisposable
         context.Services.AddSingleton<AuthService>();
         context.Services.AddSingleton<ProfileService>();
         context.Services.AddSingleton<SyncState>();
+        context.Services.AddSingleton<BodyData>();
     }
 
     public AuthService NewAuthService(out SessionManager sessions)

@@ -1,0 +1,222 @@
+@using Health360.Contracts.Body
+@using Health360.Domain.Physiology
+@inject BodyData Body
+@inject ProfileService Profiles
+
+@* Enters one value (or blood pressure's two) with its unit, date and source. It saves to the local database,
+   which uploads when online; the server recomputes the canonical value. *@
+<form class="form measurement-form" @onsubmit="SaveAsync" aria-labelledby="@($"{IdPrefix}-title")">
+    <h2 id="@($"{IdPrefix}-title")">@Title</h2>
+    @if (Offered.Count == 0)
+    {
+        <p class="muted">The list of measurements hasn't reached this device yet. It arrives with the first sync.</p>
+    }
+    else
+    {
+        @if (Offered.Count > 1)
+        {
+            <div class="field">
+                <label for="@($"{IdPrefix}-metric")" class="label">Measurement</label>
+                <select id="@($"{IdPrefix}-metric")" value="@metric" @onchange="ChooseMetric">
+                    @foreach (var option in Offered)
+                    {
+                        <option value="@option">@(option == BloodPressure ? "Blood pressure" : MetricDisplay.Name(option))</option>
+                    }
+                </select>
+            </div>
+        }
+
+        @if (metric == BloodPressure)
+        {
+            <div class="field">
+                <span class="label" id="@($"{IdPrefix}-bp-label")">Blood pressure (mmHg)</span>
+                <div class="inline" role="group" aria-labelledby="@($"{IdPrefix}-bp-label")">
+                    <input id="@($"{IdPrefix}-value")" aria-label="Systolic" placeholder="Systolic" inputmode="numeric" class="short"
+                           @bind="valueText" @bind:event="oninput" />
+                    <input id="@($"{IdPrefix}-diastolic")" aria-label="Diastolic" placeholder="Diastolic" inputmode="numeric" class="short"
+                           @bind="diastolicText" @bind:event="oninput" />
+                </div>
+            </div>
+        }
+        else if (Metric is { } definition)
+        {
+            <div class="field">
+                <label for="@($"{IdPrefix}-value")" class="label">@ValueLabel(definition)</label>
+                <input id="@($"{IdPrefix}-value")" class="short" inputmode="decimal"
+                       placeholder="@(MetricDisplay.IsPace(unit) ? "m:ss" : null)"
+                       @bind="valueText" @bind:event="oninput" />
+            </div>
+            @if (definition.Units.Count > 1)
+            {
+                <div class="field">
+                    <span class="label" id="@($"{IdPrefix}-unit-label")">Unit</span>
+                    <ChoiceGroup LabelledBy="@($"{IdPrefix}-unit-label")" Options="definition.Units" Labels="MetricDisplay.UnitNames"
+                                 Value="@unit" ValueChanged="code => unit = code ?? unit" />
+                </div>
+            }
+        }
+
+        <div class="inline">
+            <div class="field">
+                <label for="@($"{IdPrefix}-date")" class="label">Date</label>
+                <input id="@($"{IdPrefix}-date")" type="date" max="@Body.Today.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)"
+                       @bind="date" />
+            </div>
+            <div class="field">
+                <label for="@($"{IdPrefix}-source")" class="label">Source</label>
+                <select id="@($"{IdPrefix}-source")" value="@source" @onchange="e => source = e.Value as string ?? source">
+                    @foreach (var option in MetricDisplay.Sources)
+                    {
+                        <option value="@option">@MetricDisplay.SourceName(option)</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        @if (error is not null)
+        {
+            <p class="error" role="alert">@error</p>
+        }
+        <p class="muted small" aria-live="polite">@saved</p>
+        <button type="submit" class="primary" disabled="@(busy || Profiles.Profile is null)" aria-busy="@(busy ? "true" : "false")">Save</button>
+    }
+</form>
+
+@code {
+    /// <summary>The pseudo-code that enters systolic and diastolic together.</summary>
+    public const string BloodPressure = "bp";
+
+    [Parameter, EditorRequired]
+    public string IdPrefix { get; set; } = "";
+
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = "";
+
+    /// <summary>The metrics to offer, in order. <see cref="BloodPressure"/> offers systolic and diastolic together.</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<string> Metrics { get; set; } = [];
+
+    [Parameter]
+    public string DefaultSource { get; set; } = "manual";
+
+    private string? metric;
+    private string unit = "";
+    private string? valueText;
+    private string? diastolicText;
+    private DateOnly date;
+    private string source = "manual";
+    private bool busy;
+    private string? error;
+    private string? saved;
+
+    /// <summary>The offered metrics this device has definitions for.</summary>
+    private List<string> Offered =>
+        [.. Metrics.Where(code => code == BloodPressure
+            ? Body.Definitions.ContainsKey("bp_systolic") && Body.Definitions.ContainsKey("bp_diastolic")
+            : Body.Definitions.ContainsKey(code))];
+
+    private MetricDefinition? Metric => metric is not null && Body.Definitions.TryGetValue(metric, out var d) ? d : null;
+
+    protected override void OnInitialized()
+    {
+        date = Body.Today;
+        source = DefaultSource;
+    }
+
+    protected override void OnParametersSet() => EnsureMetric();
+
+    private void EnsureMetric()
+    {
+        var offered = Offered;
+        if (metric is null || !offered.Contains(metric))
+        {
+            Choose(offered.FirstOrDefault());
+        }
+    }
+
+    private void ChooseMetric(ChangeEventArgs e) => Choose(e.Value as string);
+
+    private void Choose(string? code)
+    {
+        metric = code;
+        valueText = null;
+        diastolicText = null;
+        error = null;
+        unit = code == BloodPressure ? "mmHg" : Metric is { } d ? MetricDisplay.PreferredUnit(d, Profiles.UnitPrefs) : "";
+    }
+
+    private static string ValueLabel(MetricDefinition definition) =>
+        definition.Units.Count > 1 ? MetricDisplay.Name(definition.Code) : $"{MetricDisplay.Name(definition.Code)} ({MetricDisplay.UnitName(definition.Units[0])})";
+
+    private async Task SaveAsync()
+    {
+        EnsureMetric();
+        if (busy || metric is null)
+        {
+            return;
+        }
+
+        error = null;
+        saved = null;
+        var entries = Entries();
+        if (entries is null)
+        {
+            return;
+        }
+
+        foreach (var (definition, input) in entries)
+        {
+            var result = new MeasurementInputValidator(definition, Body.Today).Validate(input);
+            if (!result.IsValid)
+            {
+                error = entries.Count > 1
+                    ? $"{MetricDisplay.Name(definition.Code)}: {result.Errors[0].ErrorMessage}"
+                    : result.Errors[0].ErrorMessage;
+                return;
+            }
+        }
+
+        busy = true;
+        try
+        {
+            await Body.AddAsync(entries);
+            saved = metric == BloodPressure ? "Blood pressure saved." : $"{MetricDisplay.Name(metric)} saved.";
+            valueText = null;
+            diastolicText = null;
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            // What was typed stays in the form.
+            error = "Couldn't save on this device. Please try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private List<(MetricDefinition, MeasurementInput)>? Entries()
+    {
+        if (metric == BloodPressure)
+        {
+            if (!Body.Definitions.TryGetValue("bp_systolic", out var systolic) || !Body.Definitions.TryGetValue("bp_diastolic", out var diastolic))
+            {
+                return null;
+            }
+
+            return
+            [
+                (systolic, new MeasurementInput(systolic.Code, NumberText.Parse(valueText), "mmHg", source, date)),
+                (diastolic, new MeasurementInput(diastolic.Code, NumberText.Parse(diastolicText), "mmHg", source, date)),
+            ];
+        }
+
+        if (Metric is not { } definition)
+        {
+            return null;
+        }
+
+        var value = MetricDisplay.IsPace(unit) ? PaceText.ParseSeconds(valueText) : NumberText.Parse(valueText);
+        return [(definition, new MeasurementInput(definition.Code, value, unit, source, date))];
+    }
+}

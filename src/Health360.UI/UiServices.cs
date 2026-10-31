@@ -13,7 +13,7 @@ public static class UiServices
 
     /// <summary>
     /// Registers sign-in, the session (as the <see cref="ISupabaseSession"/> sync and uploads use), the
-    /// profile and sync state. The host registers <see cref="SyncEndpoints"/>, <see cref="ISessionStore"/>
+    /// profile, sync state and the body data. The host registers <see cref="SyncEndpoints"/>, <see cref="ISessionStore"/>
     /// and the local database (<see cref="LocalDbServices.AddLocalDatabase"/>).
     /// </summary>
     public static IServiceCollection AddHealth360Ui(this IServiceCollection services)
@@ -33,6 +33,7 @@ public static class UiServices
         services.AddSingleton<AuthService>();
         services.AddSingleton<ProfileService>();
         services.AddSingleton<SyncState>();
+        services.AddSingleton<BodyData>();
         return services;
     }
 }

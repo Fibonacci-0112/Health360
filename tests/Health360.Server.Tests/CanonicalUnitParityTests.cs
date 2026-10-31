@@ -129,6 +129,39 @@ public sealed class CanonicalUnitParityTests
         Assert.True(rows > 0, "metric_definitions is empty");
     }
 
+    /// <summary>
+    /// The app writes <c>measurements.value_canonical</c> with <see cref="UnitCodes.Convert"/> and the trigger
+    /// recomputes it with <c>private.convert_unit</c>: for every entry unit of every metric, the two must agree, or a
+    /// value would change when it syncs back.
+    /// </summary>
+    [Fact]
+    public async Task MetricEntryUnitsConvertToCanonicalExactlyAsTheAppDoes()
+    {
+        Assert.SkipUnless(ConnectionString is { Length: > 0 }, $"Set {EnvironmentVariable} to run the database tests.");
+
+        var pairs = new List<(string Unit, string Canonical)>();
+        await using (var connection = await OpenAsync())
+        await using (var command = new NpgsqlCommand(
+            "select distinct u.unit, d.canonical_unit from public.metric_definitions d, jsonb_array_elements_text(d.units) as u (unit)",
+            connection))
+        await using (var reader = await command.ExecuteReaderAsync(Ct))
+        {
+            while (await reader.ReadAsync(Ct))
+            {
+                pairs.Add((reader.GetString(0), reader.GetString(1)));
+            }
+        }
+
+        Assert.NotEmpty(pairs);
+        var cases = (
+            from pair in pairs
+            from value in Values()
+            select (Value: value, From: pair.Unit, To: pair.Canonical,
+                Expected: UnitCodes.Convert(value, pair.Unit, pair.Canonical) ?? double.NaN)).ToList();
+
+        await AssertSameAsync(cases);
+    }
+
     private static async Task AssertSameAsync(
         List<(double Value, string From, string To, double Expected)> cases,
         string select = "select private.convert_unit(c.value, c.from_unit, c.to_unit)")
