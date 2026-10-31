@@ -39,6 +39,8 @@ public sealed class PhysiologyTests : AppTestContext
         Assert.Contains("Mifflin-St Jeor equation", Values(cut), StringComparison.Ordinal);
 
         // RMR is the form's first metric, and lab its default source.
+        // Metric definitions load independently of the estimates; wait for the form's input too.
+        cut.WaitForAssertion(() => cut.Find("#add-physiology-value"), Wait);
         await TypeAsync(cut, "#add-physiology-value", "1900");
         await SubmitAsync(cut, "#add-physiology-value");
 
