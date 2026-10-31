@@ -288,6 +288,8 @@ For each cardio session, `Health360.Domain` estimates the energy used, how much 
 Done on the earlier TypeScript stack; status and findings are in [phase0.md](phase0.md). What carries over to .NET: the Supabase identity and household migrations, RLS helpers and pgTAP RLS-coverage test, the PowerSync `me`, `household` and `reference` streams, the `failed_uploads` quarantine design, client-generated UUIDv7 ids, the exact unit factors and their property tests (as a specification to port), and the two-client leak test design.
 
 ### Phase 0b: .NET foundation
+**Complete** (2026-10-31): every exit criterion below is met; status and findings are in [phase0b.md](phase0b.md).
+
 **Deliverables**
 - The solution in §2.2, with CI: `dotnet build`, `dotnet test`, formatting and analyzers, `supabase test db`, and the schema-drift check.
 - `Health360.Domain/Units` and UUIDv7 ids ported, with the same exact factors and FsCheck property tests. It comes first because every module depends on it.

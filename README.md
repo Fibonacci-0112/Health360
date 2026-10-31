@@ -2,7 +2,7 @@
 
 An all-in-one app for planning and reaching health and fitness goals: nutrition with label OCR, workouts and progression, body metrics and progress photos, a physiology profile (lab RMR, DEXA, VO₂max, LTHR, max HR and HR zones, or estimates when you don't have them), aerobic/anaerobic and fat/carb estimates for workouts, goals with cost planning, and later labs, supplements, mental and cognitive tracking, and AI meal plans and workouts.
 
-Status: **Phase 0b** (.NET foundation) ([docs/phase0b.md](docs/phase0b.md)). The Phase 0 TypeScript prototype has been removed; [docs/phase0.md](docs/phase0.md) records what it proved and what its tests found, and its code is in the git history.
+Status: **Phase 1** (MVP, [PLAN.md §3](docs/PLAN.md)). Phase 0b, the .NET foundation, is complete ([docs/phase0b.md](docs/phase0b.md)). The Phase 0 TypeScript prototype has been removed; [docs/phase0.md](docs/phase0.md) records what it proved and what its tests found, and its code is in the git history.
 
 - [Implementation plan](docs/PLAN.md): architecture, data model, phased roadmap, risks, tests, running costs.
 - [Feature catalogue](docs/FEATURES.md)
