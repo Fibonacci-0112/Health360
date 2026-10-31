@@ -14,7 +14,9 @@ public static class SexForCalcs
 
 public static class ActivityLevels
 {
-    public static IReadOnlyList<string> All { get; } = ["sedentary", "light", "moderate", "active", "very_active"];
+    /// <summary>The stored codes, from <see cref="Domain.Physiology.ActivityLevel"/> (each maps to a PAL there).</summary>
+    public static IReadOnlyList<string> All { get; } =
+        [.. Enum.GetValues<Domain.Physiology.ActivityLevel>().Select(Domain.Physiology.ActivityLevels.Code)];
 }
 
 /// <summary>

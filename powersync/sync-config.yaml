@@ -8,7 +8,9 @@ config:
 
 streams:
   # U tables for the signed-in user's own profile.
-  # Phase 1 adds the 24-month window here, plus the newest physiology value per metric at any age (§2.8).
+  # For now this syncs all of the user's authorized rows, with no time window (PLAN.md §2.3). The 24-month
+  # window comes before Phase 3's high-volume imports or a public release, and must keep pinned and current
+  # physiology values at any age (§2.8). Photo files are not rows here; they have their own cache rule.
   # Managed (child) profiles arrive in Phase 4 with their own query on profiles.managed_by.
   me:
     auto_subscribe: true
