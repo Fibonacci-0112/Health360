@@ -221,13 +221,20 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
 
         await A2.ConnectAsync();
         await A2.DrainAsync();
+        Assert.True((await FailedAsync(A2, pinId)).Length == 0, await DescribeAsync(A2, profile));
         foreach (var device in new[] { A1, A2 })
         {
-            await Wait.ForAsync(() => MetricPins.ListAsync(device.Db, profile), pins => pins is [{ Target: "estimate", MeasurementId: null }]);
+            try
+            {
+                await Wait.ForAsync(() => MetricPins.ListAsync(device.Db, profile), pins => pins is [{ Target: "estimate", MeasurementId: null }]);
+            }
+            catch (TimeoutException)
+            {
+                Assert.Fail($"{(device == A1 ? "A1" : "A2")}: {await DescribeAsync(device, profile)}");
+            }
         }
 
         Assert.Empty(await FailedAsync(A1, pinId));
-        Assert.Empty(await FailedAsync(A2, pinId));
 
         // Deleting the pinned value keeps the pin on every device, so the app can say the choice is gone.
         await MetricPins.PinMeasurementAsync(A1.Db, profile, measured, TimeProvider.System);
@@ -350,6 +357,16 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
     private static async Task<string[]> IdsAsync(Device device, string sql, params object[] args) =>
         [.. (await device.Db.GetAll<Device.Row>(sql, args)).Select(r => r.Id)];
 
+    /// <summary>What a device holds of a profile's pins and its quarantined writes, for a failure message.</summary>
+    private static async Task<string> DescribeAsync(Device device, string profileId)
+    {
+        var pins = await MetricPins.ListAsync(device.Db, profileId);
+        var failed = await device.Db.GetAll<FailedDetail>(
+            "SELECT table_name AS TableName, op AS Op, error_code AS ErrorCode, error_message AS ErrorMessage FROM failed_uploads");
+        return "pins [" + string.Join(", ", pins.Select(p => $"{p.MetricCode} {p.Target} {p.MeasurementId ?? "null"}")) + "]; failed [" +
+            string.Join(", ", failed.Select(f => $"{f.Op} {f.TableName} {f.ErrorCode}: {f.ErrorMessage}")) + "]";
+    }
+
     private static async Task<FailedRow[]> FailedAsync(Device device, string rowId) =>
         await device.Db.GetAll<FailedRow>(
             "SELECT id AS Id, op AS Op, error_code AS ErrorCode FROM failed_uploads WHERE row_id = ?", [rowId]);
@@ -361,6 +378,17 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         public string Op { get; set; } = "";
 
         public string? ErrorCode { get; set; }
+    }
+
+    public sealed class FailedDetail
+    {
+        public string TableName { get; set; } = "";
+
+        public string Op { get; set; } = "";
+
+        public string? ErrorCode { get; set; }
+
+        public string? ErrorMessage { get; set; }
     }
 
     public sealed class MeasurementRow
