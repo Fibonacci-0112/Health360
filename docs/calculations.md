@@ -136,7 +136,7 @@ These values sit well above the common 1.2–1.9 multipliers, whose primary sour
 3. **Heart rate reserve (Karvonen)**, when max HR and a measured resting HR are known and resting < max.
 4. **% of max HR.**
 
-Only measured values (any source tier) feed bases 1–3; estimated thresholds, LTHR and resting HR are ignored, so **the LTHR estimate never sets zones**. Max HR may be the Tanaka estimate, except when the heart-rate-lowering medication flag is set (PLAN.md §2.5). Then an estimated max HR is not used, and with no measured value there are no HR zones. Inputs that would give zones that don't ascend (LT1 ≥ LT2, resting ≥ max) skip that basis instead.
+Only measured values (any source tier) feed bases 1–3; estimated thresholds, LTHR and resting HR are ignored, so **the LTHR estimate never sets zones**. Max HR may be the Tanaka estimate, except when the heart-rate-lowering medication flag is set (PLAN.md §2.5). Then an estimated max HR is not used, and with no measured value there are no HR zones. A basis whose boundaries wouldn't be finite and strictly ascending (LT1 ≥ LT2, resting ≥ max, or a value so large that 107% of it overflows) is skipped, and the next basis is tried.
 
 **Reading whole-percent ranges.** Both sources give bands as whole percentages ("85% to 89%", then "90% to 94%"). The app reads a band "a–b" as [a, b + 1), so each zone starts at its own first percentage and there are no gaps. So Friel's zone 5c ("more than 106%") starts at 107%. Every lower bound is computed as offset + percent × (base / 100).
 

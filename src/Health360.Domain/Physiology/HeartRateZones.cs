@@ -140,21 +140,18 @@ public static class HeartRateZoneRules
     /// <item>% of max HR.</item>
     /// </list>
     /// Estimated LTHR and thresholds never set zones. When the heart-rate-lowering medication flag is set, an
-    /// estimated (age-predicted) max HR is not used either. Null when no basis applies.
+    /// estimated (age-predicted) max HR is not used either. A basis whose boundaries wouldn't be finite and strictly
+    /// ascending is skipped. Null when no basis applies.
     /// </summary>
     public static HeartRateZones? Derive(ZoneSport sport, ZoneInputs inputs)
     {
         ArgumentNullException.ThrowIfNull(inputs);
         var lower = Measured(inputs.LowerThreshold);
         var upper = Measured(inputs.UpperThreshold);
-        if (lower is not null && upper is not null && lower.Value < upper.Value)
+        if (lower is not null && upper is not null
+            && Valid(Build([("1", 0), ("2", lower.Value), ("3", upper.Value)], 1, 0)) is { } lab)
         {
-            return new HeartRateZones(
-                ZoneBasis.Lab,
-                sport,
-                SeilerMethod,
-                Build([("1", 0), ("2", lower.Value), ("3", upper.Value)], 1, 0),
-                [lower, upper]);
+            return new HeartRateZones(ZoneBasis.Lab, sport, SeilerMethod, lab, [lower, upper]);
         }
 
         var lthr = Measured(inputs.Lthr) ?? upper;
@@ -164,9 +161,9 @@ public static class HeartRateZoneRules
             ZoneSport.Bike => FrielBike,
             _ => null,
         };
-        if (lthr is not null && friel is not null)
+        if (lthr is not null && friel is not null && Valid(Build(friel, lthr.Value / 100, 0)) is { } frielZones)
         {
-            return new HeartRateZones(ZoneBasis.Lthr, sport, FrielMethod, Build(friel, lthr.Value / 100, 0), [lthr]);
+            return new HeartRateZones(ZoneBasis.Lthr, sport, FrielMethod, frielZones, [lthr]);
         }
 
         var max = inputs.MaxHr is { } m && (!m.IsEstimate || !inputs.TakesHeartRateLoweringMedication) && Positive(m.Value)
@@ -177,21 +174,25 @@ public static class HeartRateZoneRules
             return null;
         }
 
+        // Karvonen: target = resting + fraction × (max − resting).
         var resting = Measured(inputs.RestingHr);
-        if (resting is not null && resting.Value < max.Value)
+        if (resting is not null && Valid(Build(GarberReserve, (max.Value - resting.Value) / 100, resting.Value)) is { } reserve)
         {
-            // Karvonen: target = resting + fraction × (max − resting).
-            var reserve = max.Value - resting.Value;
-            return new HeartRateZones(
-                ZoneBasis.HeartRateReserve,
-                sport,
-                KarvonenMethod,
-                Build(GarberReserve, reserve / 100, resting.Value),
-                [max, resting]);
+            return new HeartRateZones(ZoneBasis.HeartRateReserve, sport, KarvonenMethod, reserve, [max, resting]);
         }
 
-        return new HeartRateZones(ZoneBasis.PercentOfMax, sport, PercentOfMaxMethod, Build(GarberMax, max.Value / 100, 0), [max]);
+        return Valid(Build(GarberMax, max.Value / 100, 0)) is { } percentOfMax
+            ? new HeartRateZones(ZoneBasis.PercentOfMax, sport, PercentOfMaxMethod, percentOfMax, [max])
+            : null;
     }
+
+    // What zone_sets accepts for metric hr: finite, non-negative, strictly ascending lower bounds. A basis whose
+    // bounds fail (LT1 ≥ LT2, resting ≥ max, or a value so large the arithmetic overflows) is skipped.
+    private static List<HeartRateZone>? Valid(List<HeartRateZone> zones) =>
+        zones.All(z => double.IsFinite(z.LowerBpm) && z.LowerBpm >= 0)
+        && zones.Zip(zones.Skip(1)).All(p => p.Second.LowerBpm > p.First.LowerBpm)
+            ? zones
+            : null;
 
     private static Resolution? Measured(Resolution? resolution) =>
         resolution is { IsEstimate: false } r && Positive(r.Value) ? r : null;

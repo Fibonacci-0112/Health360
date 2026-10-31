@@ -173,6 +173,20 @@ public class HeartRateZoneTests
     }
 
     [Fact]
+    public void Values_so_large_the_boundaries_overflow_skip_that_basis()
+    {
+        // 107% of 1.7e308 is infinite, which zone_sets rejects.
+        Assert.Equal(
+            ZoneBasis.PercentOfMax,
+            HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Lab(190), Lthr: Lab(1.7e308)))!.Basis);
+
+        // Only Friel's 107% band can overflow; the Garber bands stay at or below 100% of the base.
+        var huge = HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Lab(double.MaxValue), RestingHr: Manual(1)))!;
+        Assert.Equal(ZoneBasis.HeartRateReserve, huge.Basis);
+        Assert.All(huge.Boundaries, b => Assert.True(double.IsFinite(b)));
+    }
+
+    [Fact]
     public void Zone_of_follows_the_zone_sets_rule()
     {
         var zones = HeartRateZoneRules.Derive(ZoneSport.Run, new ZoneInputs(MaxHr: Lab(190), RestingHr: Manual(60)))!;
@@ -200,9 +214,11 @@ public class HeartRateZoneTests
     public void Derived_boundaries_always_ascend_and_are_never_negative()
     {
         // What the zone_sets trigger requires for metric hr: 2 to 10 finite, non-negative, strictly ascending values.
+        // Mostly plausible heart rates, plus finite values large enough to overflow a percentage band.
+        var bpm = Gen.Frequency((9, Double(1, 250)), (1, Gen.Elements(1e307, 1.7e308, double.MaxValue)));
         var gen = Gen.Zip(
-            Gen.Zip(Double(1, 250), Double(1, 250)),
-            Gen.Zip(Gen.Zip(Double(1, 250), Double(1, 250)), Gen.Zip(Gen.Elements(Enum.GetValues<ZoneSport>()), Gen.Elements(0, 1, 2, 3, 4))));
+            Gen.Zip(bpm, Double(1, 250)),
+            Gen.Zip(Gen.Zip(bpm, Double(1, 250)), Gen.Zip(Gen.Elements(Enum.GetValues<ZoneSport>()), Gen.Elements(0, 1, 2, 3, 4))));
         Holds(gen, t =>
         {
             var ((max, resting), ((lthr, lt1), (sport, drop))) = t;
