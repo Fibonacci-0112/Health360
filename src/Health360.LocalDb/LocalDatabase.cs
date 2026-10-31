@@ -105,7 +105,7 @@ public sealed partial class LocalDatabase(
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await db.Disconnect().ConfigureAwait(false);
+            await StopSyncAsync().ConfigureAwait(false);
         }
         finally
         {
@@ -122,6 +122,7 @@ public sealed partial class LocalDatabase(
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            await StopSyncAsync().ConfigureAwait(false);
             await db.DisconnectAndClear(clearLocal: true).ConfigureAwait(false);
             owner.Forget();
         }
@@ -189,6 +190,7 @@ public sealed partial class LocalDatabase(
         }
 
         // clearLocal also empties failed_uploads, which holds the previous user's rejected writes.
+        await StopSyncAsync().ConfigureAwait(false);
         await db.DisconnectAndClear(clearLocal: true).ConfigureAwait(false);
         owner.Save(userId);
     }
