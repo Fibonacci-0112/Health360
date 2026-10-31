@@ -2,7 +2,7 @@
 
 The exact rules `Health360.Domain` implements for the body and physiology screens, with their sources. Code, tests and this page must agree; change them together. General rules are in [PLAN.md §2.8](PLAN.md) and the units rules in §2.6. Every formula here takes canonical units (kg, cm, years). Convert with `Health360.Domain/Units` and never through a rounded display value.
 
-Status: what's below is implemented and tested in `Health360.Domain` (`Body/`, `Physiology/`). Not yet specified: HR zones (Friel, Karvonen, % of max HR), the LTHR estimate, and the non-exercise VO₂max estimators (Nes et al., 2011; Jackson et al., 1990). They wait until their coefficients are checked against the papers, not secondary sources.
+Status: what's below is implemented and tested in `Health360.Domain` (`Body/`, `Physiology/`). Not yet specified: the LTHR estimate and the Nes et al. (2011) VO₂max estimator. They wait until they're checked against primary sources, not secondary ones (see [Still to specify](#still-to-specify)).
 
 ## Navy method (body fat from circumferences)
 
@@ -75,6 +75,45 @@ When the sync window arrives (PLAN.md §2.3), truncating history must not change
 - **Tanaka** (Tanaka et al., 2001, [doi:10.1016/s0735-1097(00)01054-8](https://doi.org/10.1016/s0735-1097(00)01054-8)): 208 − 0.7 × age. Golden values: 40 y → 180; 25 y → 190.5.
 - **Not estimated** when the heart-rate-lowering medication flag is set (PLAN.md §2.5).
 
+## VO₂max: non-exercise estimate (ml/kg/min)
+
+**Source:** Jackson, A. S., Blair, S. N., Mahar, M. T., Wier, L. T., Ross, R. M. and Stuteville, J. E. (1990). Prediction of functional aerobic capacity without exercise testing. *Med Sci Sports Exerc* 22(6):863–870 ([doi:10.1249/00005768-199012000-00021](https://doi.org/10.1249/00005768-199012000-00021)). Checked against the original paper, p. 866.
+
+The paper fits two models, N-Ex %fat and N-Ex BMI, each with resting HR (I) and without it (II). Resting HR added little, so the paper drops it and prints only the model II equations, which the app uses. Sex is coded female 0, male 1.
+
+| Model II | Equation | R | SE (ml/kg/min) |
+|---|---|---|---|
+| %fat | 50.513 + 1.589 × PA-R − 0.289 × age − 0.552 × %fat + 5.863 × sex | 0.812 | 5.35 |
+| BMI | 56.363 + 1.921 × PA-R − 0.381 × age − 0.754 × BMI + 10.987 × sex | 0.783 | 5.70 |
+
+The paper also prints the men's equations with the sex term folded in: intercepts 56.376 (%fat) and 67.350 (BMI). A property test checks they agree. Several secondary sources print the %fat coefficient as 0.522; the paper says **0.552**.
+
+- **PA-R** is the NASA/Johnson Space Center physical activity rating, an integer from 0 to 7. The paper doesn't print the scale; it cites Ross, R. M. and Jackson, A. S. (1990), *Exercise Concepts, Calculations, and Computer Applications*, Benchmark Press. The questionnaire and its scoring are taken from the **NHANES Cardiovascular Fitness Procedures Manual** (CDC, NHANES 1999–2004), Appendix E, pp. E-1 and E-3 ([cdc.gov](https://wwwn.cdc.gov/nchs/data/nhanes/public/2003/manuals/cv_99-04.pdf)), which cites both sources. NHANES Appendix F uses the same BMI equation to predict VO₂max. `PhysicalActivityRating` implements the scoring. The five onboarding activity levels are not PA-R and are not mapped onto it.
+
+- **%fat:** the paper measured it from three skinfolds. The app accepts %fat from any source (DEXA, scale, Navy method), which adds that method's error.
+- **Which model:** %fat when body fat is known (the paper's more accurate model), otherwise BMI (`Vo2Max.Jackson`). It is used only when there is no resting HR; with one, PLAN.md §2.8 calls for Nes et al. (2011), which isn't implemented yet.
+- **Population:** 2,009 NASA employees (9.7% women) aged 18–70, VO₂peak 20–70. The models underestimate fit people: for measured VO₂peak above 55 the cross-validation SE was 10.7 (%fat) and 12.1 (BMI). Show the estimate with its SE, labelled as an estimate.
+- **Invalid inputs:** PA-R outside 0–7, negative age, BMI not positive, or %fat outside [0, 100) are rejected. A result that isn't positive gives no estimate.
+
+**The PA-R questions** (NHANES, Appendix E, p. E-1), asked in this order, with only the follow-up that applies:
+1. "Would you say that you did little or no regular recreation, sport, or physical activity? OR Would you say that you participated regularly in recreation or work requiring modest physical activity? OR Would you say that you participated regularly in heavy physical exercise?" Modest activities include walking, calisthenics, bowling, weight lifting and yard work. Heavy activities include jogging, swimming, cycling, rowing, tennis and basketball.
+2. Little or no activity: "Would you say that you avoid walking or exertion (for example, always use the elevator, drive whenever possible instead of walking)? OR Would you say that you walk for pleasure, routinely use stairs, occasionally exercise sufficiently to cause heavy breathing or perspiration?"
+3. Modest activity: "for 10 to 60 minutes per week? OR More than 60 minutes per week?"
+4. Heavy exercise: "less than 30 minutes per week, 30 to 60 minutes per week, 1 to 3 hours per week, or more than 3 hours per week?"
+
+| Answers | PA-R |
+|---|---|
+| Little or no activity, avoids walking or exertion | 0 |
+| Little or no activity, walks for pleasure, uses stairs, occasionally exercises hard | 1 |
+| Modest activity, 10–60 min/week | 2 |
+| Modest activity, > 60 min/week | 3 |
+| Heavy exercise, < 30 min/week | 4 |
+| Heavy exercise, 30–60 min/week | 5 |
+| Heavy exercise, 1–3 h/week | 6 |
+| Heavy exercise, > 3 h/week | 7 |
+
+Golden values: BMI, male, PA-R 5, 40 y, BMI 25 → 42.865; female, PA-R 3, 35 y, BMI 22 → 32.203. %fat, male, PA-R 5, 40 y, 20% → 41.721; female, PA-R 4, 30 y, 28% → 32.743.
+
 ## Age
 
 Whole years between the birth date and the local date the value is computed for. A 29 February birthday counts as reached on 28 February in non-leap years.
@@ -105,6 +144,82 @@ These values sit well above the common 1.2–1.9 multipliers, whose primary sour
 
 **Maintenance energy** = resolved RMR × PAL used. FAO defines PAL against BMR, measured fasted and fully at rest. The app multiplies it by RMR, whether measured or from Mifflin-St Jeor or Katch-McArdle, and RMR runs slightly higher than BMR. The result is labelled an estimate and its inputs are shown ("RMR 1,720 kcal (lab, Mar 2026) × 1.85"). A measured RMR still gives an **estimated** maintenance figure, because the multiplier is an estimate.
 
+## Heart-rate zones
+
+`HeartRateZoneRules.Derive` picks the best basis the resolved values allow (PLAN.md §2.8) and returns each zone's lower bound in bpm. That's what `zone_sets.boundaries` stores for metric `hr`: zone 1 first, strictly ascending, and zone i holds heart rates ≥ its lower bound and below the next zone's. The last zone has no far end. Boundaries are kept unrounded; round them only for display.
+
+**Order, best first:**
+
+| Basis | Run and bike | Other sports (swim, row, other, all) |
+|---|---|---|
+| 1. Lab thresholds: LT1 (or VT1) and LT2 (or VT2), both measured | Friel, lactate column | Seiler and Kjerland, three zones |
+| 2. Measured or test-derived LTHR | Friel, FTHR column | Skipped |
+| 3. Heart rate reserve: max HR and a measured resting HR | Karvonen with Garber's bands | Karvonen with Garber's bands |
+| 4. % of max HR | Friel, MHR column | Garber's bands |
+
+Friel's guide covers running and cycling only, so other sports keep the Seiler and Garber bases. Friel gives no heart-rate-reserve column, so basis 3 uses Garber's bands for every sport.
+
+Only measured values (any source tier) feed bases 1–3; estimated thresholds, LTHR and resting HR are ignored, so **the LTHR estimate never sets zones**. Max HR may be the Tanaka estimate, except when the heart-rate-lowering medication flag is set (PLAN.md §2.5). Then an estimated max HR is not used, and with no measured value there are no HR zones. A basis whose boundaries wouldn't be finite and strictly ascending (LT1 ≥ LT2, LT1 ≤ 10 bpm for Friel's lactate column, resting ≥ max, or a value so large the arithmetic overflows) is skipped, and the next basis is tried.
+
+**LT2 is not used as threshold HR for zones.** PLAN.md §2.8 takes LT2 as LTHR when there's no LTHR, but Friel's 2025 table puts LT2 at the zone 3/4 border and threshold HR at the zone 4/5a border, so the two differ. With LT2 but no LT1 and no LTHR, zones fall through to heart rate reserve or % of max HR.
+
+**Reading whole-percent ranges.** The sources give bands as whole percentages with small gaps or overlaps ("less than 72%", then "73–82%"; "88–92%", then "92–100%"). Each zone starts at the first number of its own range, and a "more than X" zone starts at X. A value in a gap belongs to the lower zone. Every lower bound is computed as offset + percent × (base / 100).
+
+### Friel (2025): run and bike
+
+**Source:** Friel, J. *A Quick Guide to Setting Zones*, joefrieltraining.com, revised September 2025 ([joefrieltraining.com](https://joefrieltraining.com/a-quick-guide-to-setting-zones/)). The zones are in a table image on that page (reproduced from p. 63 of one of his books), checked by reading the image. The guide gives one table for running and cycling. It replaces the older TrainingPeaks guide (separate run and bike % of LTHR, zones up to 5c), which this app no longer uses.
+
+Heart-rate columns of the table:
+
+| Zone | % of max HR (MHR) | % of functional threshold HR (FTHR) | Lactate (LT1, LT2) |
+|---|---|---|---|
+| 1 | < 72 | < 78 | Below zone 2 |
+| 2 | 73–82 | 78–86 | LT1 − 10 bpm up to LT1 |
+| 3 | 83–87 | 87–93 | LT1 to LT2 |
+| 4 | 88–92 | 94–99 | LT2 to LT2 + 10 bpm |
+| 5a | 92–100 (5a and 5b together) | 100–102 | Higher than zone 4 (5a and 5b together) |
+| 5b | | > 102 | |
+| 5c | Not applicable | Not applicable | Not applicable |
+
+- **FTHR** is the app's measured or test-derived LTHR. Friel's 20-minute test takes the test's average HR minus 5%; his 30-minute solo test takes the average HR of its last 20 minutes. Lower bounds used (%): 0, 78, 87, 94, 100, 102; zones 1, 2, 3, 4, 5a, 5b.
+- **MHR:** lower bounds used (%): 0, 73, 83, 88, 92; zones 1, 2, 3, 4, 5 (Friel's 5a and 5b share one range). Friel warns not to use 220 − age. The app may use the Tanaka estimate here (PLAN.md §2.8) and labels the zones as resting on an estimate.
+- **Lactate:** lower bounds used (bpm): 0, LT1 − 10, LT1, LT2, LT2 + 10; zones 1, 2, 3, 4, 5. Friel puts LT1 at about 2 mmol/L.
+
+Golden values:
+- FTHR 170 → 0, 132.6, 147.9, 159.8, 170, 173.4. FTHR 160 → 0, 124.8, 139.2, 150.4, 160, 163.2.
+- Max HR 180 → 0, 131.4, 149.4, 158.4, 165.6.
+- LT1 140, LT2 165 → 0, 130, 140, 165, 175.
+
+### Lab thresholds, other sports: three zones
+
+**Source:** Seiler, K. S. and Kjerland, G. Ø. (2006). Quantifying training intensity distribution in elite endurance athletes: is there evidence for an "optimal" distribution? *Scand J Med Sci Sports* 16(1):49–56 ([doi:10.1111/j.1600-0838.2004.00418.x](https://doi.org/10.1111/j.1600-0838.2004.00418.x)). VT1 and VT2 delineate three intensity zones.
+
+| Zone | Starts at |
+|---|---|
+| 1 | 0 (below LT1/VT1) |
+| 2 | LT1/VT1 |
+| 3 | LT2/VT2 |
+
+Golden value: LT1 140, LT2 165 → 0, 140, 165.
+
+### Heart rate reserve (all sports) and % of max HR (other sports): Garber et al. (2011)
+
+**Sources:**
+- Karvonen, M. J., Kentala, E. and Mustala, O. (1957). The effects of training on heart rate; a longitudinal study. *Ann Med Exp Biol Fenn* 35(3):307–315. Target HR = resting HR + fraction × (max HR − resting HR).
+- Bands: Garber, C. E. et al. (2011). American College of Sports Medicine position stand. Quantity and quality of exercise for developing and maintaining cardiorespiratory, musculoskeletal, and neuromotor fitness in apparently healthy adults. *Med Sci Sports Exerc* 43(7):1334–1359 ([doi:10.1249/MSS.0b013e318213fefb](https://doi.org/10.1249/MSS.0b013e318213fefb)), Table 4.
+
+| Zone (Garber's intensity) | %HRR | %HRmax |
+|---|---|---|
+| Very light | < 30 | < 57 |
+| Light | 30–39 | 57–63 |
+| Moderate | 40–59 | 64–76 |
+| Vigorous | 60–89 | 77–95 |
+| Near-maximal to maximal | ≥ 90 | ≥ 96 |
+
+Zone 1 starts at resting HR for heart rate reserve (0% HRR) and at 0 for % of max HR. Golden values: max 190, resting 60 → 60, 99, 112, 138, 177; max 180 → 0, 102.6, 115.2, 138.6, 172.8.
+
+The intensity names are Garber's. They aren't the same scale as Friel's zone numbers, so the UI must show the basis next to the zones.
+
 ## Resolver (which value is used)
 
 Implements PLAN.md §2.8 for each metric:
@@ -122,4 +237,10 @@ Deleting a measurement re-resolves straight away: the next measured value, then 
 
 ## What the 1.1 exit criterion proves
 
-Step 1.1 proves that entering a lab RMR changes the physiology profile's maintenance estimate at once, and that deleting it falls back to the next value or the estimate. It also proves that a measured max HR replaces the Tanaka estimate. Nutrition targets built on this come in step 1.3 and have their own integration test (PLAN.md §3).
+Step 1.1 proves that entering a lab RMR changes the physiology profile's maintenance estimate at once, and that deleting it falls back to the next value or the estimate. It also proves that a measured max HR replaces the Tanaka estimate, and that the zones derived from max HR follow it (`HeartRateZoneRules.Derive`). Nutrition targets built on this come in step 1.3 and have their own integration test (PLAN.md §3).
+
+## Still to specify
+
+These are in PLAN.md §2.8 but not implemented, because they couldn't be checked against primary sources yet:
+- **Non-exercise VO₂max, Nes et al. (2011)**, *Med Sci Sports Exerc* 43(11):2024–2030 ([doi:10.1249/MSS.0b013e31821d3f6f](https://doi.org/10.1249/MSS.0b013e31821d3f6f)). The full text is paywalled. The equations and the PA-index scoring need checking against the paper.
+- **LTHR estimate (about 90% of max HR).** No primary source found yet for the 90% figure. Until there is one it stays unimplemented. Zones don't depend on it, because the LTHR estimate never sets zones.
