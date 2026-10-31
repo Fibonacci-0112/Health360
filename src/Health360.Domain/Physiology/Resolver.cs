@@ -72,7 +72,11 @@ public sealed record Resolution(
 /// </summary>
 public static class Resolver
 {
-    /// <returns>The resolution, or null when there's neither a measured value nor an estimate.</returns>
+    /// <returns>
+    /// The resolution, or null when there's neither a measured value nor an estimate. A null result with a
+    /// <paramref name="pin"/> means the pin couldn't be honoured either: the caller still has the pin, so it can
+    /// say so (for example "your pinned value was deleted").
+    /// </returns>
     public static Resolution? Resolve(IEnumerable<Measured> measured, Estimate? estimate, Pin? pin = null)
     {
         ArgumentNullException.ThrowIfNull(measured);

@@ -119,6 +119,14 @@ public class ResolverTests
         Assert.True(nothing.PinUnavailable);
     }
 
+    [Fact]
+    public void With_nothing_left_a_pin_gives_no_resolution()
+    {
+        // The caller keeps its pin, so a null result tells it the pin couldn't be honoured either.
+        Assert.Null(Resolver.Resolve([], null, Pin.ToMeasurement(Guid.Empty)));
+        Assert.Null(Resolver.Resolve([], null, Pin.ToEstimate));
+    }
+
     [Theory]
     [InlineData("2025-06-01", "2026-05-31", false)]
     [InlineData("2025-06-01", "2026-06-01", true)]

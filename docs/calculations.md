@@ -108,7 +108,7 @@ These values sit well above the common 1.2–1.9 multipliers, whose primary sour
 ## Resolver (which value is used)
 
 Implements PLAN.md §2.8 for each metric:
-1. **A pin**, if it can be honoured. A pin is a specific measurement (by id), or the estimate. A pin to a deleted measurement, or to the estimate when there isn't one, is ignored *and reported*, so the UI can say so.
+1. **A pin**, if it can be honoured. A pin is a specific measurement (by id), or the estimate. A pin to a deleted measurement, or to the estimate when there isn't one, is ignored *and reported*, so the UI can say so. When nothing at all is left, there's no result; the caller still holds the pin and can say it couldn't be honoured.
 2. Otherwise **lab**, then **field test**, then **device or manual** (one tier), then **the estimate**.
 3. Within a tier, the newest `measured_at` wins; on the same day, the later id (UUIDv7, so the later entry).
 4. An old measured value still beats an estimate. Instead, it gets a **retest** flag:

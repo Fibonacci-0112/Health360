@@ -30,7 +30,12 @@ public static class RestingMetabolicRate
             throw new ArgumentOutOfRangeException(nameof(ageYears), ageYears, "Age can't be negative");
         }
 
-        var male = sex == Sex.Male ? 1 : 0;
+        var male = sex switch
+        {
+            Sex.Male => 1,
+            Sex.Female => 0,
+            _ => throw new ArgumentOutOfRangeException(nameof(sex), sex, "Unknown sex"),
+        };
         var kcal = (9.99 * weightKg) + (6.25 * heightCm) - (4.92 * ageYears) + (166 * male) - 161;
         return new Estimate(kcal, EstimateMethods.MifflinStJeor);
     }

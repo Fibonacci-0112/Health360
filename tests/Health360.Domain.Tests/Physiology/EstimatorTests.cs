@@ -68,6 +68,8 @@ public class EstimatorTests
         Assert.Throws<ArgumentOutOfRangeException>(() => RestingMetabolicRate.MifflinStJeor(Sex.Male, 0, 180, 30));
         Assert.Throws<ArgumentOutOfRangeException>(() => RestingMetabolicRate.MifflinStJeor(Sex.Male, 80, double.NaN, 30));
         Assert.Throws<ArgumentOutOfRangeException>(() => RestingMetabolicRate.MifflinStJeor(Sex.Male, 80, 180, -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => RestingMetabolicRate.MifflinStJeor((Sex)99, 80, 180, 30));
+        Assert.Throws<ArgumentOutOfRangeException>(() => RestingMetabolicRate.Best((Sex)99, 80, 180, 30, null));
         Assert.Throws<ArgumentOutOfRangeException>(() => RestingMetabolicRate.KatchMcArdle(-5));
         Assert.Throws<ArgumentOutOfRangeException>(() => MaxHeartRate.Tanaka(-1, false));
     }
