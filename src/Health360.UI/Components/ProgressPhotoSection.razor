@@ -109,6 +109,7 @@
                         break;
                     case PhotoImageStatus.NotUploaded:
                         <p class="muted" role="status">Not available yet. This photo hasn't finished uploading from the device it was taken on; it appears here once that device is online.</p>
+                        <button type="button" class="secondary" id="photo-viewer-retry" @onclick="() => ViewAsync(viewing)">Check again</button>
                         break;
                     case PhotoImageStatus.Unreachable:
                         <p class="error" role="alert">Couldn't load the photo. Check your connection and try again.</p>
@@ -167,7 +168,7 @@
         }
 
         <ul class="measurement-list" aria-label="Your progress photos">
-            @foreach (var photo in photos)
+            @foreach (var photo in photos.Take(shown))
             {
                 <li @key="photo.Id" class="measurement">
                     <button type="button" class="photo-thumb" aria-label="@($"View the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
@@ -222,6 +223,10 @@
                 </li>
             }
         </ul>
+        @if (photos.Count > shown)
+        {
+            <button type="button" class="secondary" id="photos-more" @onclick="ShowMore">Show older photos (@(photos.Count - shown) more)</button>
+        }
     }
 </section>
 
@@ -332,6 +337,7 @@
         photos = null;
         thumbs.Clear();
         thumbUris.Clear();
+        shown = PageSize;
         CloseViewer();
         ClearComparison();
         // The photo was for the profile that left; a sign-out or switch also changes the generation Keep would check.
@@ -385,6 +391,7 @@
                         {
                             LoadThumbnails(profileId, rows, token);
                             RetryMissingComparison();
+                            RetryMissingViewer();
                             StateHasChanged();
                         }
                     });
@@ -400,6 +407,36 @@
     /// Loads the thumbnails not yet shown. One that wasn't there (not uploaded yet, or offline) is tried again when the
     /// list next changes, such as when sync brings news of it.
     /// </summary>
+    // How many photos the list shows, newest first; older ones come in pages, so thumbnails (and their memory and
+    // downloads) grow with what's on screen rather than the whole history.
+    private const int PageSize = 24;
+    private int shown = PageSize;
+
+    // At most this many thumbnails download at once.
+    private readonly SemaphoreSlim thumbnailSlots = new(4, 4);
+
+    private void ShowMore()
+    {
+        shown += PageSize;
+        if (watchedProfile is { } profileId && photos is { } rows && watch is { } w)
+        {
+            LoadThumbnails(profileId, rows, w.Token);
+        }
+    }
+
+    /// <summary>Loads the open photo again if it wasn't there (not uploaded yet, or offline), on the tab's periodic check.</summary>
+    private void RetryMissingViewer()
+    {
+        if (viewing is { } open && full?.Status is PhotoImageStatus.NotUploaded or PhotoImageStatus.Unreachable)
+        {
+            _ = InvokeAsync(async () =>
+            {
+                await ViewAsync(open);
+                StateHasChanged();
+            });
+        }
+    }
+
     private void LoadThumbnails(string profileId, IReadOnlyList<ProgressPhotoRow> rows, CancellationToken token)
     {
         foreach (var id in thumbs.Keys.Except(rows.Select(r => r.Id)).ToList())
@@ -423,7 +460,15 @@
             CloseViewer();
         }
 
-        foreach (var row in rows)
+        // Thumbnails of photos no longer on screen (a profile's list shrank) are let go; only shown ones load.
+        var visible = rows.Take(shown).Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var id in thumbUris.Keys.Where(id => !visible.Contains(id)).ToList())
+        {
+            thumbs.Remove(id);
+            thumbUris.Remove(id);
+        }
+
+        foreach (var row in rows.Take(shown))
         {
             if (thumbs.TryGetValue(row.Id, out var known) && (known is null || known.Status == PhotoImageStatus.Available))
             {
@@ -438,10 +483,25 @@
                 string? uri = null;
                 try
                 {
-                    image = await Library.ThumbnailAsync(profileId, id, token);
+                    await thumbnailSlots.WaitAsync(token);
+                    try
+                    {
+                        image = await Library.ThumbnailAsync(profileId, id, token);
+                    }
+                    finally
+                    {
+                        thumbnailSlots.Release();
+                    }
+
                     uri = image.Jpeg is { } jpeg ? DataUri(jpeg) : null;
+                    // Only the data URI is kept here; the bytes stay in the library's bounded cache.
+                    image = image with { Jpeg = null };
                 }
                 catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (ObjectDisposedException)
                 {
                     return;
                 }
@@ -943,6 +1003,7 @@
         viewLoad?.Dispose();
         compareLoad?.Dispose();
         EndReview();
+        thumbnailSlots.Dispose();
         stop.Dispose();
     }
 }

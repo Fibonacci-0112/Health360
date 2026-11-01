@@ -426,4 +426,39 @@ public sealed class ProgressPhotoTests : AppTestContext
         Assert.Empty(App.PhotoFiles.Files);
         Assert.Equal(1, await App.Photos.PendingCountAsync());
     }
+
+    [Fact]
+    public async Task OlderPhotosComeInPages()
+    {
+        App.PhotoStorage.Reachable = true;
+        for (var i = 0; i < 30; i++)
+        {
+            await App.Database.SeedPhotoAsync($"0192f0c0-0000-7000-8000-0000000001{i:D2}", ProfileId, "front", $"2026-09-{i + 1:D2}");
+        }
+
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Equal(24, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        Assert.Contains("6 more", cut.Find("#photos-more").TextContent, StringComparison.Ordinal);
+
+        await ClickAsync(cut, "#photos-more");
+
+        cut.WaitForAssertion(() => Assert.Equal(30, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        Assert.Empty(cut.FindAll("#photos-more"));
+    }
+
+    [Fact]
+    public async Task AnOpenPhotoNotUploadedYetCanBeCheckedAgain()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-29");
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"), Wait);
+        await ClickAsync(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"));
+        cut.WaitForAssertion(() => cut.Find("#photo-viewer-retry"), Wait);
+
+        App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
+        await ClickAsync(cut, "#photo-viewer-retry");
+
+        cut.WaitForAssertion(() => cut.Find(".photo-viewer img"), Wait);
+    }
 }

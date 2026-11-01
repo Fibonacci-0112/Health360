@@ -177,6 +177,9 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         {
             var uploaded = 0;
             var failed = 0;
+            // A photo deleted on another device: its row is gone here, so its files mustn't go up (or stay up).
+            await DropRemotelyDeletedAsync().ConfigureAwait(false);
+
             // Deletes first, so an upload that keeps failing can't hold back the files of photos already deleted.
             var (deleted, deletesStopped) = await DeleteFilesAsync(cancellationToken).ConfigureAwait(false);
             var pending = await db.GetAll<PendingRow>(
@@ -205,8 +208,13 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
                     return new PhotoUploadReport(uploaded, failed, Stopped: true, deleted);
                 }
 
-                // The entry goes first: if the app dies before the files are deleted, the sweep removes them.
-                await db.Execute($"DELETE FROM {Table} WHERE id = ?", [row.Id]).ConfigureAwait(false);
+                // The entry goes first: if the app dies before the files are deleted, the sweep removes them. If the
+                // row was deleted on another device while these went up, they are queued for deletion in the same step.
+                await db.WriteTransaction(async tx =>
+                {
+                    await tx.Execute($"DELETE FROM {Table} WHERE id = ?", [row.Id]).ConfigureAwait(false);
+                    await tx.Execute(QueueDeletionIfRowGoneSql, [row.Id, row.ProfileId, Timestamps.UtcNow(clock), row.Id, row.Id]).ConfigureAwait(false);
+                }).ConfigureAwait(false);
                 DeleteFiles(row.Id);
                 uploaded++;
             }
@@ -277,6 +285,59 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         Wake();
     }
 
+    // Queues a photo's Storage deletes when its row is no longer here and wasn't refused (a refused insert that
+    // PowerSync rolled back is left to the discard flow). Parameters: id, profile id, now, id, id.
+    private const string QueueDeletionIfRowGoneSql =
+        $"INSERT OR IGNORE INTO {DeletionsTable} (id, profile_id, attempts, created_at) SELECT ?, ?, 0, ? " +
+        "WHERE NOT EXISTS (SELECT 1 FROM progress_photos p WHERE p.id = ?) " +
+        $"AND NOT EXISTS (SELECT 1 FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = ? AND f.op <> 'DELETE')";
+
+    /// <summary>
+    /// Drops waiting uploads whose row has disappeared because another device deleted the photo (sync removed it),
+    /// with their local files, and queues the Storage deletes for anything of them already up. A refused insert is
+    /// left alone: its row may have been rolled back, and the user discards it.
+    /// </summary>
+    private async Task DropRemotelyDeletedAsync()
+    {
+        var gone = await db.GetAll<PendingRow>(
+            $"SELECT u.id AS Id, u.profile_id AS ProfileId FROM {Table} u " +
+            "WHERE NOT EXISTS (SELECT 1 FROM progress_photos p WHERE p.id = u.id) " +
+            $"AND NOT EXISTS (SELECT 1 FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = u.id AND f.op <> 'DELETE')",
+            []).ConfigureAwait(false);
+        foreach (var row in gone)
+        {
+            await db.WriteTransaction(async tx =>
+            {
+                await tx.Execute(QueueDeletionIfRowGoneSql, [row.Id, row.ProfileId, Timestamps.UtcNow(clock), row.Id, row.Id]).ConfigureAwait(false);
+                await tx.Execute($"DELETE FROM {Table} WHERE id = ?", [row.Id]).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+            DeleteFiles(row.Id);
+        }
+    }
+
+    /// <summary>
+    /// Drops a refused DELETE of a photo's row, as Settings does for any refused write, together with the queued
+    /// Storage deletes of its files: the server kept the row, so its files must stay.
+    /// </summary>
+    public async Task DiscardRefusedDeleteAsync(string failedUploadId, string rowId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(failedUploadId);
+        ArgumentException.ThrowIfNullOrEmpty(rowId);
+        await pass.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await db.WriteTransaction(async tx =>
+            {
+                await tx.Execute($"DELETE FROM {AppSchema.FailedUploads} WHERE id = ?", [failedUploadId]).ConfigureAwait(false);
+                await tx.Execute($"DELETE FROM {DeletionsTable} WHERE id = ?", [rowId]).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            pass.Release();
+        }
+    }
+
     /// <summary>
     /// Removes the files of deleted photos from Storage, oldest first, once each photo's row delete has left the
     /// upload queue. One whose delete the server refused (quarantined in <c>failed_uploads</c>) keeps its files until
@@ -290,6 +351,8 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
             $"SELECT d.id AS Id, d.profile_id AS ProfileId FROM {DeletionsTable} d " +
             "WHERE NOT EXISTS (SELECT 1 FROM ps_crud c WHERE json_extract(c.data, '$.type') = 'progress_photos' AND json_extract(c.data, '$.id') = d.id) " +
             $"AND NOT EXISTS (SELECT 1 FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = d.id AND f.op = 'DELETE') " +
+            // The row is back (the server kept it and sync restored it): its files stay.
+            "AND NOT EXISTS (SELECT 1 FROM progress_photos p WHERE p.id = d.id) " +
             "ORDER BY d.created_at, d.id", []).ConfigureAwait(false);
         foreach (var row in waiting)
         {
