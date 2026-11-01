@@ -147,6 +147,45 @@ public sealed class PhotoUploaderTests
     }
 
     [Fact]
+    public async Task DiscardRemovesARefusedPhotoAndItsRowButNothingElse()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        var files = new MemoryPhotoFiles();
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, files, storage, Clock);
+        var refused = await AddAsync(uploader);
+        var accepted = await AddAsync(uploader, "back");
+        storage.Refuse.Add(refused);
+        storage.Offline = false;
+        await uploader.ProcessAsync(Ct);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => uploader.DiscardFailedAsync(accepted));
+
+        await uploader.DiscardFailedAsync(refused);
+
+        Assert.Empty(await uploader.FailedAsync());
+        Assert.Empty(files.List());
+        var left = Assert.Single(await ProgressPhotos.ListAsync(t.Db, Profile));
+        Assert.Equal((accepted, PhotoUploadState.Uploaded), (left.Id, left.State));
+    }
+
+    [Fact]
+    public async Task ListsEachPhotoWithTheStateOfItsFiles()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        var storage = new FakePhotoStorage { Offline = true };
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var id = await AddAsync(uploader);
+
+        Assert.Equal(PhotoUploadState.Pending, Assert.Single(await ProgressPhotos.ListAsync(t.Db, Profile)).State);
+        storage.Offline = false;
+        storage.Refuse.Add(id);
+        await uploader.ProcessAsync(Ct);
+        var failed = Assert.Single(await ProgressPhotos.ListAsync(t.Db, Profile));
+        Assert.Equal((PhotoUploadState.Failed, "403"), (failed.State, failed.ErrorCode));
+        Assert.Empty(await ProgressPhotos.ListAsync(t.Db, "0190a0b0-0000-7000-8000-000000000009"));
+    }
+
+    [Fact]
     public async Task NeverUploadsAFileThatStillCarriesMetadata()
     {
         await using var t = await TestDatabase.OpenAsync();

@@ -1,0 +1,238 @@
+@using Health360.LocalDb
+@using PowerSync.Common.Client
+@implements IDisposable
+@inject PowerSyncDatabase Db
+@inject PhotoUploader Uploader
+@inject IPhotoCapture Capture
+@inject ProfileService Profiles
+@inject TimeProvider Clock
+
+@* Progress photos (FEATURES.md §1.5): take or pick a photo in a standard pose. It's resized and turned upright on
+   the device, stripped of EXIF and location by the upload queue, and goes up when there's a connection. The list
+   says which photos are still on this device and which the server refused, with retry and discard. *@
+<section class="card" aria-labelledby="photos-title">
+    <h2 id="photos-title">Progress photos</h2>
+    <p class="muted small">Private to you unless you share photos with a household member. Location and camera details are removed on this device before upload.</p>
+
+    <p id="photos-pose" class="label">Pose</p>
+    <ChoiceGroup Options="PhotoUploader.Poses.Order().ToList()" Labels="PoseLabels" Value="@pose" ValueChanged="v => pose = v"
+                 LabelledBy="photos-pose" Disabled="busy" />
+    <div class="inline">
+        @if (Capture.CanTakePhoto)
+        {
+            <button type="button" id="photos-take" disabled="@(busy || pose is null)" @onclick="() => AddAsync(take: true)">Take photo</button>
+        }
+        <button type="button" id="photos-pick" class="@(Capture.CanTakePhoto ? "secondary" : "")" disabled="@(busy || pose is null)"
+                @onclick="() => AddAsync(take: false)">Choose photo</button>
+    </div>
+    @if (busy)
+    {
+        <p class="muted small" role="status">Saving photo</p>
+    }
+    <p class="muted small" aria-live="polite">@saved</p>
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+
+    @if (photos is null)
+    {
+        <p class="muted" role="status">Loading photos</p>
+    }
+    else if (photos.Count == 0)
+    {
+        <p class="muted">No photos yet.</p>
+    }
+    else
+    {
+        <ul class="measurement-list" aria-label="Your progress photos">
+            @foreach (var photo in photos)
+            {
+                <li @key="photo.Id" class="measurement">
+                    <div class="measurement-text">
+                        <span class="strong">@PoseName(photo.Pose)</span>
+                        <span class="muted small">@photo.LocalDate · @StateText(photo)</span>
+                    </div>
+                    @if (photo.State == PhotoUploadState.Failed)
+                    {
+                        <div class="inline">
+                            <button type="button" class="secondary" disabled="@busy" aria-label="@($"Retry uploading the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                                    @onclick="() => RetryAsync(photo.Id)">Retry</button>
+                            <button type="button" class="danger" disabled="@busy" aria-label="@($"Discard the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                                    @onclick="() => DiscardAsync(photo.Id)">Discard</button>
+                        </div>
+                    }
+                </li>
+            }
+        </ul>
+    }
+</section>
+
+@code {
+    private static readonly IReadOnlyDictionary<string, string> PoseLabels = new Dictionary<string, string>
+    {
+        ["back"] = "Back",
+        ["front"] = "Front",
+        ["other"] = "Other",
+        ["side_left"] = "Left side",
+        ["side_right"] = "Right side",
+    };
+
+    private readonly CancellationTokenSource stop = new();
+    private CancellationTokenSource? watch;
+    private string? watchedProfile;
+    private IReadOnlyList<ProgressPhotoRow>? photos;
+    private string? pose = "front";
+    private bool busy;
+    private string? saved;
+    private string? error;
+
+    private static string PoseName(string code) => PoseLabels.TryGetValue(code, out var name) ? name : code;
+
+    private static string StateText(ProgressPhotoRow photo) => photo.State switch
+    {
+        PhotoUploadState.Pending => "Waiting to upload",
+        PhotoUploadState.Failed => $"Upload refused ({photo.ErrorCode ?? "no reason given"})",
+        _ => "Uploaded",
+    };
+
+    protected override void OnInitialized()
+    {
+        Profiles.Changed += ProfileChanged;
+        Follow();
+    }
+
+    private void ProfileChanged() => _ = InvokeAsync(() =>
+    {
+        Follow();
+        StateHasChanged();
+    });
+
+    private void Follow()
+    {
+        var profileId = Profiles.Profile?.Id;
+        if (profileId == watchedProfile)
+        {
+            return;
+        }
+
+        watch?.Cancel();
+        watch?.Dispose();
+        watch = null;
+        watchedProfile = profileId;
+        photos = null;
+        if (profileId is null)
+        {
+            return;
+        }
+
+        watch = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+        var token = watch.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var rows in ProgressPhotos.Watch(Db, profileId, token))
+                {
+                    await InvokeAsync(() =>
+                    {
+                        photos = rows;
+                        StateHasChanged();
+                    });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception) when (!token.IsCancellationRequested)
+            {
+                await InvokeAsync(() =>
+                {
+                    error = "Couldn't read your photos on this device. Leave this tab and come back to try again.";
+                    StateHasChanged();
+                });
+            }
+        }, CancellationToken.None);
+    }
+
+    private async Task AddAsync(bool take)
+    {
+        var profileId = Profiles.Profile?.Id;
+        if (busy || pose is null || profileId is null)
+        {
+            return;
+        }
+
+        busy = true;
+        saved = null;
+        error = null;
+        try
+        {
+            var captured = take ? await Capture.TakeAsync() : await Capture.PickAsync();
+            if (captured is null)
+            {
+                return;
+            }
+
+            var now = Clock.GetLocalNow();
+            await Uploader.AddAsync(profileId, pose, now, DateOnly.FromDateTime(now.DateTime), captured.Photo, captured.Thumbnail);
+            saved = $"{PoseName(pose)} photo saved. It uploads when you're online.";
+        }
+        catch (ArgumentException)
+        {
+            error = "That image couldn't be used. Choose a JPEG photo and try again.";
+        }
+        catch (InvalidOperationException)
+        {
+            error = "You signed out or switched accounts while the photo was saving, so it wasn't kept.";
+        }
+        catch (Exception)
+        {
+            error = "The photo couldn't be saved on this device. Try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task RetryAsync(string id)
+    {
+        error = null;
+        try
+        {
+            await Uploader.RetryAsync(id);
+        }
+        catch (Exception)
+        {
+            error = "Couldn't queue the photo again. Try again.";
+        }
+    }
+
+    private async Task DiscardAsync(string id)
+    {
+        busy = true;
+        error = null;
+        try
+        {
+            await Uploader.DiscardFailedAsync(id);
+            saved = "Photo discarded.";
+        }
+        catch (Exception)
+        {
+            error = "Couldn't discard the photo. Try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        Profiles.Changed -= ProfileChanged;
+        stop.Cancel();
+        watch?.Dispose();
+        stop.Dispose();
+    }
+}

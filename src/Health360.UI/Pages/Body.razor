@@ -5,7 +5,7 @@
 @inject ProfileService Profiles
 
 @* Body tab (FEATURES.md §1.5): weight with its trend, body measurements and vitals, the Navy-method estimate,
-   and everything entered, newest first. Progress photos arrive in their own change. *@
+   everything entered, newest first, and progress photos. *@
 <div class="page">
     <div class="page-head">
         <h1>Body</h1>
@@ -62,6 +62,8 @@
         <MeasurementForm IdPrefix="add-body" Title="Add a measurement" Metrics="BodyMetrics" />
 
         <MeasurementList IdPrefix="body" Title="Entered" Rows="BodyRows" />
+
+        <ProgressPhotoSection />
     }
 </div>
 

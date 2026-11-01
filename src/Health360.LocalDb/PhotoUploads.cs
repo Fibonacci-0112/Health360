@@ -241,6 +241,37 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     }
 
     /// <summary>
+    /// Gives up on a photo whose files the server refused: removes its queue entry and files from the device and
+    /// deletes its row (through the normal upload queue, which treats a row the server never got as already gone).
+    /// Only for a failed photo; deleting an uploaded one, files included, is the delete flow's job.
+    /// </summary>
+    public async Task DiscardFailedAsync(string id)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        await pass.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var failed = await db.GetOptional<CountRow>(
+                $"SELECT count(*) AS Count FROM {Table} WHERE id = ? AND failed_at IS NOT NULL", [id]).ConfigureAwait(false);
+            if (failed is not { Count: > 0 })
+            {
+                throw new InvalidOperationException("That photo isn't waiting as a failed upload.");
+            }
+
+            await db.WriteTransaction(async tx =>
+            {
+                await tx.Execute($"DELETE FROM {Table} WHERE id = ?", [id]).ConfigureAwait(false);
+                await tx.Execute("DELETE FROM progress_photos WHERE id = ?", [id]).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+            DeleteFiles(id);
+        }
+        finally
+        {
+            pass.Release();
+        }
+    }
+
+    /// <summary>
     /// Deletes files that no queue entry refers to: left by a crash between an upload and its clean-up, or by a
     /// database cleared while the app was closed.
     /// </summary>

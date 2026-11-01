@@ -20,7 +20,8 @@ public class ServicesTests
             .AddSingleton(new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", new Uri("http://127.0.0.1:8080")))
             .AddSingleton<ISessionStore>(new MemorySessionStore())
             .AddSingleton<IDatabaseOwnerStore>(new MemoryOwnerStore())
-            .AddLocalDatabase(_ => new SQLOpenOptions { DbFilename = Path.Combine(directory, "test.db") })
+            .AddLocalDatabase(_ => new SQLOpenOptions { DbFilename = Path.Combine(directory, "test.db") }, _ => Path.Combine(directory, "photos"))
+            .AddSingleton<IPhotoCapture>(new FakePhotoCapture())
             .AddHealth360Ui();
 
         var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
@@ -32,6 +33,7 @@ public class ServicesTests
             Assert.NotNull(provider.GetRequiredService<ProfileService>());
             Assert.IsType<DeviceLocale>(provider.GetRequiredService<IDeviceLocale>());
             Assert.IsType<LocalAccount>(provider.GetRequiredService<ILocalAccount>());
+            Assert.NotNull(provider.GetRequiredService<PhotoUploader>());
             provider.GetRequiredService<SyncState>().Dispose();
             await provider.GetRequiredService<PowerSyncDatabase>().Close();
         }
