@@ -30,9 +30,9 @@
     <div class="inline">
         @if (Capture.CanTakePhoto)
         {
-            <button type="button" id="photos-take" disabled="@(busy || pose is null)" @onclick="() => AddAsync(take: true)">Take photo</button>
+            <button type="button" id="photos-take" disabled="@(busy || pose is null || photos is null)" @onclick="() => AddAsync(take: true)">Take photo</button>
         }
-        <button type="button" id="photos-pick" class="@(Capture.CanTakePhoto ? "secondary" : "")" disabled="@(busy || pose is null)"
+        <button type="button" id="photos-pick" class="@(Capture.CanTakePhoto ? "secondary" : "")" disabled="@(busy || pose is null || photos is null)"
                 @onclick="() => AddAsync(take: false)">Choose photo</button>
     </div>
     @if (review is not null)
@@ -430,7 +430,6 @@
         viewVersion++;
         viewLoad?.Cancel();
         viewLoad?.Dispose();
-        review?.Loading.Dispose();
         viewLoad = null;
         viewing = null;
         full = null;
@@ -464,8 +463,15 @@
     private PhotoReview? review;
     private bool showGhost = true;
 
-    /// <summary>The newest photo in this pose, which the new one is lined up against.</summary>
-    private ProgressPhotoRow? PreviousIn(string code) => photos?.FirstOrDefault(p => p.Pose == code);
+    /// <summary>
+    /// The newest photo in this pose on or before the day the new one will be dated (the list is newest first), which
+    /// the new one is lined up against. A backdated photo is compared with the one before it, not a later one.
+    /// </summary>
+    private ProgressPhotoRow? PreviousIn(string code, DateOnly day)
+    {
+        var last = day.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        return photos?.FirstOrDefault(p => p.Pose == code && string.CompareOrdinal(p.LocalDate, last) <= 0);
+    }
 
     private async Task AddAsync(bool take)
     {
@@ -498,7 +504,7 @@
             }
 
             // With an earlier photo in this pose, show the ghost overlay first; the save happens on Keep.
-            if (PreviousIn(pose) is { } previous)
+            if (PreviousIn(pose, chosenDate ?? Today) is { } previous)
             {
                 StartReview(new PhotoReview(captured, take, generation, profileId, pose, previous));
                 return;
@@ -603,6 +609,13 @@
                 return;
             }
 
+            // Signed out, switched account or profile while the camera was open: the photo isn't this screen's any more.
+            if (Profiles.Profile?.Id != previous.ProfileId || Uploader.ClearGeneration != previous.Generation)
+            {
+                error = "Your account changed while the photo was being taken or saved, so it wasn't kept.";
+                return;
+            }
+
             // The same account check as the first capture: the generation read before the camera first opened.
             StartReview(new PhotoReview(captured, previous.Take, previous.Generation, previous.ProfileId, previous.Pose, previous.Previous));
         }
@@ -701,6 +714,7 @@
         stop.Cancel();
         watch?.Dispose();
         viewLoad?.Dispose();
+        EndReview();
         stop.Dispose();
     }
 }

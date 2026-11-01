@@ -312,4 +312,19 @@ public sealed class ProgressPhotoTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
         Assert.Empty(cut.FindAll(".photo-review"));
     }
+
+    [Fact]
+    public async Task ABackdatedPhotoIsComparedOnlyWithEarlierOnes()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+
+        // Earlier than the only front photo: nothing to line up with, so it saves directly.
+        await ChangeAsync(cut, "#photos-date", "2026-06-01");
+        await ClickAsync(cut, "#photos-pick");
+
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        Assert.Empty(cut.FindAll(".photo-review"));
+    }
 }
