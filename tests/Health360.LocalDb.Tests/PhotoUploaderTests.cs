@@ -693,6 +693,8 @@ public sealed class PhotoUploaderTests
         await uploader.ProcessAsync(Ct);
 
         Assert.Empty(storage.Deleted);
+        Assert.Equal(0, await DeletionsAsync(t));
+        Assert.Equal(0, await uploader.PendingCountAsync());
     }
 
     [Fact]

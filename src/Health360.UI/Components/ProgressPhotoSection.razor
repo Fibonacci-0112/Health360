@@ -470,7 +470,8 @@
 
         foreach (var row in rows.Take(shown))
         {
-            if (thumbs.TryGetValue(row.Id, out var known) && (known is null || known.Status == PhotoImageStatus.Available))
+            // Pending, shown, or refused for good (retrying a refusal or a broken file would fail the same way).
+            if (thumbs.TryGetValue(row.Id, out var known) && (known is null || known.Status is PhotoImageStatus.Available or PhotoImageStatus.Refused))
             {
                 continue;
             }
