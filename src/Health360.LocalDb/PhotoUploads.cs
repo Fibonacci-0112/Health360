@@ -163,9 +163,9 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     /// </summary>
     public async Task<PhotoUploadReport> ProcessAsync(CancellationToken cancellationToken = default)
     {
+        var before = Volatile.Read(ref generation);
         await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
-        using var current = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        running = current;
+        using var current = Register(before, cancellationToken);
         cancellationToken = current.Token;
         try
         {
@@ -268,10 +268,10 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     public async Task DiscardFailedAsync(string id, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
+        var before = Volatile.Read(ref generation);
         await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
         // Registered like a pass, so a sign-out or account switch cancels the Storage requests instead of waiting.
-        using var current = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        running = current;
+        using var current = Register(before, cancellationToken);
         cancellationToken = current.Token;
         try
         {
@@ -364,6 +364,23 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         {
             pass.Release();
         }
+    }
+
+    /// <summary>
+    /// Makes the work that now holds the lock cancellable by <see cref="ClearAsync"/>. A clear that began after
+    /// <paramref name="before"/> was read may have looked for running work before this registered, and is now waiting
+    /// for the lock; the work is then cancelled at once rather than left to run uncancelled.
+    /// </summary>
+    private CancellationTokenSource Register(int before, CancellationToken cancellationToken)
+    {
+        var current = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        running = current;
+        if (Volatile.Read(ref generation) != before)
+        {
+            current.Cancel();
+        }
+
+        return current;
     }
 
     /// <summary>Asks the background loop to try now (a photo was added, or the connection came back).</summary>

@@ -58,6 +58,19 @@ public sealed class ProgressPhotoTests : AppTestContext
     }
 
     [Fact]
+    public async Task ATabLeftOpenPastMidnightDatesANewPhotoToday()
+    {
+        var cut = await BodyAsync();
+        App.Clock.Now = App.Clock.Now.AddDays(1);
+
+        await ClickAsync(cut, "#photos-take");
+
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        var row = Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+        Assert.Equal(("2026-10-31", "2026-10-31T12:00:00.000Z"), (row.LocalDate, row.TakenAt));
+    }
+
+    [Fact]
     public async Task CancellingTheCameraSavesNothing()
     {
         var cut = await BodyAsync();

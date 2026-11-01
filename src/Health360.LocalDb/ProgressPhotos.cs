@@ -41,7 +41,10 @@ public sealed class ProgressPhotoRow
     /// <summary>1 while a write of its row is waiting in the normal upload queue.</summary>
     public long RowPending { get; set; }
 
-    /// <summary>The code the server refused its row with, if a write of it is quarantined in <c>failed_uploads</c>.</summary>
+    /// <summary>
+    /// The code the server refused its row with, if an insert or update of it is quarantined in <c>failed_uploads</c>.
+    /// A refused delete isn't counted here: it's retried from Settings, not by discarding the photo.
+    /// </summary>
     public string? RowErrorCode { get; set; }
 
     /// <summary>1 when a write of its row is quarantined; the code may be missing.</summary>
@@ -66,8 +69,8 @@ public static class ProgressPhotos
         "CASE WHEN u.id IS NULL THEN 0 ELSE 1 END AS Queued, u.failed_at AS FailedAt, u.error_code AS ErrorCode, " +
         "EXISTS (SELECT 1 FROM ps_crud c WHERE json_extract(c.data, '$.type') = 'progress_photos' " +
         "AND json_extract(c.data, '$.id') = p.id) AS RowPending, " +
-        "EXISTS (SELECT 1 FROM " + AppSchema.FailedUploads + " f WHERE f.table_name = 'progress_photos' AND f.row_id = p.id) AS RowRejected, " +
-        "(SELECT f.error_code FROM " + AppSchema.FailedUploads + " f WHERE f.table_name = 'progress_photos' AND f.row_id = p.id " +
+        "EXISTS (SELECT 1 FROM " + AppSchema.FailedUploads + " f WHERE f.table_name = 'progress_photos' AND f.row_id = p.id AND f.op <> 'DELETE') AS RowRejected, " +
+        "(SELECT f.error_code FROM " + AppSchema.FailedUploads + " f WHERE f.table_name = 'progress_photos' AND f.row_id = p.id AND f.op <> 'DELETE' " +
         "ORDER BY f.failed_at DESC LIMIT 1) AS RowErrorCode " +
         "FROM progress_photos p LEFT JOIN " + PhotoUploader.Table + " u ON u.id = p.id " +
         "WHERE p.profile_id = ? ORDER BY p.taken_at DESC, p.id DESC";

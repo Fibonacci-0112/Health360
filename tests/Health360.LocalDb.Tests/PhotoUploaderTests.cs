@@ -317,6 +317,51 @@ public sealed class PhotoUploaderTests
         Assert.Single(await ProgressPhotos.ListAsync(t.Db, Profile));
     }
 
+    [Fact]
+    public async Task AnEntryAnEarlierAttemptQuarantinedGoesWhenThePhotoIsDiscardedBeforeTheRetry()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var id = await AddAsync(uploader);
+        storage.Refuse.Add(id);
+        await uploader.ProcessAsync(Ct);
+        // An earlier attempt quarantined the row's PUT, then a later op in its transaction failed transiently.
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) " +
+            "VALUES ((SELECT 'crud-' || min(id) FROM ps_crud), 'progress_photos', ?, 'PUT', '{}', '42501')",
+            [id]);
+        await uploader.DiscardFailedAsync(id, Ct);
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) " +
+            "VALUES ((SELECT 'crud-' || min(id) FROM ps_crud), 'progress_photos', ?, 'PUT', '{}', '42501')",
+            [id]);
+        var writer = new FakeWriter { Fail = w => w.Table == "progress_photos" && w.Op == "PUT" ? new RemoteWriteException("denied", "42501") : null };
+
+        await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: Ct);
+
+        Assert.Equal(0, await Uploads.FailedUploadCountAsync(t.Db));
+    }
+
+    [Fact]
+    public async Task ARejectedDeleteIsNotShownAsARefusedPhoto()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), new FakePhotoStorage(), Clock);
+        var id = await AddAsync(uploader);
+        await uploader.ProcessAsync(Ct);
+        await Uploads.UploadPendingAsync(t.Db, new FakeWriter(), Clock, cancellationToken: Ct);
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) VALUES ('crud-9', 'progress_photos', ?, 'DELETE', '{}', '42501')",
+            [id]);
+
+        var row = Single(await ProgressPhotos.ListAsync(t.Db, Profile));
+
+        Assert.Equal((0L, PhotoUploadState.Uploaded), (row.RowRejected, row.State));
+    }
+
     private static ProgressPhotoRow Single(ProgressPhotoRow[] rows) => Assert.Single(rows);
 
     [Fact]

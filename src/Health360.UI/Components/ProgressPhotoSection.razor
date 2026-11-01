@@ -20,7 +20,7 @@
     <div class="field">
         <label for="photos-date" class="label">Taken on</label>
         <input id="photos-date" type="date" max="@Today.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)"
-               @bind="date" disabled="@busy" />
+               value="@Date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)" @onchange="ChooseDate" disabled="@busy" />
     </div>
     <div class="inline">
         @if (Capture.CanTakePhoto)
@@ -92,13 +92,20 @@
     private IReadOnlyList<ProgressPhotoRow>? photos;
     private string? pose = "front";
 
-    // The day the photo was taken: today for a new photo; set it to the right day for one chosen from the library.
-    private DateOnly date;
+    // The day the user picked, for a photo chosen from the library; null means today, whatever today is when the photo is
+    // saved (the tab may stay open past midnight).
+    private DateOnly? chosenDate;
+
+    private DateOnly Date => chosenDate ?? Today;
 
     private DateOnly Today => DateOnly.FromDateTime(Clock.GetLocalNow().DateTime);
     private bool busy;
     private string? saved;
     private string? error;
+
+    private void ChooseDate(ChangeEventArgs e) =>
+        chosenDate = DateOnly.TryParseExact(e.Value as string, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var day) && day != Today ? day : null;
 
     /// <summary>Now for today; otherwise noon local time on that day (the form asks for a day, as for measurements).</summary>
     private DateTimeOffset TakenAt(DateOnly day)
@@ -126,7 +133,6 @@
 
     protected override void OnInitialized()
     {
-        date = Today;
         Profiles.Changed += ProfileChanged;
         Follow();
     }
@@ -196,6 +202,7 @@
             return;
         }
 
+        var date = Date;
         if (date > Today)
         {
             error = "The date can't be in the future.";
@@ -215,7 +222,7 @@
 
             await Uploader.AddAsync(profileId, pose, TakenAt(date), date, captured.Photo, captured.Thumbnail, generation);
             saved = $"{PoseName(pose)} photo saved. It uploads when you're online.";
-            date = Today;
+            chosenDate = null;
         }
         catch (ArgumentException)
         {
