@@ -587,6 +587,47 @@ public sealed class PhotoUploaderTests
     }
 
     [Fact]
+    public async Task AnUploadThatKeepsFailingDoesNotHoldBackAnotherPhotosFileDeletes()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FailingUploadStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var deletedId = await AddAsync(uploader);
+        await uploader.DeleteAsync(Profile, deletedId, Ct);
+        await AddAsync(uploader, "back");
+        await t.Db.Execute("DELETE FROM ps_crud");
+
+        var report = await uploader.ProcessAsync(Ct);
+
+        Assert.True(report.Stopped);
+        Assert.Equal(1, report.Deleted);
+        Assert.Equal(2, storage.Deleted.Count);
+        Assert.Equal(0, await DeletionsAsync(t));
+    }
+
+    [Fact]
+    public async Task AnEarlierRefusedWriteOfADeletedPhotoIsDroppedAndDoesNotBlockItsFileDeletes()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var id = await AddAsync(uploader);
+        await uploader.ProcessAsync(Ct);
+        await t.Db.Execute("DELETE FROM ps_crud");
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) VALUES (uuid(), 'progress_photos', ?, 'PATCH', '{}', '23514')", [id]);
+
+        await uploader.DeleteAsync(Profile, id, Ct);
+        await t.Db.Execute("DELETE FROM ps_crud");
+        await uploader.ProcessAsync(Ct);
+
+        Assert.Equal(0, (await t.Db.Get<CountRow>("SELECT count(*) AS N FROM failed_uploads")).N);
+        Assert.Equal(2, storage.Deleted.Count);
+    }
+
+    [Fact]
     public async Task DeletingAPhotoThatIsNotHereOrNotThisProfilesIsRefused()
     {
         await using var t = await TestDatabase.OpenAsync();
@@ -979,6 +1020,23 @@ public sealed class FakePhotoStorage : IPhotoStorage
         Uploads.Add((path, jpeg));
         return Task.CompletedTask;
     }
+}
+
+/// <summary>Storage that deletes but can't take uploads, as during a server error on uploads only.</summary>
+public sealed class FailingUploadStorage : IPhotoStorage
+{
+    public List<string> Deleted { get; } = [];
+
+    public Task DeleteAsync(string path, CancellationToken cancellationToken)
+    {
+        Deleted.Add(path);
+        return Task.CompletedTask;
+    }
+
+    public Task<byte[]?> DownloadAsync(string path, CancellationToken cancellationToken) => Task.FromResult<byte[]?>(null);
+
+    public Task UploadAsync(string path, byte[] jpeg, CancellationToken cancellationToken) =>
+        throw new PhotoUploadException("server error", permanent: false, code: "503");
 }
 
 /// <summary>Storage whose upload never answers until it is cancelled.</summary>

@@ -48,6 +48,9 @@ public sealed class PhotoLibrary
     private readonly Lock gate = new();
     private readonly Dictionary<string, byte[]> thumbnails = new(StringComparer.Ordinal);
     private readonly Queue<string> order = new();
+
+    // Thumbnails of deleted photos, so a download already under way when one was forgotten isn't cached afterwards.
+    private readonly HashSet<string> forgotten = new(StringComparer.Ordinal);
     private readonly IPhotoFileStore files;
     private readonly IPhotoStorage storage;
     private readonly PhotoUploader uploader;
@@ -90,6 +93,7 @@ public sealed class PhotoLibrary
         var name = PhotoUploader.ThumbName(id);
         lock (gate)
         {
+            forgotten.Add(name);
             if (thumbnails.Remove(name))
             {
                 var kept = order.Where(n => n != name).ToList();
@@ -184,7 +188,7 @@ public sealed class PhotoLibrary
             }
 
             Reset(generation);
-            if (thumbnails.TryAdd(name, jpeg))
+            if (!forgotten.Contains(name) && thumbnails.TryAdd(name, jpeg))
             {
                 order.Enqueue(name);
                 while (order.Count > ThumbnailCacheSize)
@@ -201,6 +205,7 @@ public sealed class PhotoLibrary
         {
             thumbnails.Clear();
             order.Clear();
+            forgotten.Clear();
             cachedGeneration = generation;
         }
     }

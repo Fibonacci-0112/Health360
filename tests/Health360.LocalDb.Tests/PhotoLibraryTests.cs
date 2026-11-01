@@ -154,6 +154,20 @@ public sealed class PhotoLibraryTests
     }
 
     [Fact]
+    public async Task AThumbnailDownloadFinishingAfterItsPhotoWasForgottenIsNotCached()
+    {
+        var (t, _, storage, uploader, library) = await OpenAsync();
+        await using var ___ = t;
+        using var __ = uploader;
+        storage.Stored[$"{Profile}/{Photo}_thumb.jpg"] = Jpeg;
+        storage.DuringDownload = () => library.Forget(Photo);
+
+        await library.ThumbnailAsync(Profile, Photo, Ct);
+
+        Assert.Equal(0, library.CachedCount);
+    }
+
+    [Fact]
     public async Task FullPhotosAreNotCached()
     {
         var (t, _, storage, uploader, library) = await OpenAsync();

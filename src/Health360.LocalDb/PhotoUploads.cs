@@ -177,6 +177,8 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         {
             var uploaded = 0;
             var failed = 0;
+            // Deletes first, so an upload that keeps failing can't hold back the files of photos already deleted.
+            var (deleted, deletesStopped) = await DeleteFilesAsync(cancellationToken).ConfigureAwait(false);
             var pending = await db.GetAll<PendingRow>(
                 $"SELECT id AS Id, profile_id AS ProfileId FROM {Table} WHERE failed_at IS NULL ORDER BY created_at, id", []).ConfigureAwait(false);
             foreach (var row in pending)
@@ -199,8 +201,8 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
                     // Offline, signed out or a server error: everything after this would fail the same way.
                     await db.Execute(
                         $"UPDATE {Table} SET attempts = attempts + 1, error_code = ? WHERE id = ?", [error.Code, row.Id]).ConfigureAwait(false);
-                    Notify(uploaded, failed);
-                    return new PhotoUploadReport(uploaded, failed, Stopped: true);
+                    Notify(uploaded + deleted, failed);
+                    return new PhotoUploadReport(uploaded, failed, Stopped: true, deleted);
                 }
 
                 // The entry goes first: if the app dies before the files are deleted, the sweep removes them.
@@ -209,9 +211,8 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
                 uploaded++;
             }
 
-            var (deleted, stopped) = await DeleteFilesAsync(cancellationToken).ConfigureAwait(false);
             Notify(uploaded + deleted, failed);
-            return new PhotoUploadReport(uploaded, failed, stopped, deleted);
+            return new PhotoUploadReport(uploaded, failed, deletesStopped, deleted);
         }
         finally
         {
@@ -259,6 +260,9 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
             {
                 await tx.Execute("DELETE FROM progress_photos WHERE id = ?", [id]).ConfigureAwait(false);
                 await tx.Execute($"DELETE FROM {Table} WHERE id = ?", [id]).ConfigureAwait(false);
+                // An earlier refused insert or update of it can't be retried into a photo the user deleted.
+                await tx.Execute(
+                    $"DELETE FROM {AppSchema.FailedUploads} WHERE table_name = 'progress_photos' AND row_id = ? AND op <> 'DELETE'", [id]).ConfigureAwait(false);
                 await tx.Execute(
                     $"INSERT OR IGNORE INTO {DeletionsTable} (id, profile_id, attempts, created_at) VALUES (?, ?, 0, ?)",
                     [id, profileId, now]).ConfigureAwait(false);
@@ -285,7 +289,7 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         var waiting = await db.GetAll<PendingRow>(
             $"SELECT d.id AS Id, d.profile_id AS ProfileId FROM {DeletionsTable} d " +
             "WHERE NOT EXISTS (SELECT 1 FROM ps_crud c WHERE json_extract(c.data, '$.type') = 'progress_photos' AND json_extract(c.data, '$.id') = d.id) " +
-            $"AND NOT EXISTS (SELECT 1 FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = d.id) " +
+            $"AND NOT EXISTS (SELECT 1 FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = d.id AND f.op = 'DELETE') " +
             "ORDER BY d.created_at, d.id", []).ConfigureAwait(false);
         foreach (var row in waiting)
         {
