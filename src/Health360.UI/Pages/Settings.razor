@@ -143,6 +143,11 @@
         {
             discardError = "That change isn't waiting any more, so it wasn't discarded.";
         }
+        catch (Exception)
+        {
+            // A timeout, or a sign-out that cancelled it.
+            discardError = "Couldn't discard the change. Try again.";
+        }
         finally
         {
             busy = false;

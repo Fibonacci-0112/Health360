@@ -275,12 +275,16 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         cancellationToken = current.Token;
         try
         {
+            // The row may be gone already: PowerSync rolls a rejected insert back once the upload queue is empty. So the
+            // profile comes from the row, the file queue entry or the quarantined write, whichever is still there.
             var photo = await db.GetOptional<DiscardRow>(
-                $"SELECT p.profile_id AS ProfileId, (SELECT count(*) FROM {Table} u WHERE u.id = p.id AND u.failed_at IS NOT NULL) AS FilesFailed, " +
-                $"(SELECT count(*) FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = p.id) AS RowRejected " +
-                "FROM progress_photos p WHERE p.id = ?",
-                [id]).ConfigureAwait(false);
-            if (photo is null || (photo.FilesFailed == 0 && photo.RowRejected == 0))
+                $"SELECT (SELECT count(*) FROM {Table} u WHERE u.id = ? AND u.failed_at IS NOT NULL) AS FilesFailed, " +
+                $"(SELECT count(*) FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = ? AND f.op <> 'DELETE') AS RowRejected, " +
+                "coalesce((SELECT p.profile_id FROM progress_photos p WHERE p.id = ?), " +
+                $"(SELECT u.profile_id FROM {Table} u WHERE u.id = ?), " +
+                $"(SELECT json_extract(f.data, '$.profile_id') FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = ? LIMIT 1)) AS ProfileId",
+                [id, id, id, id, id]).ConfigureAwait(false);
+            if (photo is null || (photo.FilesFailed == 0 && photo.RowRejected == 0) || string.IsNullOrEmpty(photo.ProfileId))
             {
                 throw new InvalidOperationException("That photo isn't waiting as a refused upload.");
             }
@@ -291,7 +295,8 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
             {
                 await tx.Execute($"DELETE FROM {Table} WHERE id = ?", [id]).ConfigureAwait(false);
                 await tx.Execute(
-                    $"DELETE FROM {AppSchema.FailedUploads} WHERE table_name = 'progress_photos' AND row_id = ?", [id]).ConfigureAwait(false);
+                    $"DELETE FROM {AppSchema.FailedUploads} WHERE table_name = 'progress_photos' AND row_id = ? AND op <> 'DELETE'", [id]).ConfigureAwait(false);
+                // Only if it's still here; deleting it queues a DELETE, which the server treats as done if it never had it.
                 await tx.Execute("DELETE FROM progress_photos WHERE id = ?", [id]).ConfigureAwait(false);
             }).ConfigureAwait(false);
             DeleteFiles(id);
@@ -495,7 +500,7 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
 
     internal sealed class DiscardRow
     {
-        public string ProfileId { get; set; } = "";
+        public string? ProfileId { get; set; }
 
         public long FilesFailed { get; set; }
 

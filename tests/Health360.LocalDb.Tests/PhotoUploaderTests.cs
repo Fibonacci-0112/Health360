@@ -271,6 +271,52 @@ public sealed class PhotoUploaderTests
         Assert.Equal(["PUT", "DELETE"], writer.Writes.Where(w => w.Table == "progress_photos").Select(w => w.Op));
     }
 
+    [Fact]
+    public async Task DiscardStillWorksAfterPowerSyncRolledTheRejectedRowBack()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FakePhotoStorage();
+        var files = new MemoryPhotoFiles();
+        using var uploader = new PhotoUploader(t.Db, files, storage, Clock);
+        var id = await AddAsync(uploader);
+        var writer = new FakeWriter { Fail = w => w.Table == "progress_photos" ? new RemoteWriteException("denied", "42501") : null };
+        await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: Ct);
+        // The rollback: the row goes as sync brings the server's state, with no upload queued.
+        await t.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("DELETE FROM progress_photos WHERE id = ?", [id]);
+            await tx.Execute("DELETE FROM ps_crud WHERE id = (SELECT max(id) FROM ps_crud)");
+        });
+
+        await uploader.DiscardFailedAsync(id, Ct);
+
+        Assert.Equal([$"{Profile}/{id}_thumb.jpg", $"{Profile}/{id}.jpg"], storage.Deleted);
+        Assert.Equal(0, await Uploads.FailedUploadCountAsync(t.Db));
+        Assert.Equal(0, await uploader.PendingCountAsync());
+        Assert.Empty(files.List());
+    }
+
+    [Fact]
+    public async Task ARejectedDeleteIsNotAPhotoToDiscard()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var id = await AddAsync(uploader);
+        await uploader.ProcessAsync(Ct);
+        await Uploads.UploadPendingAsync(t.Db, new FakeWriter(), Clock, cancellationToken: Ct);
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) VALUES (?, 'progress_photos', ?, 'DELETE', '{}', '42501')",
+            ["crud-1", id]);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => uploader.DiscardFailedAsync(id, Ct));
+
+        Assert.Empty(storage.Deleted);
+        Assert.Single(await ProgressPhotos.ListAsync(t.Db, Profile));
+    }
+
     private static ProgressPhotoRow Single(ProgressPhotoRow[] rows) => Assert.Single(rows);
 
     [Fact]

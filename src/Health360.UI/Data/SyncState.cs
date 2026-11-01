@@ -63,8 +63,9 @@ public sealed partial class SyncState : IDisposable
     public async Task DiscardAsync(string id)
     {
         var entry = Failed.FirstOrDefault(f => f.Id == id);
-        if (photos is not null && entry is { TableName: "progress_photos" }
-            && await PhotoRowExistsAsync(entry.RowId).ConfigureAwait(false))
+        // A rejected insert or update, whether or not PowerSync has rolled its row back yet; a rejected delete is just
+        // dropped, like any other.
+        if (photos is not null && entry is { TableName: "progress_photos", Op: not "DELETE" })
         {
             await photos.DiscardFailedAsync(entry.RowId).ConfigureAwait(false);
             return;
@@ -73,13 +74,6 @@ public sealed partial class SyncState : IDisposable
         await Uploads.DiscardFailedUploadAsync(db, id).ConfigureAwait(false);
     }
 
-    private async Task<bool> PhotoRowExistsAsync(string rowId) =>
-        await db.GetOptional<ProfileOfRow>("SELECT profile_id AS ProfileId FROM progress_photos WHERE id = ?", [rowId]).ConfigureAwait(false) is not null;
-
-    private sealed class ProfileOfRow
-    {
-        public string? ProfileId { get; set; }
-    }
 
     public void Dispose()
     {

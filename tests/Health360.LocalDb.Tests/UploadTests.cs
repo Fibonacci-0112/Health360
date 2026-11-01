@@ -312,4 +312,27 @@ public class UploadTests
 
         public string FailedAt { get; set; } = "";
     }
+
+    [Fact]
+    public async Task AnUpdateRejectedForARowThatSyncRemovedIsStillQuarantined()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("INSERT INTO notes (id, profile_id, body) VALUES (?, ?, ?)", ["n1", Profile, "hello"]);
+            await tx.Execute("DELETE FROM ps_crud");
+        });
+        await t.Db.Execute("UPDATE notes SET body = ? WHERE id = ?", ["edited", "n1"]);
+        // Another device deleted it: sync removes the row here without queueing anything.
+        await t.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("DELETE FROM notes WHERE id = ?", ["n1"]);
+            await tx.Execute("DELETE FROM ps_crud WHERE id = (SELECT max(id) FROM ps_crud)");
+        });
+        var writer = new FakeWriter { Fail = _ => new RemoteWriteException("no row", PostgrestWriter.NoRow) };
+
+        await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, await FailedCount(t));
+    }
 }
