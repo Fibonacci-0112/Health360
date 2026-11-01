@@ -213,6 +213,9 @@ public sealed class FailedUpload
 
     public string TableName { get; set; } = "";
 
+    /// <summary>The id of the row the rejected write was for.</summary>
+    public string RowId { get; set; } = "";
+
     public string Op { get; set; } = "";
 
     public string? ErrorCode { get; set; }
@@ -225,7 +228,7 @@ public sealed class FailedUpload
 public static class FailedUploads
 {
     private const string ListSql =
-        $"SELECT id AS Id, table_name AS TableName, op AS Op, error_code AS ErrorCode, error_message AS ErrorMessage, " +
+        $"SELECT id AS Id, table_name AS TableName, row_id AS RowId, op AS Op, error_code AS ErrorCode, error_message AS ErrorMessage, " +
         $"failed_at AS FailedAt FROM {AppSchema.FailedUploads} ORDER BY failed_at DESC";
 
     /// <summary>The quarantine, newest first, now and after every change.</summary>

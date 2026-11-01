@@ -55,7 +55,25 @@ public sealed partial class SyncState : IDisposable
     public Task<RetryResult> RetryAsync(string id) => Uploads.RetryFailedUploadAsync(db, id, writer, clock);
 
     /// <summary>Drops a quarantined write for good.</summary>
-    public Task DiscardAsync(string id) => Uploads.DiscardFailedUploadAsync(db, id);
+    /// <remarks>
+    /// A rejected progress-photo row is discarded as a photo (<see cref="PhotoUploader.DiscardFailedAsync"/>): its files
+    /// in Storage and on the device go with it, so it doesn't linger looking uploaded. That needs a connection and
+    /// throws <see cref="PhotoUploadException"/> without one.
+    /// </remarks>
+    public async Task DiscardAsync(string id)
+    {
+        var entry = Failed.FirstOrDefault(f => f.Id == id);
+        // A rejected insert or update, whether or not PowerSync has rolled its row back yet; a rejected delete is just
+        // dropped, like any other.
+        if (photos is not null && entry is { TableName: "progress_photos", Op: not "DELETE" })
+        {
+            await photos.DiscardFailedAsync(entry.RowId).ConfigureAwait(false);
+            return;
+        }
+
+        await Uploads.DiscardFailedUploadAsync(db, id).ConfigureAwait(false);
+    }
+
 
     public void Dispose()
     {

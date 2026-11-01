@@ -34,6 +34,10 @@
         {
             <p class="muted" aria-live="polite">@retryNotice</p>
         }
+        @if (discardError is not null)
+        {
+            <p class="error" role="alert">@discardError</p>
+        }
         <ul class="failed-list">
             @foreach (var failed in Sync.Failed)
             {
@@ -81,6 +85,7 @@
 @code {
     private UnsyncedChanges? unsynced;
     private string? retryNotice;
+    private string? discardError;
     private string? unitsError;
     private string? signOutError;
     private bool busy;
@@ -125,9 +130,23 @@
     private async Task DiscardAsync(string id)
     {
         busy = true;
+        discardError = null;
         try
         {
             await Sync.DiscardAsync(id);
+        }
+        catch (Health360.LocalDb.PhotoUploadException)
+        {
+            discardError = "Discarding a photo needs a connection, to remove anything of it already uploaded. Try again when you're online.";
+        }
+        catch (InvalidOperationException)
+        {
+            discardError = "That change isn't waiting any more, so it wasn't discarded.";
+        }
+        catch (Exception)
+        {
+            // A timeout, or a sign-out that cancelled it.
+            discardError = "Couldn't discard the change. Try again.";
         }
         finally
         {

@@ -73,8 +73,15 @@ public static partial class Uploads
                 }
                 catch (RemoteWriteException error) when (IsPermanentError(error.Code))
                 {
-                    await QuarantineAsync(db, op, local, error, clock).ConfigureAwait(false);
-                    onQuarantine?.Invoke(new QuarantinedOp(op.Table, op.Op, error.Code));
+                    // A rejected insert or update of a row this device has since deleted (a discarded photo: its
+                    // DELETE is queued after this op) is dropped, since replaying it from the quarantine would bring
+                    // back what the user deleted; an entry an earlier attempt left for it goes too. The check and the
+                    // insert are one write transaction, so a discard can't land between them. A row that only
+                    // vanished through sync queues nothing and is quarantined as before.
+                    if (await QuarantineUnlessDeletedAsync(db, op, local, error, clock).ConfigureAwait(false))
+                    {
+                        onQuarantine?.Invoke(new QuarantinedOp(op.Table, op.Op, error.Code));
+                    }
                 }
             }
 
@@ -230,13 +237,38 @@ public static partial class Uploads
     /// </summary>
     private static string QuarantineId(CrudEntry op) => $"crud-{op.ClientId.ToString(CultureInfo.InvariantCulture)}";
 
-    private static async Task QuarantineAsync(IPowerSyncDatabase db, CrudEntry op, JsonObject local, RemoteWriteException error, TimeProvider clock) =>
-        await db.Execute(
-            $"""
-            INSERT OR REPLACE INTO {AppSchema.FailedUploads} (id, table_name, row_id, op, data, error_code, error_message, failed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [QuarantineId(op), op.Table, op.Id, op.Op.ToString(), local.ToJsonString(), error.Code, error.Message, Timestamp(clock)]).ConfigureAwait(false);
+    /// <summary>Quarantines <paramref name="op"/>, or drops it if this device has since queued a DELETE of its row.</summary>
+    /// <returns>True if it was quarantined.</returns>
+    private static async Task<bool> QuarantineUnlessDeletedAsync(
+        IPowerSyncDatabase db, CrudEntry op, JsonObject local, RemoteWriteException error, TimeProvider clock)
+    {
+        var quarantined = false;
+        await db.WriteTransaction(async tx =>
+        {
+            var deletedLater = op.Op != UpdateType.DELETE && await tx.GetOptional<CountRow>(
+                "SELECT 1 AS N FROM ps_crud WHERE id > ? AND json_extract(data, '$.op') = 'DELETE' " +
+                "AND json_extract(data, '$.type') = ? AND json_extract(data, '$.id') = ? LIMIT 1",
+                [op.ClientId, op.Table, op.Id]).ConfigureAwait(false) is not null;
+            if (deletedLater)
+            {
+                await tx.Execute($"DELETE FROM {AppSchema.FailedUploads} WHERE id = ?", [QuarantineId(op)]).ConfigureAwait(false);
+                return;
+            }
+
+            await tx.Execute(QuarantineSql, QuarantineArgs(op, local, error, clock)).ConfigureAwait(false);
+            quarantined = true;
+        }).ConfigureAwait(false);
+        return quarantined;
+    }
+
+    private static readonly string QuarantineSql =
+        $"""
+        INSERT OR REPLACE INTO {AppSchema.FailedUploads} (id, table_name, row_id, op, data, error_code, error_message, failed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """;
+
+    private static object?[] QuarantineArgs(CrudEntry op, JsonObject local, RemoteWriteException error, TimeProvider clock) =>
+        [QuarantineId(op), op.Table, op.Id, op.Op.ToString(), local.ToJsonString(), error.Code, error.Message, Timestamp(clock)];
 
     /// <summary>
     /// The op's column values exactly as PowerSync queued them. <see cref="CrudEntry.OpData"/> can't be

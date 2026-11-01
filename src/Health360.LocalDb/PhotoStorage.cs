@@ -13,6 +13,12 @@ public interface IPhotoStorage
     /// upload whose answer was lost). Throws <see cref="PhotoUploadException"/> when it fails.
     /// </summary>
     Task UploadAsync(string path, byte[] jpeg, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes the file at <paramref name="path"/>; one that isn't there counts as deleted. Throws
+    /// <see cref="PhotoUploadException"/> when it can't.
+    /// </summary>
+    Task DeleteAsync(string path, CancellationToken cancellationToken);
 }
 
 /// <summary>A failed file upload. <see cref="Permanent"/> ones fail the same way on every retry.</summary>
@@ -57,21 +63,56 @@ public sealed class SupabasePhotoStorage(HttpClient http, ISupabaseSession sessi
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
         ArgumentNullException.ThrowIfNull(jpeg);
-        // Not the owner's session: wait for them rather than upload their photos as someone else.
+        using var request = await RequestAsync(HttpMethod.Post, path, cancellationToken).ConfigureAwait(false);
+        request.Headers.Add("x-upsert", "true");
+        request.Content = new ByteArrayContent(jpeg);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw await FailureAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public async Task DeleteAsync(string path, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        using var request = await RequestAsync(HttpMethod.Delete, path, cancellationToken).ConfigureAwait(false);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return;
+        }
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        // Storage answers a missing object with 400 and an inner statusCode of 404.
+        if (response.StatusCode == HttpStatusCode.BadRequest && InnerStatus(body) == "404")
+        {
+            return;
+        }
+
+        var status = (int)response.StatusCode;
+        throw new PhotoUploadException(
+            $"Storage answered {status}.", IsPermanent(response.StatusCode, body), status.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private async Task<HttpRequestMessage> RequestAsync(HttpMethod method, string path, CancellationToken cancellationToken)
+    {
+        // Not the owner's session: wait for them rather than touch their photos as someone else.
         var token = await OwnerSession.TokenAsync(session, owner, cancellationToken).ConfigureAwait(false)
             ?? throw new PhotoUploadException("Not signed in as the local database's owner.", permanent: false, code: null);
         var segments = string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"storage/v1/object/{Bucket}/{segments}");
+        var request = new HttpRequestMessage(method, $"storage/v1/object/{Bucket}/{segments}");
         request.Headers.Add("apikey", apiKey);
-        request.Headers.Add("x-upsert", "true");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        request.Content = new ByteArrayContent(jpeg);
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+        return request;
+    }
 
-        HttpResponseMessage response;
+    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
         try
         {
-            response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            return await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
         catch (HttpRequestException error)
         {
@@ -81,20 +122,30 @@ public sealed class SupabasePhotoStorage(HttpClient http, ISupabaseSession sessi
         {
             throw new PhotoUploadException("Storage did not answer in time.", error);
         }
+    }
 
-        using (response)
+    private static async Task<PhotoUploadException> FailureAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        var status = (int)response.StatusCode;
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        return new PhotoUploadException(
+            $"Storage answered {status}.", IsPermanent(response.StatusCode, body), status.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private static string? InnerStatus(string? body)
+    {
+        if (string.IsNullOrEmpty(body))
         {
-            if (response.IsSuccessStatusCode)
-            {
-                return;
-            }
+            return null;
+        }
 
-            var status = (int)response.StatusCode;
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            throw new PhotoUploadException(
-                $"Storage answered {status}.",
-                IsPermanent(response.StatusCode, body),
-                status.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        try
+        {
+            return JsonNode.Parse(body) is JsonObject error ? (error["statusCode"] as JsonValue)?.ToString() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

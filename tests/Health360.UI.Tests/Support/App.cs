@@ -31,6 +31,17 @@ public sealed class App : IAsyncDisposable
 
     public FixedLocale Locale { get; set; } = new();
 
+    public FakePhotoCapture Camera { get; } = new();
+
+    public MemoryPhotoFiles PhotoFiles { get; } = new();
+
+    public TestPhotoStorage PhotoStorage { get; } = new();
+
+    /// <summary>The upload queue, with files in memory and <see cref="PhotoStorage"/> as the server (offline by default).</summary>
+    public PhotoUploader Photos => photos ??= new PhotoUploader(Database.Db, PhotoFiles, PhotoStorage, Clock);
+
+    private PhotoUploader? photos;
+
     public static async Task<App> StartAsync() => new(await TestDatabase.OpenAsync());
 
     /// <summary>A session as if this user had signed in on an earlier launch.</summary>
@@ -53,6 +64,8 @@ public sealed class App : IAsyncDisposable
         context.Services.AddSingleton<ProfileService>();
         context.Services.AddSingleton<SyncState>();
         context.Services.AddSingleton<BodyData>();
+        context.Services.AddSingleton(Photos);
+        context.Services.AddSingleton<IPhotoCapture>(Camera);
     }
 
     public AuthService NewAuthService(out SessionManager sessions)
@@ -62,7 +75,11 @@ public sealed class App : IAsyncDisposable
         return new AuthService(sessions, client, Local, NullLogger<AuthService>.Instance);
     }
 
-    public ValueTask DisposeAsync() => Database.DisposeAsync();
+    public ValueTask DisposeAsync()
+    {
+        photos?.Dispose();
+        return Database.DisposeAsync();
+    }
 
     /// <summary>A server that is never reached: every write fails as if offline.</summary>
     public sealed class NoWriter : IRemoteWriter

@@ -57,6 +57,12 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     /// <summary>Raised after a pass changed the queue, possibly off the UI thread.</summary>
     public event Action? Changed;
 
+    /// <summary>
+    /// Changes each time the account's data is cleared. A screen reads it before opening the camera or library and
+    /// passes it to <see cref="AddAsync"/>, so a photo picked across a sign-out or account switch is refused.
+    /// </summary>
+    public int ClearGeneration => Volatile.Read(ref generation);
+
     public static string PhotoName(string id) => id + ".jpg";
 
     public static string ThumbName(string id) => id + "_thumb.jpg";
@@ -65,7 +71,8 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     /// Adds a photo taken (or picked) on this device and returns its id. Both images must be JPEGs already resized and
     /// rotated upright by the platform (the EXIF orientation is removed with the rest of the metadata, so a sideways
     /// original would stay sideways). Throws <see cref="ArgumentException"/> for anything else, before storing
-    /// anything, and <see cref="InvalidOperationException"/> if the account's data was cleared while it waited.
+    /// anything, and <see cref="InvalidOperationException"/> if the account's data was cleared while it waited, or
+    /// since <paramref name="clearGeneration"/> (<see cref="ClearGeneration"/> read before the photo was taken).
     /// </summary>
     public async Task<string> AddAsync(
         string profileId,
@@ -74,11 +81,12 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         DateOnly localDate,
         byte[] photo,
         byte[] thumbnail,
+        int? clearGeneration = null,
         CancellationToken cancellationToken = default)
     {
         // Read before anything else (stripping takes a while), so a clear that begins at any point during this add
         // is seen when it takes the lock.
-        var before = Volatile.Read(ref generation);
+        var before = clearGeneration ?? Volatile.Read(ref generation);
         ArgumentException.ThrowIfNullOrEmpty(profileId);
         ArgumentNullException.ThrowIfNull(photo);
         ArgumentNullException.ThrowIfNull(thumbnail);
@@ -107,6 +115,15 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
             if (Volatile.Read(ref generation) != before)
             {
                 throw new InvalidOperationException("The account changed before the photo was saved.");
+            }
+
+            // The profile must still be in this device's database. A clear empties it, so a profile id the screen read
+            // before a sign-out or account switch (even one that finished before the camera opened) is refused here,
+            // under the same lock the clear takes. The screen only offers photos once the profile has synced, so this
+            // costs nothing offline.
+            if (await db.GetOptional<CountRow>("SELECT 1 AS Count FROM profiles WHERE id = ?", [profileId]).ConfigureAwait(false) is null)
+            {
+                throw new InvalidOperationException("The profile isn't in this device's database.");
             }
 
             await files.WriteAsync(PhotoName(id), strippedPhoto, cancellationToken).ConfigureAwait(false);
@@ -146,9 +163,9 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     /// </summary>
     public async Task<PhotoUploadReport> ProcessAsync(CancellationToken cancellationToken = default)
     {
+        var before = Volatile.Read(ref generation);
         await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
-        using var current = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        running = current;
+        using var current = Register(before, cancellationToken);
         cancellationToken = current.Token;
         try
         {
@@ -241,6 +258,57 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     }
 
     /// <summary>
+    /// Gives up on a photo the server refused, its files or its row. Any file of it already in Storage is deleted
+    /// first (the thumbnail goes up before the photo, so one may be there), which needs a connection: if Storage
+    /// can't be reached this throws <see cref="PhotoUploadException"/> and changes nothing. Then its queue entry,
+    /// any quarantined write of its row and its local files go, and its row is deleted through the normal upload
+    /// queue (which treats a row the server never got as already gone). Deleting a photo that uploaded fine is the
+    /// delete flow's job.
+    /// </summary>
+    public async Task DiscardFailedAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        var before = Volatile.Read(ref generation);
+        await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Registered like a pass, so a sign-out or account switch cancels the Storage requests instead of waiting.
+        using var current = Register(before, cancellationToken);
+        cancellationToken = current.Token;
+        try
+        {
+            // The row may be gone already: PowerSync rolls a rejected insert back once the upload queue is empty. So the
+            // profile comes from the row, the file queue entry or the quarantined write, whichever is still there.
+            var photo = await db.GetOptional<DiscardRow>(
+                $"SELECT (SELECT count(*) FROM {Table} u WHERE u.id = ? AND u.failed_at IS NOT NULL) AS FilesFailed, " +
+                $"(SELECT count(*) FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = ? AND f.op <> 'DELETE') AS RowRejected, " +
+                "coalesce((SELECT p.profile_id FROM progress_photos p WHERE p.id = ?), " +
+                $"(SELECT u.profile_id FROM {Table} u WHERE u.id = ?), " +
+                $"(SELECT json_extract(f.data, '$.profile_id') FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = ? LIMIT 1)) AS ProfileId",
+                [id, id, id, id, id]).ConfigureAwait(false);
+            if (photo is null || (photo.FilesFailed == 0 && photo.RowRejected == 0) || string.IsNullOrEmpty(photo.ProfileId))
+            {
+                throw new InvalidOperationException("That photo isn't waiting as a refused upload.");
+            }
+
+            await storage.DeleteAsync($"{photo.ProfileId}/{ThumbName(id)}", cancellationToken).ConfigureAwait(false);
+            await storage.DeleteAsync($"{photo.ProfileId}/{PhotoName(id)}", cancellationToken).ConfigureAwait(false);
+            await db.WriteTransaction(async tx =>
+            {
+                await tx.Execute($"DELETE FROM {Table} WHERE id = ?", [id]).ConfigureAwait(false);
+                await tx.Execute(
+                    $"DELETE FROM {AppSchema.FailedUploads} WHERE table_name = 'progress_photos' AND row_id = ? AND op <> 'DELETE'", [id]).ConfigureAwait(false);
+                // Only if it's still here; deleting it queues a DELETE, which the server treats as done if it never had it.
+                await tx.Execute("DELETE FROM progress_photos WHERE id = ?", [id]).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+            DeleteFiles(id);
+        }
+        finally
+        {
+            running = null;
+            pass.Release();
+        }
+    }
+
+    /// <summary>
     /// Deletes files that no queue entry refers to: left by a crash between an upload and its clean-up, or by a
     /// database cleared while the app was closed.
     /// </summary>
@@ -296,6 +364,23 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         {
             pass.Release();
         }
+    }
+
+    /// <summary>
+    /// Makes the work that now holds the lock cancellable by <see cref="ClearAsync"/>. A clear that began after
+    /// <paramref name="before"/> was read may have looked for running work before this registered, and is now waiting
+    /// for the lock; the work is then cancelled at once rather than left to run uncancelled.
+    /// </summary>
+    private CancellationTokenSource Register(int before, CancellationToken cancellationToken)
+    {
+        var current = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        running = current;
+        if (Volatile.Read(ref generation) != before)
+        {
+            current.Cancel();
+        }
+
+        return current;
     }
 
     /// <summary>Asks the background loop to try now (a photo was added, or the connection came back).</summary>
@@ -428,6 +513,15 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         public string Id { get; set; } = "";
 
         public string ProfileId { get; set; } = "";
+    }
+
+    internal sealed class DiscardRow
+    {
+        public string? ProfileId { get; set; }
+
+        public long FilesFailed { get; set; }
+
+        public long RowRejected { get; set; }
     }
 
     internal sealed class CountRow
