@@ -12,15 +12,20 @@ public sealed class FakePhotoCapture : IPhotoCapture
 
     public List<string> Calls { get; } = [];
 
+    /// <summary>Runs while the camera or library is "open", before it returns.</summary>
+    public Action? OnOpen { get; set; }
+
     public Task<CapturedPhoto?> TakeAsync()
     {
         Calls.Add("take");
+        OnOpen?.Invoke();
         return Task.FromResult(Next);
     }
 
     public Task<CapturedPhoto?> PickAsync()
     {
         Calls.Add("pick");
+        OnOpen?.Invoke();
         return Task.FromResult(Next);
     }
 }

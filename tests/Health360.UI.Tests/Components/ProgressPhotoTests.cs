@@ -71,6 +71,33 @@ public sealed class ProgressPhotoTests : AppTestContext
     }
 
     [Fact]
+    public async Task ACameraOpenAcrossMidnightDatesThePhotoTheNewDay()
+    {
+        var cut = await BodyAsync();
+        App.Camera.OnOpen = () => App.Clock.Now = App.Clock.Now.AddDays(1);
+
+        await ClickAsync(cut, "#photos-take");
+
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        var row = Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+        Assert.Equal(("2026-10-31", "2026-10-31T12:00:00.000Z"), (row.LocalDate, row.TakenAt));
+    }
+
+    [Fact]
+    public async Task TodayPickedExplicitlyStaysFixedPastMidnight()
+    {
+        var cut = await BodyAsync();
+        await ChangeAsync(cut, "#photos-date", "2026-10-30");
+        App.Clock.Now = App.Clock.Now.AddDays(1);
+
+        await ClickAsync(cut, "#photos-pick");
+
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        var row = Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+        Assert.Equal("2026-10-30", row.LocalDate);
+    }
+
+    [Fact]
     public async Task CancellingTheCameraSavesNothing()
     {
         var cut = await BodyAsync();

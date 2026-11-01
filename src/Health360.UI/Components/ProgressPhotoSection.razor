@@ -92,8 +92,8 @@
     private IReadOnlyList<ProgressPhotoRow>? photos;
     private string? pose = "front";
 
-    // The day the user picked, for a photo chosen from the library; null means today, whatever today is when the photo is
-    // saved (the tab may stay open past midnight).
+    // The day the user picked (today included), which stays fixed; null until they pick one, meaning today as of the moment
+    // the photo is saved (the tab, or the camera, may stay open past midnight).
     private DateOnly? chosenDate;
 
     private DateOnly Date => chosenDate ?? Today;
@@ -105,7 +105,7 @@
 
     private void ChooseDate(ChangeEventArgs e) =>
         chosenDate = DateOnly.TryParseExact(e.Value as string, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.None, out var day) && day != Today ? day : null;
+            System.Globalization.DateTimeStyles.None, out var day) ? day : null;
 
     /// <summary>Now for today; otherwise noon local time on that day (the form asks for a day, as for measurements).</summary>
     private DateTimeOffset TakenAt(DateOnly day)
@@ -202,8 +202,8 @@
             return;
         }
 
-        var date = Date;
-        if (date > Today)
+        // A picked date is fixed; the default is resolved after the camera or library returns (below).
+        if (chosenDate > Today)
         {
             error = "The date can't be in the future.";
             return;
@@ -220,6 +220,8 @@
                 return;
             }
 
+            // Resolved now, not before the picker opened: one left open across midnight takes the new day.
+            var date = chosenDate ?? Today;
             await Uploader.AddAsync(profileId, pose, TakenAt(date), date, captured.Photo, captured.Thumbnail, generation);
             saved = $"{PoseName(pose)} photo saved. It uploads when you're online.";
             chosenDate = null;
