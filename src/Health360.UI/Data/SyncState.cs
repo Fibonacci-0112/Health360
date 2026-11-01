@@ -17,18 +17,22 @@ public sealed partial class SyncState : IDisposable
     private readonly IRemoteWriter writer;
     private readonly TimeProvider clock;
     private readonly ILogger<SyncState> logger;
+    private readonly PhotoUploader? photos;
     private readonly CancellationTokenSource stop = new();
     private readonly CancellationToken stopping;
     private int disposed;
 
-    public SyncState(PowerSyncDatabase db, IRemoteWriter writer, TimeProvider clock, ILogger<SyncState> logger)
+    public SyncState(PowerSyncDatabase db, IRemoteWriter writer, TimeProvider clock, ILogger<SyncState> logger, PhotoUploader? photos = null)
     {
         this.db = db;
         this.writer = writer;
         this.clock = clock;
         this.logger = logger;
+        this.photos = photos;
         stopping = stop.Token;
         Update();
+        // Photo files upload in the background while the app runs, and again whenever the connection returns.
+        photos?.Start();
         _ = Task.Run(WatchStatusAsync, CancellationToken.None);
         _ = Task.Run(PollPendingAsync, CancellationToken.None);
         _ = Task.Run(WatchFailedAsync, CancellationToken.None);
@@ -42,6 +46,7 @@ public sealed partial class SyncState : IDisposable
     /// <summary>True once this device has completed a sync (so a missing profile row is really missing).</summary>
     public bool HasSynced { get; private set; }
 
+    /// <summary>Unsent writes, counting each progress photo whose files haven't uploaded yet as one.</summary>
     public long Pending { get; private set; }
 
     public IReadOnlyList<FailedUpload> Failed { get; private set; } = [];
@@ -71,6 +76,11 @@ public sealed partial class SyncState : IDisposable
         if (connected == Connected && hasSynced == HasSynced)
         {
             return;
+        }
+
+        if (connected && !Connected)
+        {
+            photos?.Wake();
         }
 
         Connected = connected;
@@ -103,7 +113,8 @@ public sealed partial class SyncState : IDisposable
                 Update();
                 try
                 {
-                    var pending = await Uploads.PendingUploadCountAsync(db).ConfigureAwait(false);
+                    var pending = await Uploads.PendingUploadCountAsync(db).ConfigureAwait(false)
+                        + (photos is null ? 0 : await photos.PendingCountAsync().ConfigureAwait(false));
                     if (pending != Pending)
                     {
                         Pending = pending;

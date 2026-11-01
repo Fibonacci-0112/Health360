@@ -9,6 +9,9 @@ public static class MauiLocalDb
     /// <summary>The SQLite file, in the app's private data directory on Android and Windows.</summary>
     public const string FileName = "health360.db";
 
+    /// <summary>Progress photos waiting to upload, already stripped of metadata, beside the database.</summary>
+    public const string PhotoDirectory = "photo-uploads";
+
     /// <summary>
     /// Registers the offline database with the platform's SQLite and the PowerSync core extension.
     /// <see cref="SyncEndpoints"/> come from the build (<see cref="AppEndpoints"/>) and
@@ -17,9 +20,11 @@ public static class MauiLocalDb
     public static IServiceCollection AddMauiLocalDatabase(this IServiceCollection services)
     {
         services.AddSingleton<IDatabaseOwnerStore, PreferencesOwnerStore>();
-        return services.AddLocalDatabase(_ => new MAUISQLiteDBOpenFactory(new MDSQLiteOpenFactoryOptions
-        {
-            DbFilename = Path.Combine(FileSystem.AppDataDirectory, FileName),
-        }));
+        return services.AddLocalDatabase(
+            _ => new MAUISQLiteDBOpenFactory(new MDSQLiteOpenFactoryOptions
+            {
+                DbFilename = Path.Combine(FileSystem.AppDataDirectory, FileName),
+            }),
+            _ => Path.Combine(FileSystem.AppDataDirectory, PhotoDirectory));
     }
 }

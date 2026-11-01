@@ -161,10 +161,25 @@ public static class AppSchema
             ("failed_at", ColumnType.Text)),
         new TableOptions(localOnly: true));
 
+    /// <summary>
+    /// Local only, never uploaded: progress photos whose files haven't reached Storage yet (<see cref="PhotoUploader"/>).
+    /// The id is the photo's. Cleared with the rest of the database when the owner changes, and the files with it.
+    /// </summary>
+    public static Table PhotoUploadsTable { get; } = new(
+        PhotoUploader.Table,
+        Columns(
+            ("profile_id", ColumnType.Text),
+            ("attempts", ColumnType.Integer),
+            ("error_code", ColumnType.Text),
+            ("failed_at", ColumnType.Text),
+            ("created_at", ColumnType.Text)),
+        new TableOptions(localOnly: true));
+
     public static IReadOnlyList<Table> Tables { get; } =
         [
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
             MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, Notes, FailedUploadsTable,
+            PhotoUploadsTable,
         ];
 
     public static Schema Schema { get; } = new([.. Tables]);
