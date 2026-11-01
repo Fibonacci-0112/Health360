@@ -15,7 +15,8 @@
    When there's an earlier photo in the same pose, a new one is shown with that photo over it at 30% (the ghost
    overlay) before it's saved, so the user can keep it or retake it with the same framing. The system camera can't
    draw an overlay, so this is a review after capture rather than a live one. Ticking Compare on two photos shows
-   them side by side, older on the left. *@
+   them side by side, older on the left. Delete (with a confirmation) removes a photo's row through the upload queue
+   and its files from Storage once that delete has reached the server. *@
 <section class="card" aria-labelledby="photos-title">
     <h2 id="photos-title">Progress photos</h2>
     <p class="muted small">Private to you unless you share photos with a household member. Location and camera details are removed on this device before upload.</p>
@@ -190,6 +191,22 @@
                                @onchange="() => ToggleCompare(photo)" />
                         Compare
                     </label>
+                    @if (photo.State != PhotoUploadState.Failed)
+                    {
+                        <div class="inline">
+                            @if (confirmingDelete == photo.Id)
+                            {
+                                <button type="button" class="danger" disabled="@busy" aria-label="@($"Confirm deleting the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                                        @onclick="() => DeleteAsync(photo)">Delete for good</button>
+                                <button type="button" class="secondary" disabled="@busy" @onclick="() => confirmingDelete = null">Keep</button>
+                            }
+                            else
+                            {
+                                <button type="button" class="secondary" disabled="@busy" aria-label="@($"Delete the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                                        @onclick="() => confirmingDelete = photo.Id">Delete</button>
+                            }
+                        </div>
+                    }
                     @if (photo.State == PhotoUploadState.Failed)
                     {
                         <div class="inline">
@@ -387,8 +404,10 @@
     {
         foreach (var id in thumbs.Keys.Except(rows.Select(r => r.Id)).ToList())
         {
+            // Deleted here or on another device: its cached copy goes too.
             thumbs.Remove(id);
             thumbUris.Remove(id);
+            Library.Forget(id);
         }
 
         // A compared photo was deleted or discarded meanwhile.
@@ -822,6 +841,41 @@
         await Uploader.AddAsync(profileId, pose, TakenAt(date), date, captured.Photo, captured.Thumbnail, generation);
         saved = $"{PoseName(pose)} photo saved. It uploads when you're online.";
         chosenDate = null;
+    }
+
+    // The photo whose Delete was pressed and now asks for confirmation.
+    private string? confirmingDelete;
+
+    private async Task DeleteAsync(ProgressPhotoRow photo)
+    {
+        var profileId = watchedProfile;
+        if (busy || profileId is null)
+        {
+            return;
+        }
+
+        busy = true;
+        error = null;
+        saved = null;
+        try
+        {
+            await Uploader.DeleteAsync(profileId, photo.Id);
+            Library.Forget(photo.Id);
+            saved = $"{PoseName(photo.Pose)} photo from {photo.LocalDate} deleted. Its files are removed from the server when you're online.";
+        }
+        catch (InvalidOperationException)
+        {
+            error = "That photo is already gone.";
+        }
+        catch (Exception)
+        {
+            error = "Couldn't delete the photo. Try again.";
+        }
+        finally
+        {
+            confirmingDelete = null;
+            busy = false;
+        }
     }
 
     private async Task RetryAsync(string id)

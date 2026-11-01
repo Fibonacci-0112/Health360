@@ -17,7 +17,7 @@ public sealed class FailedPhotoUpload
 }
 
 /// <summary>What one pass of <see cref="PhotoUploader.ProcessAsync"/> did.</summary>
-public sealed record PhotoUploadReport(int Uploaded, int Failed, bool Stopped);
+public sealed record PhotoUploadReport(int Uploaded, int Failed, bool Stopped, int Deleted = 0);
 
 /// <summary>
 /// The offline upload queue for progress photos (PLAN.md §3, step 1.1). Adding a photo strips its metadata on the
@@ -35,6 +35,9 @@ public sealed record PhotoUploadReport(int Uploaded, int Failed, bool Stopped);
 public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, IPhotoStorage storage, TimeProvider clock) : IDisposable
 {
     public const string Table = "photo_uploads";
+
+    /// <summary>Local only: deleted photos whose files are still to be removed from Storage.</summary>
+    public const string DeletionsTable = "photo_deletions";
 
     /// <summary>How often the background loop tries again when nothing wakes it.</summary>
     public static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
@@ -206,8 +209,9 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
                 uploaded++;
             }
 
-            Notify(uploaded, failed);
-            return new PhotoUploadReport(uploaded, failed, Stopped: false);
+            var (deleted, stopped) = await DeleteFilesAsync(cancellationToken).ConfigureAwait(false);
+            Notify(uploaded + deleted, failed);
+            return new PhotoUploadReport(uploaded, failed, stopped, deleted);
         }
         finally
         {
@@ -216,11 +220,99 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         }
     }
 
-    /// <summary>Photos whose files haven't reached the server yet, failed ones included.</summary>
+    /// <summary>
+    /// Photos whose files haven't reached the server yet, failed ones included, and deleted photos whose files are
+    /// still to be removed from it.
+    /// </summary>
     public async Task<long> PendingCountAsync()
     {
-        var row = await db.Get<CountRow>($"SELECT count(*) AS Count FROM {Table}", []).ConfigureAwait(false);
+        var row = await db.Get<CountRow>(
+            $"SELECT (SELECT count(*) FROM {Table}) + (SELECT count(*) FROM {DeletionsTable}) AS Count", []).ConfigureAwait(false);
         return row.Count;
+    }
+
+    /// <summary>
+    /// Deletes a photo of the owner's: its row now, through the normal upload queue, and its files from Storage once
+    /// that delete has reached the server (PLAN.md §3, step 1.1). Any upload of its files still waiting is cancelled
+    /// and its local files go. The Storage deletes are queued in the local-only <see cref="DeletionsTable"/>, so they
+    /// survive restarts, belong to the owner like the rest of the database, and need no connection now. A refused
+    /// photo is given up with <see cref="DiscardFailedAsync"/> instead. Throws <see cref="InvalidOperationException"/>
+    /// when the photo isn't in this device's database (already deleted, or another profile's).
+    /// </summary>
+    public async Task DeleteAsync(string profileId, string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(profileId);
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Only rows the owner's sync stream brought down (their own profiles') are here; the server's policies
+            // decide again when the delete and the file deletes arrive.
+            if (await db.GetOptional<CountRow>(
+                    "SELECT 1 AS Count FROM progress_photos WHERE id = ? AND profile_id = ?", [id, profileId]).ConfigureAwait(false) is null)
+            {
+                throw new InvalidOperationException("That photo isn't in this device's database.");
+            }
+
+            var now = Timestamps.UtcNow(clock);
+            await db.WriteTransaction(async tx =>
+            {
+                await tx.Execute("DELETE FROM progress_photos WHERE id = ?", [id]).ConfigureAwait(false);
+                await tx.Execute($"DELETE FROM {Table} WHERE id = ?", [id]).ConfigureAwait(false);
+                await tx.Execute(
+                    $"INSERT OR IGNORE INTO {DeletionsTable} (id, profile_id, attempts, created_at) VALUES (?, ?, 0, ?)",
+                    [id, profileId, now]).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+            DeleteFiles(id);
+        }
+        finally
+        {
+            pass.Release();
+        }
+
+        Wake();
+    }
+
+    /// <summary>
+    /// Removes the files of deleted photos from Storage, oldest first, once each photo's row delete has left the
+    /// upload queue. One whose delete the server refused (quarantined in <c>failed_uploads</c>) keeps its files until
+    /// that is retried from Settings, since the row is still there. An already-deleted file counts as deleted. A
+    /// missing connection stops; a refusal is recorded and the entry kept for the next pass, without blocking others.
+    /// </summary>
+    private async Task<(int Deleted, bool Stopped)> DeleteFilesAsync(CancellationToken cancellationToken)
+    {
+        var deleted = 0;
+        var waiting = await db.GetAll<PendingRow>(
+            $"SELECT d.id AS Id, d.profile_id AS ProfileId FROM {DeletionsTable} d " +
+            "WHERE NOT EXISTS (SELECT 1 FROM ps_crud c WHERE json_extract(c.data, '$.type') = 'progress_photos' AND json_extract(c.data, '$.id') = d.id) " +
+            $"AND NOT EXISTS (SELECT 1 FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = d.id) " +
+            "ORDER BY d.created_at, d.id", []).ConfigureAwait(false);
+        foreach (var row in waiting)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await storage.DeleteAsync($"{row.ProfileId}/{ThumbName(row.Id)}", cancellationToken).ConfigureAwait(false);
+                await storage.DeleteAsync($"{row.ProfileId}/{PhotoName(row.Id)}", cancellationToken).ConfigureAwait(false);
+            }
+            catch (PhotoUploadException error) when (error.Permanent)
+            {
+                await db.Execute(
+                    $"UPDATE {DeletionsTable} SET attempts = attempts + 1, error_code = ? WHERE id = ?", [error.Code, row.Id]).ConfigureAwait(false);
+                continue;
+            }
+            catch (PhotoUploadException error)
+            {
+                await db.Execute(
+                    $"UPDATE {DeletionsTable} SET attempts = attempts + 1, error_code = ? WHERE id = ?", [error.Code, row.Id]).ConfigureAwait(false);
+                return (deleted, true);
+            }
+
+            await db.Execute($"DELETE FROM {DeletionsTable} WHERE id = ?", [row.Id]).ConfigureAwait(false);
+            deleted++;
+        }
+
+        return (deleted, false);
     }
 
     /// <summary>Photos the server refused for good, waiting for the user to retry or cancel them.</summary>

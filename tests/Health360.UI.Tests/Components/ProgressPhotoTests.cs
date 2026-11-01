@@ -406,4 +406,24 @@ public sealed class ProgressPhotoTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll(".photo-compare img").Count), Wait);
         Assert.Empty(cut.FindAll("#photo-compare-retry"));
     }
+
+    [Fact]
+    public async Task DeletingAPhotoAsksFirstThenRemovesItAndQueuesItsFiles()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+
+        await ClickAsync(() => cut.Find("button[aria-label='Delete the Front photo from 2026-10-30']"));
+        await ClickAsync(() => cut.FindAll("[aria-label='Your progress photos'] button").Single(b => b.TextContent == "Keep"));
+        Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+
+        await ClickAsync(() => cut.Find("button[aria-label='Delete the Front photo from 2026-10-30']"));
+        await ClickAsync(() => cut.Find("button[aria-label='Confirm deleting the Front photo from 2026-10-30']"));
+
+        cut.WaitForAssertion(() => Assert.Contains("No photos yet", cut.Markup, StringComparison.Ordinal), Wait);
+        Assert.Contains("Front photo from 2026-10-30 deleted.", cut.Markup, StringComparison.Ordinal);
+        Assert.Empty(App.PhotoFiles.Files);
+        Assert.Equal(1, await App.Photos.PendingCountAsync());
+    }
 }

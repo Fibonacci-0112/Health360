@@ -505,6 +505,102 @@ public sealed class PhotoUploaderTests
         }
     }
 
+    private static async Task<long> DeletionsAsync(TestDatabase t) =>
+        (await t.Db.Get<CountRow>($"SELECT count(*) AS N FROM {PhotoUploader.DeletionsTable}")).N;
+
+    [Fact]
+    public async Task DeletingAPhotoRemovesItsRowAndLocalFilesThenItsStoredFilesOnceTheRowDeleteIsUp()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var files = new MemoryPhotoFiles();
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, files, storage, Clock);
+        var id = await AddAsync(uploader);
+        await uploader.ProcessAsync(Ct);
+        await t.Db.Execute("DELETE FROM ps_crud");
+
+        await uploader.DeleteAsync(Profile, id, Ct);
+
+        Assert.Equal(0, (await t.Db.Get<CountRow>("SELECT count(*) AS N FROM progress_photos")).N);
+        Assert.Empty(files.List());
+        Assert.Equal(1, await DeletionsAsync(t));
+        Assert.Equal(1, await uploader.PendingCountAsync());
+        // The row delete is still in the upload queue, so the files stay until it reaches the server.
+        await uploader.ProcessAsync(Ct);
+        Assert.Empty(storage.Deleted);
+
+        await t.Db.Execute("DELETE FROM ps_crud");
+        var report = await uploader.ProcessAsync(Ct);
+
+        Assert.Equal(1, report.Deleted);
+        Assert.Equal([$"{Profile}/{id}_thumb.jpg", $"{Profile}/{id}.jpg"], storage.Deleted);
+        Assert.Equal(0, await DeletionsAsync(t));
+        Assert.Equal(0, await uploader.PendingCountAsync());
+    }
+
+    [Fact]
+    public async Task DeletingAPhotoStillWaitingToUploadCancelsItsUpload()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var files = new MemoryPhotoFiles();
+        var storage = new FakePhotoStorage { Offline = true };
+        using var uploader = new PhotoUploader(t.Db, files, storage, Clock);
+        var id = await AddAsync(uploader);
+
+        await uploader.DeleteAsync(Profile, id, Ct);
+
+        Assert.Equal(0, (await t.Db.Get<CountRow>($"SELECT count(*) AS N FROM {PhotoUploader.Table}")).N);
+        Assert.Empty(files.List());
+        // Offline the file deletes wait; the insert and the delete cancel out in the upload queue or go up in order.
+        await t.Db.Execute("DELETE FROM ps_crud");
+        var offline = await uploader.ProcessAsync(Ct);
+        Assert.True(offline.Stopped);
+        Assert.Equal(1, await DeletionsAsync(t));
+
+        storage.Offline = false;
+        await uploader.ProcessAsync(Ct);
+        Assert.Empty(storage.Uploads);
+        Assert.Equal(2, storage.Deleted.Count);
+        Assert.Equal(0, await DeletionsAsync(t));
+    }
+
+    [Fact]
+    public async Task ARefusedRowDeleteKeepsTheStoredFiles()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var id = await AddAsync(uploader);
+        await uploader.ProcessAsync(Ct);
+        await uploader.DeleteAsync(Profile, id, Ct);
+        await t.Db.Execute("DELETE FROM ps_crud");
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) VALUES (uuid(), 'progress_photos', ?, 'DELETE', '{}', '42501')", [id]);
+
+        await uploader.ProcessAsync(Ct);
+
+        Assert.Empty(storage.Deleted);
+        Assert.Equal(1, await DeletionsAsync(t));
+    }
+
+    [Fact]
+    public async Task DeletingAPhotoThatIsNotHereOrNotThisProfilesIsRefused()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), new FakePhotoStorage(), Clock);
+        var id = await AddAsync(uploader);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => uploader.DeleteAsync(Profile, "0190a0b0-0000-7000-8000-0000000000ff", Ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => uploader.DeleteAsync("0190a0b0-0000-7000-8000-000000000002", id, Ct));
+
+        Assert.Equal(1, (await t.Db.Get<CountRow>("SELECT count(*) AS N FROM progress_photos")).N);
+        Assert.Equal(0, await DeletionsAsync(t));
+    }
+
     [Fact]
     public async Task StorageUploadsAsTheOwnerWithUpsert()
     {

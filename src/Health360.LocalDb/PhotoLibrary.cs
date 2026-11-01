@@ -81,6 +81,27 @@ public sealed class PhotoLibrary
         }
     }
 
+    /// <summary>
+    /// Drops a photo's cached thumbnail, for a photo deleted here or whose row disappeared when another device deleted
+    /// it.
+    /// </summary>
+    public void Forget(string id)
+    {
+        var name = PhotoUploader.ThumbName(id);
+        lock (gate)
+        {
+            if (thumbnails.Remove(name))
+            {
+                var kept = order.Where(n => n != name).ToList();
+                order.Clear();
+                foreach (var n in kept)
+                {
+                    order.Enqueue(n);
+                }
+            }
+        }
+    }
+
     /// <summary>The photo's thumbnail.</summary>
     public Task<PhotoImage> ThumbnailAsync(string profileId, string id, CancellationToken cancellationToken = default) =>
         LoadAsync(profileId, id, thumbnail: true, cancellationToken);
