@@ -380,4 +380,30 @@ public sealed class ProgressPhotoTests : AppTestContext
         }, Wait);
         Assert.True(cut.Find("input[aria-label='Compare the Left side photo from 2026-10-30']").HasAttribute("disabled"));
     }
+
+    [Fact]
+    public async Task AComparedPhotoThatCouldNotLoadIsLoadedAgainWithoutReloadingTheOther()
+    {
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-01");
+        App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+
+        // Offline: the photo on this device shows, the uploaded one can't be fetched.
+        await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
+        await ChangeAsync(cut, "input[aria-label='Compare the Back photo from 2026-10-01']", "on");
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Single(cut.FindAll(".photo-compare img"));
+            cut.Find("#photo-compare-retry");
+        }, Wait);
+
+        App.PhotoStorage.Reachable = true;
+        await ClickAsync(cut, "#photo-compare-retry");
+
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll(".photo-compare img").Count), Wait);
+        Assert.Empty(cut.FindAll("#photo-compare-retry"));
+    }
 }

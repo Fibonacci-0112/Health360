@@ -154,7 +154,7 @@
                 <div class="inline">
                     @if (compareImages.Values.Any(i => i?.Status == PhotoImageStatus.Unreachable))
                     {
-                        <button type="button" class="secondary" id="photo-compare-retry" @onclick="LoadComparison">Try again</button>
+                        <button type="button" class="secondary" id="photo-compare-retry" @onclick="RetryMissingComparison">Try again</button>
                     }
                     <button type="button" class="secondary" id="photo-compare-close" @onclick="ClearComparison">Close comparison</button>
                 </div>
@@ -367,6 +367,8 @@
                         if (photos is { } rows && !token.IsCancellationRequested)
                         {
                             LoadThumbnails(profileId, rows, token);
+                            RetryMissingComparison();
+                            StateHasChanged();
                         }
                     });
                 }
@@ -482,43 +484,66 @@
         }
 
         compareLoad = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
-        var token = compareLoad.Token;
         foreach (var photo in compared)
         {
-            var id = photo.Id;
-            compareImages[id] = null;
-            _ = Task.Run(async () =>
-            {
-                PhotoImage image;
-                try
-                {
-                    image = await Library.PhotoAsync(profileId, id, token);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-                catch (Exception)
-                {
-                    image = PhotoImage.Unreachable;
-                }
-
-                var uri = image.Jpeg is { } jpeg ? DataUri(jpeg) : null;
-                await InvokeAsync(() =>
-                {
-                    if (!token.IsCancellationRequested && compareImages.ContainsKey(id))
-                    {
-                        compareImages[id] = image;
-                        if (uri is not null)
-                        {
-                            compareUris[id] = uri;
-                        }
-
-                        StateHasChanged();
-                    }
-                });
-            }, CancellationToken.None);
+            LoadComparedImage(profileId, photo.Id, compareLoad.Token);
         }
+    }
+
+    /// <summary>
+    /// Loads again the compared photos that weren't there (not uploaded yet, or offline), leaving a shown one as it is.
+    /// The tab's periodic retry calls this, since files arriving from another device change no synced row.
+    /// </summary>
+    private void RetryMissingComparison()
+    {
+        if (compareLoad is not { } load || watchedProfile is not { } profileId)
+        {
+            return;
+        }
+
+        foreach (var (id, image) in compareImages.ToList())
+        {
+            if (image?.Status is PhotoImageStatus.NotUploaded or PhotoImageStatus.Unreachable)
+            {
+                LoadComparedImage(profileId, id, load.Token);
+            }
+        }
+    }
+
+    private void LoadComparedImage(string profileId, string id, CancellationToken token)
+    {
+        compareImages[id] = null;
+        _ = Task.Run(async () =>
+        {
+            PhotoImage image;
+            try
+            {
+                image = await Library.PhotoAsync(profileId, id, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception)
+            {
+                image = PhotoImage.Unreachable;
+            }
+
+            var uri = image.Jpeg is { } jpeg ? DataUri(jpeg) : null;
+            await InvokeAsync(() =>
+            {
+                if (!token.IsCancellationRequested && compareImages.ContainsKey(id))
+                {
+                    compareImages[id] = image;
+                    if (uri is not null)
+                    {
+                        compareUris[id] = uri;
+                    }
+
+                    StateHasChanged();
+                }
+            });
+        }, CancellationToken.None);
     }
 
     private void ClearComparison()
