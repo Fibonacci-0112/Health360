@@ -162,6 +162,10 @@
 
     private async Task AddAsync(bool take)
     {
+        // Read before the profile id and before the camera or library opens: any sign-out or account switch from here
+        // on changes it, so the add is refused rather than writing this profile's photo into the next account. (Read
+        // after the profile id, a clear in between would pair the old id with the new generation.)
+        var generation = Uploader.ClearGeneration;
         var profileId = Profiles.Profile?.Id;
         if (busy || pose is null || profileId is null)
         {
@@ -171,9 +175,6 @@
         busy = true;
         saved = null;
         error = null;
-        // Read before the camera or library opens: a sign-out or account switch while it's open must not let this
-        // photo into the next account.
-        var generation = Uploader.ClearGeneration;
         try
         {
             var captured = take ? await Capture.TakeAsync() : await Capture.PickAsync();
