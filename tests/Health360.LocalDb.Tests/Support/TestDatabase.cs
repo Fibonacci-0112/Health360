@@ -31,6 +31,14 @@ public sealed class TestDatabase : IAsyncDisposable
         return new TestDatabase(directory, db);
     }
 
+    /// <summary>A profile row as sync brings it down: in the table, with no upload queued for it.</summary>
+    public Task SeedProfileAsync(string profileId, string userId = "user-a") =>
+        Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("INSERT INTO profiles (id, user_id) VALUES (?, ?)", [profileId, userId]);
+            await tx.Execute("DELETE FROM ps_crud WHERE id = (SELECT max(id) FROM ps_crud)");
+        });
+
     public async ValueTask DisposeAsync()
     {
         await Db.Close();

@@ -73,6 +73,13 @@ public static partial class Uploads
                 }
                 catch (RemoteWriteException error) when (IsPermanentError(error.Code))
                 {
+                    // A rejected insert or update of a row deleted on this device since (a discarded photo) is
+                    // dropped: replaying it from the quarantine would bring back something the user deleted.
+                    if (op.Op != UpdateType.DELETE && !await RowExistsAsync(db, op).ConfigureAwait(false))
+                    {
+                        continue;
+                    }
+
                     await QuarantineAsync(db, op, local, error, clock).ConfigureAwait(false);
                     onQuarantine?.Invoke(new QuarantinedOp(op.Table, op.Op, error.Code));
                 }
@@ -229,6 +236,11 @@ public static partial class Uploads
     /// a network error) the same rejected op replaces its entry instead of adding a duplicate.
     /// </summary>
     private static string QuarantineId(CrudEntry op) => $"crud-{op.ClientId.ToString(CultureInfo.InvariantCulture)}";
+
+    // Table names come from the PowerSync schema, never from row data.
+    private static async Task<bool> RowExistsAsync(IPowerSyncDatabase db, CrudEntry op) =>
+        AppSchema.UploadableTables.Contains(op.Table)
+        && await db.GetOptional<CountRow>($"SELECT 1 AS N FROM {op.Table} WHERE id = ?", [op.Id]).ConfigureAwait(false) is not null;
 
     private static async Task QuarantineAsync(IPowerSyncDatabase db, CrudEntry op, JsonObject local, RemoteWriteException error, TimeProvider clock) =>
         await db.Execute(

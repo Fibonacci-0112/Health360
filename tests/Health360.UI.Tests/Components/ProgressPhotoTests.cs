@@ -40,6 +40,24 @@ public sealed class ProgressPhotoTests : AppTestContext
     }
 
     [Fact]
+    public async Task AChosenPhotoKeepsTheDayItWasTakenAndTheFutureIsRefused()
+    {
+        var cut = await BodyAsync();
+
+        await ChangeAsync(cut, "#photos-date", "2026-10-31");
+        await ClickAsync(cut, "#photos-pick");
+        cut.WaitForAssertion(() => Assert.Contains("can't be in the future", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(App.Camera.Calls);
+
+        await ChangeAsync(cut, "#photos-date", "2026-06-01");
+        await ClickAsync(cut, "#photos-pick");
+
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        var row = Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+        Assert.Equal(("2026-06-01", "2026-06-01T12:00:00.000Z"), (row.LocalDate, row.TakenAt));
+    }
+
+    [Fact]
     public async Task CancellingTheCameraSavesNothing()
     {
         var cut = await BodyAsync();

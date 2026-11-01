@@ -117,6 +117,15 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
                 throw new InvalidOperationException("The account changed before the photo was saved.");
             }
 
+            // The profile must still be in this device's database. A clear empties it, so a profile id the screen read
+            // before a sign-out or account switch (even one that finished before the camera opened) is refused here,
+            // under the same lock the clear takes. The screen only offers photos once the profile has synced, so this
+            // costs nothing offline.
+            if (await db.GetOptional<CountRow>("SELECT 1 AS Count FROM profiles WHERE id = ?", [profileId]).ConfigureAwait(false) is null)
+            {
+                throw new InvalidOperationException("The profile isn't in this device's database.");
+            }
+
             await files.WriteAsync(PhotoName(id), strippedPhoto, cancellationToken).ConfigureAwait(false);
             await files.WriteAsync(ThumbName(id), strippedThumb, cancellationToken).ConfigureAwait(false);
             await db.WriteTransaction(async tx =>
@@ -260,6 +269,10 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
         await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Registered like a pass, so a sign-out or account switch cancels the Storage requests instead of waiting.
+        using var current = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        running = current;
+        cancellationToken = current.Token;
         try
         {
             var photo = await db.GetOptional<DiscardRow>(
@@ -285,6 +298,7 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         }
         finally
         {
+            running = null;
             pass.Release();
         }
     }

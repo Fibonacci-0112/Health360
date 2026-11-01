@@ -42,6 +42,40 @@ public sealed class MauiPhotoCapture : IPhotoCapture
             return await ReadAsync(picked?.FirstOrDefault()).ConfigureAwait(false);
         });
 
+    /// <summary>
+    /// Deletes the picker's working copy (a camera capture, or a resized copy of a picked photo) once it has been read,
+    /// so no body photo stays in the app's cache after a sign-out. Only files under the app's own cache or data
+    /// folders are touched, never the user's original in their library.
+    /// </summary>
+    private static void DeleteIfAppOwned(FileResult file)
+    {
+        var path = file.FullPath;
+        if (string.IsNullOrEmpty(path))
+        {
+            return;
+        }
+
+        var full = Path.GetFullPath(path);
+        var owned = new[] { FileSystem.CacheDirectory, FileSystem.AppDataDirectory }
+            .Any(root => !string.IsNullOrEmpty(root)
+                && full.StartsWith(Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+        if (!owned)
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(full);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private static async Task<CapturedPhoto?> ReadAsync(FileResult? file)
     {
         if (file is null)
@@ -50,11 +84,16 @@ public sealed class MauiPhotoCapture : IPhotoCapture
         }
 
         byte[] photo;
-        await using (var stream = await file.OpenReadAsync().ConfigureAwait(false))
-        using (var buffer = new MemoryStream())
+        try
         {
+            await using var stream = await file.OpenReadAsync().ConfigureAwait(false);
+            using var buffer = new MemoryStream();
             await stream.CopyToAsync(buffer).ConfigureAwait(false);
             photo = buffer.ToArray();
+        }
+        finally
+        {
+            DeleteIfAppOwned(file);
         }
 
         using var source = new MemoryStream(photo);

@@ -17,6 +17,11 @@
     <p id="photos-pose" class="label">Pose</p>
     <ChoiceGroup Options="PhotoUploader.Poses.Order().ToList()" Labels="PoseLabels" Value="@pose" ValueChanged="v => pose = v"
                  LabelledBy="photos-pose" Disabled="busy" />
+    <div class="field">
+        <label for="photos-date" class="label">Taken on</label>
+        <input id="photos-date" type="date" max="@Today.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)"
+               @bind="date" disabled="@busy" />
+    </div>
     <div class="inline">
         @if (Capture.CanTakePhoto)
         {
@@ -86,9 +91,27 @@
     private string? watchedProfile;
     private IReadOnlyList<ProgressPhotoRow>? photos;
     private string? pose = "front";
+
+    // The day the photo was taken: today for a new photo; set it to the right day for one chosen from the library.
+    private DateOnly date;
+
+    private DateOnly Today => DateOnly.FromDateTime(Clock.GetLocalNow().DateTime);
     private bool busy;
     private string? saved;
     private string? error;
+
+    /// <summary>Now for today; otherwise noon local time on that day (the form asks for a day, as for measurements).</summary>
+    private DateTimeOffset TakenAt(DateOnly day)
+    {
+        var now = Clock.GetLocalNow();
+        if (DateOnly.FromDateTime(now.DateTime) == day)
+        {
+            return now;
+        }
+
+        var noon = day.ToDateTime(new TimeOnly(12, 0), DateTimeKind.Unspecified);
+        return new DateTimeOffset(noon, Clock.LocalTimeZone.GetUtcOffset(noon));
+    }
 
     private static string PoseName(string code) => PoseLabels.TryGetValue(code, out var name) ? name : code;
 
@@ -103,6 +126,7 @@
 
     protected override void OnInitialized()
     {
+        date = Today;
         Profiles.Changed += ProfileChanged;
         Follow();
     }
@@ -172,6 +196,12 @@
             return;
         }
 
+        if (date > Today)
+        {
+            error = "The date can't be in the future.";
+            return;
+        }
+
         busy = true;
         saved = null;
         error = null;
@@ -183,10 +213,9 @@
                 return;
             }
 
-            var now = Clock.GetLocalNow();
-            await Uploader.AddAsync(
-                profileId, pose, now, DateOnly.FromDateTime(now.DateTime), captured.Photo, captured.Thumbnail, generation);
+            await Uploader.AddAsync(profileId, pose, TakenAt(date), date, captured.Photo, captured.Thumbnail, generation);
             saved = $"{PoseName(pose)} photo saved. It uploads when you're online.";
+            date = Today;
         }
         catch (ArgumentException)
         {
@@ -194,7 +223,7 @@
         }
         catch (InvalidOperationException)
         {
-            error = "You signed out or switched accounts while the photo was saving, so it wasn't kept.";
+            error = "Your account changed while the photo was being taken or saved, so it wasn't kept.";
         }
         catch (Exception)
         {
