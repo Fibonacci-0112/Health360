@@ -54,6 +54,22 @@ public sealed class TestPhotoStorage : IPhotoStorage
 {
     public bool Refuse { get; set; }
 
+    /// <summary>False until the server can be reached for deletes (discarding needs it).</summary>
+    public bool Reachable { get; set; }
+
+    public List<string> Deleted { get; } = [];
+
+    public Task DeleteAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!Reachable)
+        {
+            throw new PhotoUploadException("offline", permanent: false, code: null);
+        }
+
+        Deleted.Add(path);
+        return Task.CompletedTask;
+    }
+
     public Task UploadAsync(string path, byte[] jpeg, CancellationToken cancellationToken) =>
         throw (Refuse
             ? new PhotoUploadException("denied", permanent: true, code: "403")

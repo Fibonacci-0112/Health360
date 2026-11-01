@@ -57,6 +57,12 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     /// <summary>Raised after a pass changed the queue, possibly off the UI thread.</summary>
     public event Action? Changed;
 
+    /// <summary>
+    /// Changes each time the account's data is cleared. A screen reads it before opening the camera or library and
+    /// passes it to <see cref="AddAsync"/>, so a photo picked across a sign-out or account switch is refused.
+    /// </summary>
+    public int ClearGeneration => Volatile.Read(ref generation);
+
     public static string PhotoName(string id) => id + ".jpg";
 
     public static string ThumbName(string id) => id + "_thumb.jpg";
@@ -65,7 +71,8 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     /// Adds a photo taken (or picked) on this device and returns its id. Both images must be JPEGs already resized and
     /// rotated upright by the platform (the EXIF orientation is removed with the rest of the metadata, so a sideways
     /// original would stay sideways). Throws <see cref="ArgumentException"/> for anything else, before storing
-    /// anything, and <see cref="InvalidOperationException"/> if the account's data was cleared while it waited.
+    /// anything, and <see cref="InvalidOperationException"/> if the account's data was cleared while it waited, or
+    /// since <paramref name="clearGeneration"/> (<see cref="ClearGeneration"/> read before the photo was taken).
     /// </summary>
     public async Task<string> AddAsync(
         string profileId,
@@ -74,11 +81,12 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         DateOnly localDate,
         byte[] photo,
         byte[] thumbnail,
+        int? clearGeneration = null,
         CancellationToken cancellationToken = default)
     {
         // Read before anything else (stripping takes a while), so a clear that begins at any point during this add
         // is seen when it takes the lock.
-        var before = Volatile.Read(ref generation);
+        var before = clearGeneration ?? Volatile.Read(ref generation);
         ArgumentException.ThrowIfNullOrEmpty(profileId);
         ArgumentNullException.ThrowIfNull(photo);
         ArgumentNullException.ThrowIfNull(thumbnail);
@@ -241,26 +249,36 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     }
 
     /// <summary>
-    /// Gives up on a photo whose files the server refused: removes its queue entry and files from the device and
-    /// deletes its row (through the normal upload queue, which treats a row the server never got as already gone).
-    /// Only for a failed photo; deleting an uploaded one, files included, is the delete flow's job.
+    /// Gives up on a photo the server refused, its files or its row. Any file of it already in Storage is deleted
+    /// first (the thumbnail goes up before the photo, so one may be there), which needs a connection: if Storage
+    /// can't be reached this throws <see cref="PhotoUploadException"/> and changes nothing. Then its queue entry,
+    /// any quarantined write of its row and its local files go, and its row is deleted through the normal upload
+    /// queue (which treats a row the server never got as already gone). Deleting a photo that uploaded fine is the
+    /// delete flow's job.
     /// </summary>
-    public async Task DiscardFailedAsync(string id)
+    public async Task DiscardFailedAsync(string id, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
-        await pass.WaitAsync().ConfigureAwait(false);
+        await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var failed = await db.GetOptional<CountRow>(
-                $"SELECT count(*) AS Count FROM {Table} WHERE id = ? AND failed_at IS NOT NULL", [id]).ConfigureAwait(false);
-            if (failed is not { Count: > 0 })
+            var photo = await db.GetOptional<DiscardRow>(
+                $"SELECT p.profile_id AS ProfileId, (SELECT count(*) FROM {Table} u WHERE u.id = p.id AND u.failed_at IS NOT NULL) AS FilesFailed, " +
+                $"(SELECT count(*) FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = p.id) AS RowRejected " +
+                "FROM progress_photos p WHERE p.id = ?",
+                [id]).ConfigureAwait(false);
+            if (photo is null || (photo.FilesFailed == 0 && photo.RowRejected == 0))
             {
-                throw new InvalidOperationException("That photo isn't waiting as a failed upload.");
+                throw new InvalidOperationException("That photo isn't waiting as a refused upload.");
             }
 
+            await storage.DeleteAsync($"{photo.ProfileId}/{ThumbName(id)}", cancellationToken).ConfigureAwait(false);
+            await storage.DeleteAsync($"{photo.ProfileId}/{PhotoName(id)}", cancellationToken).ConfigureAwait(false);
             await db.WriteTransaction(async tx =>
             {
                 await tx.Execute($"DELETE FROM {Table} WHERE id = ?", [id]).ConfigureAwait(false);
+                await tx.Execute(
+                    $"DELETE FROM {AppSchema.FailedUploads} WHERE table_name = 'progress_photos' AND row_id = ?", [id]).ConfigureAwait(false);
                 await tx.Execute("DELETE FROM progress_photos WHERE id = ?", [id]).ConfigureAwait(false);
             }).ConfigureAwait(false);
             DeleteFiles(id);
@@ -459,6 +477,15 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         public string Id { get; set; } = "";
 
         public string ProfileId { get; set; } = "";
+    }
+
+    internal sealed class DiscardRow
+    {
+        public string ProfileId { get; set; } = "";
+
+        public long FilesFailed { get; set; }
+
+        public long RowRejected { get; set; }
     }
 
     internal sealed class CountRow

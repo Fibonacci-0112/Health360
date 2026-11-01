@@ -2,16 +2,19 @@ using PowerSync.Common.Client;
 
 namespace Health360.LocalDb;
 
-/// <summary>Where a progress photo's files are: on the server, waiting on this device, or refused by the server.</summary>
+/// <summary>
+/// Whether a progress photo has reached the server. It has two parts that upload separately: its row (through the
+/// normal upload queue) and its files (through <see cref="PhotoUploader"/>). Both must have arrived for Uploaded.
+/// </summary>
 public enum PhotoUploadState
 {
-    /// <summary>No upload is waiting on this device: the files reached Storage (or another device holds them).</summary>
+    /// <summary>Nothing for it is waiting on this device: its row and files reached the server (or another device's did).</summary>
     Uploaded,
 
-    /// <summary>The files are on this device and go up when there is a connection.</summary>
+    /// <summary>Its row, its files or both are still on this device and go up when there is a connection.</summary>
     Pending,
 
-    /// <summary>The server refused the files for good; the user can retry or discard the photo.</summary>
+    /// <summary>The server refused its files or its row for good; the user can retry or discard the photo.</summary>
     Failed,
 }
 
@@ -26,23 +29,46 @@ public sealed class ProgressPhotoRow
 
     public string LocalDate { get; set; } = "";
 
+    /// <summary>1 while its files have an entry in this device's upload queue.</summary>
     public long Queued { get; set; }
 
+    /// <summary>When the server refused its files, if it did.</summary>
     public string? FailedAt { get; set; }
 
+    /// <summary>Why the server refused its files, if it did.</summary>
     public string? ErrorCode { get; set; }
 
+    /// <summary>1 while a write of its row is waiting in the normal upload queue.</summary>
+    public long RowPending { get; set; }
+
+    /// <summary>The code the server refused its row with, if a write of it is quarantined in <c>failed_uploads</c>.</summary>
+    public string? RowErrorCode { get; set; }
+
+    /// <summary>1 when a write of its row is quarantined; the code may be missing.</summary>
+    public long RowRejected { get; set; }
+
+    /// <summary>True when the files were refused (retried here); a refused row is retried from Settings.</summary>
+    public bool FilesFailed => Queued != 0 && FailedAt is not null;
+
     public PhotoUploadState State =>
-        Queued == 0 ? PhotoUploadState.Uploaded : FailedAt is null ? PhotoUploadState.Pending : PhotoUploadState.Failed;
+        FilesFailed || RowRejected != 0 ? PhotoUploadState.Failed
+        : Queued != 0 || RowPending != 0 ? PhotoUploadState.Pending
+        : PhotoUploadState.Uploaded;
 }
 
 /// <summary>The profile's progress photos from the local database, newest first.</summary>
 public static class ProgressPhotos
 {
-    // photo_uploads is local only, so the join reports this device's pending and refused files.
+    // photo_uploads and failed_uploads are local only and ps_crud is PowerSync's upload queue, so this reports
+    // what of each photo is still on this device or was refused.
     private const string MineSql =
         "SELECT p.id AS Id, p.pose AS Pose, p.taken_at AS TakenAt, p.local_date AS LocalDate, " +
-        "CASE WHEN u.id IS NULL THEN 0 ELSE 1 END AS Queued, u.failed_at AS FailedAt, u.error_code AS ErrorCode " +
+        "CASE WHEN u.id IS NULL THEN 0 ELSE 1 END AS Queued, u.failed_at AS FailedAt, u.error_code AS ErrorCode, " +
+        "EXISTS (SELECT 1 FROM ps_crud c WHERE json_extract(c.data, '$.type') = 'progress_photos' " +
+        "AND json_extract(c.data, '$.id') = p.id) AS RowPending, " +
+        "EXISTS (SELECT 1 FROM " + AppSchema.FailedUploads + " f WHERE f.table_name = 'progress_photos' AND f.row_id = p.id) AS RowRejected, " +
+        "(SELECT f.error_code FROM " + AppSchema.FailedUploads + " f WHERE f.table_name = 'progress_photos' AND f.row_id = p.id " +
+        "ORDER BY f.failed_at DESC LIMIT 1) AS RowErrorCode " +
         "FROM progress_photos p LEFT JOIN " + PhotoUploader.Table + " u ON u.id = p.id " +
         "WHERE p.profile_id = ? ORDER BY p.taken_at DESC, p.id DESC";
 

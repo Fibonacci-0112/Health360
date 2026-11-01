@@ -98,11 +98,19 @@ public sealed class ProgressPhotoTests : AppTestContext
         App.PhotoStorage.Refuse = true;
         await App.Photos.ProcessAsync(Xunit.TestContext.Current.CancellationToken);
         cut.WaitForAssertion(() => cut.Find("button[aria-label^='Discard']"), Wait);
+
+        // Discarding deletes anything of it already in Storage, so offline it fails and keeps the photo.
+        await ClickAsync(() => cut.Find("button[aria-label^='Discard']"));
+        cut.WaitForAssertion(() => Assert.Contains("needs a connection", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+
+        App.PhotoStorage.Reachable = true;
         await ClickAsync(() => cut.Find("button[aria-label^='Discard']"));
 
         cut.WaitForAssertion(() => Assert.Contains("No photos yet", cut.Markup, StringComparison.Ordinal), Wait);
         Assert.Contains("Photo discarded.", cut.Markup, StringComparison.Ordinal);
         Assert.Empty(App.PhotoFiles.Files);
         Assert.Equal(0, await App.Photos.PendingCountAsync());
+        Assert.Equal(2, App.PhotoStorage.Deleted.Count);
     }
 }

@@ -18,7 +18,7 @@ public sealed class PhotoUploaderTests
     private static readonly DateOnly Day = new(2026, 10, 31);
 
     private static Task<string> AddAsync(PhotoUploader uploader, string pose = "front", byte[]? photo = null) =>
-        uploader.AddAsync(Profile, pose, Clock.GetUtcNow(), Day, photo ?? Jpegs.WithGps(), Jpegs.WithGps(), Ct);
+        uploader.AddAsync(Profile, pose, Clock.GetUtcNow(), Day, photo ?? Jpegs.WithGps(), Jpegs.WithGps(), cancellationToken: Ct);
 
     [Fact]
     public async Task AddingStoresStrippedFilesTheRowAndAQueueEntry()
@@ -147,7 +147,7 @@ public sealed class PhotoUploaderTests
     }
 
     [Fact]
-    public async Task DiscardRemovesARefusedPhotoAndItsRowButNothingElse()
+    public async Task DiscardRemovesARefusedPhotoEverywhereButNothingElse()
     {
         await using var t = await TestDatabase.OpenAsync();
         var files = new MemoryPhotoFiles();
@@ -156,17 +156,78 @@ public sealed class PhotoUploaderTests
         var refused = await AddAsync(uploader);
         var accepted = await AddAsync(uploader, "back");
         storage.Refuse.Add(refused);
-        storage.Offline = false;
         await uploader.ProcessAsync(Ct);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => uploader.DiscardFailedAsync(accepted));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => uploader.DiscardFailedAsync(accepted, Ct));
 
-        await uploader.DiscardFailedAsync(refused);
+        await uploader.DiscardFailedAsync(refused, Ct);
 
+        // Both of its paths are deleted from Storage, in case the thumbnail went up before the photo was refused.
+        Assert.Equal([$"{Profile}/{refused}_thumb.jpg", $"{Profile}/{refused}.jpg"], storage.Deleted);
         Assert.Empty(await uploader.FailedAsync());
         Assert.Empty(files.List());
         var left = Assert.Single(await ProgressPhotos.ListAsync(t.Db, Profile));
-        Assert.Equal((accepted, PhotoUploadState.Uploaded), (left.Id, left.State));
+        Assert.Equal(accepted, left.Id);
     }
+
+    [Fact]
+    public async Task DiscardWhileOfflineChangesNothing()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        var files = new MemoryPhotoFiles();
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, files, storage, Clock);
+        var id = await AddAsync(uploader);
+        storage.Refuse.Add(id);
+        await uploader.ProcessAsync(Ct);
+        storage.Offline = true;
+
+        await Assert.ThrowsAsync<PhotoUploadException>(() => uploader.DiscardFailedAsync(id, Ct));
+
+        Assert.Single(await uploader.FailedAsync());
+        Assert.Equal(2, files.List().Count);
+        Assert.Single(await ProgressPhotos.ListAsync(t.Db, Profile));
+    }
+
+    [Fact]
+    public async Task ARefusedRowIsReportedAndDiscardRemovesItsQuarantinedWrite()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var id = await AddAsync(uploader);
+        await uploader.ProcessAsync(Ct);
+        var writer = new FakeWriter { Fail = w => w.Table == "progress_photos" ? new RemoteWriteException("denied", "42501") : null };
+
+        // Its files are up but its row isn't, so it isn't reported as uploaded yet.
+        var waiting = Single(await ProgressPhotos.ListAsync(t.Db, Profile));
+        Assert.Equal((PhotoUploadState.Pending, 0L, 1L), (waiting.State, waiting.Queued, waiting.RowPending));
+        await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: Ct);
+
+        var row = Single(await ProgressPhotos.ListAsync(t.Db, Profile));
+        Assert.Equal((PhotoUploadState.Failed, false, "42501"), (row.State, row.FilesFailed, row.RowErrorCode));
+        await uploader.DiscardFailedAsync(id, Ct);
+
+        Assert.Equal(0, await Uploads.FailedUploadCountAsync(t.Db));
+        Assert.Empty(await ProgressPhotos.ListAsync(t.Db, Profile));
+    }
+
+    [Fact]
+    public async Task APhotoTakenAcrossAnAccountClearIsRefused()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        var files = new MemoryPhotoFiles();
+        using var uploader = new PhotoUploader(t.Db, files, new FakePhotoStorage(), Clock);
+        var before = uploader.ClearGeneration;
+        await uploader.ClearAsync(() => Task.CompletedTask);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            uploader.AddAsync(Profile, "front", Clock.GetUtcNow(), Day, Jpegs.WithGps(), Jpegs.WithGps(), before, Ct));
+
+        Assert.Empty(files.List());
+        Assert.Empty(await ProgressPhotos.ListAsync(t.Db, Profile));
+    }
+
+    private static ProgressPhotoRow Single(ProgressPhotoRow[] rows) => Assert.Single(rows);
 
     [Fact]
     public async Task ListsEachPhotoWithTheStateOfItsFiles()
@@ -557,6 +618,19 @@ public sealed class FakePhotoStorage : IPhotoStorage
 
     public List<(string Path, byte[] Jpeg)> Uploads { get; } = [];
 
+    public List<string> Deleted { get; } = [];
+
+    public Task DeleteAsync(string path, CancellationToken cancellationToken)
+    {
+        if (Offline)
+        {
+            throw new PhotoUploadException("offline", permanent: false, code: null);
+        }
+
+        Deleted.Add(path);
+        return Task.CompletedTask;
+    }
+
     public Task UploadAsync(string path, byte[] jpeg, CancellationToken cancellationToken)
     {
         Attempts++;
@@ -578,6 +652,8 @@ public sealed class FakePhotoStorage : IPhotoStorage
 /// <summary>Storage whose upload never answers until it is cancelled.</summary>
 public sealed class BlockingPhotoStorage : IPhotoStorage
 {
+    public Task DeleteAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
+
     public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public bool Cancelled { get; private set; }

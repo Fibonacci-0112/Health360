@@ -56,8 +56,11 @@
                     @if (photo.State == PhotoUploadState.Failed)
                     {
                         <div class="inline">
-                            <button type="button" class="secondary" disabled="@busy" aria-label="@($"Retry uploading the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
-                                    @onclick="() => RetryAsync(photo.Id)">Retry</button>
+                            @if (photo.FilesFailed)
+                            {
+                                <button type="button" class="secondary" disabled="@busy" aria-label="@($"Retry uploading the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                                        @onclick="() => RetryAsync(photo.Id)">Retry</button>
+                            }
                             <button type="button" class="danger" disabled="@busy" aria-label="@($"Discard the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
                                     @onclick="() => DiscardAsync(photo.Id)">Discard</button>
                         </div>
@@ -92,7 +95,9 @@
     private static string StateText(ProgressPhotoRow photo) => photo.State switch
     {
         PhotoUploadState.Pending => "Waiting to upload",
-        PhotoUploadState.Failed => $"Upload refused ({photo.ErrorCode ?? "no reason given"})",
+        PhotoUploadState.Failed when photo.FilesFailed => $"Upload refused ({photo.ErrorCode ?? "no reason given"})",
+        // A refused row is listed with the other rejected changes in Settings, which can retry it.
+        PhotoUploadState.Failed => $"Record refused ({photo.RowErrorCode ?? "no reason given"}). Retry it in Settings, or discard it",
         _ => "Uploaded",
     };
 
@@ -166,6 +171,9 @@
         busy = true;
         saved = null;
         error = null;
+        // Read before the camera or library opens: a sign-out or account switch while it's open must not let this
+        // photo into the next account.
+        var generation = Uploader.ClearGeneration;
         try
         {
             var captured = take ? await Capture.TakeAsync() : await Capture.PickAsync();
@@ -175,7 +183,8 @@
             }
 
             var now = Clock.GetLocalNow();
-            await Uploader.AddAsync(profileId, pose, now, DateOnly.FromDateTime(now.DateTime), captured.Photo, captured.Thumbnail);
+            await Uploader.AddAsync(
+                profileId, pose, now, DateOnly.FromDateTime(now.DateTime), captured.Photo, captured.Thumbnail, generation);
             saved = $"{PoseName(pose)} photo saved. It uploads when you're online.";
         }
         catch (ArgumentException)
@@ -198,25 +207,50 @@
 
     private async Task RetryAsync(string id)
     {
+        if (busy)
+        {
+            return;
+        }
+
+        busy = true;
         error = null;
         try
         {
             await Uploader.RetryAsync(id);
+            saved = "Photo queued again.";
         }
         catch (Exception)
         {
             error = "Couldn't queue the photo again. Try again.";
         }
+        finally
+        {
+            busy = false;
+        }
     }
 
     private async Task DiscardAsync(string id)
     {
+        if (busy)
+        {
+            return;
+        }
+
         busy = true;
         error = null;
         try
         {
             await Uploader.DiscardFailedAsync(id);
             saved = "Photo discarded.";
+        }
+        catch (PhotoUploadException)
+        {
+            error = "Discarding needs a connection, to remove anything of the photo already uploaded. Try again when you're online.";
+        }
+        catch (InvalidOperationException)
+        {
+            // It changed meanwhile (queued again, or already gone); the list shows where it is now.
+            error = "That photo isn't refused any more, so it wasn't discarded.";
         }
         catch (Exception)
         {
