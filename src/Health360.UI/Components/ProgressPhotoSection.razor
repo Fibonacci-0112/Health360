@@ -11,7 +11,10 @@
 @* Progress photos (FEATURES.md §1.5): take or pick a photo in a standard pose. It's resized and turned upright on
    the device, stripped of EXIF and location by the upload queue, and goes up when there's a connection. The list
    says which photos are still on this device and which the server refused, with retry and discard. Each photo
-   shows its thumbnail and opens full size; one whose files haven't uploaded from the device that took it says so. *@
+   shows its thumbnail and opens full size; one whose files haven't uploaded from the device that took it says so.
+   When there's an earlier photo in the same pose, a new one is shown with that photo over it at 30% (the ghost
+   overlay) before it's saved, so the user can keep it or retake it with the same framing. The system camera can't
+   draw an overlay, so this is a review after capture rather than a live one. *@
 <section class="card" aria-labelledby="photos-title">
     <h2 id="photos-title">Progress photos</h2>
     <p class="muted small">Private to you unless you share photos with a household member. Location and camera details are removed on this device before upload.</p>
@@ -32,7 +35,45 @@
         <button type="button" id="photos-pick" class="@(Capture.CanTakePhoto ? "secondary" : "")" disabled="@(busy || pose is null)"
                 @onclick="() => AddAsync(take: false)">Choose photo</button>
     </div>
-    @if (busy)
+    @if (review is not null)
+    {
+        <figure class="photo-review" aria-labelledby="photo-review-title">
+            <figcaption id="photo-review-title" class="strong">Check the framing</figcaption>
+            <div class="photo-stack">
+                <img src="@review.NewUri" alt="@($"New {PoseName(review.Pose)} photo")" />
+                @if (review.GhostUri is not null && showGhost)
+                {
+                    <img class="photo-ghost" src="@review.GhostUri" alt="@($"Previous {PoseName(review.Pose)} photo from {review.Previous.LocalDate}, faded over the new one")" />
+                }
+            </div>
+            @switch (review.Ghost?.Status)
+            {
+                case null:
+                    <p class="muted small" role="status">Loading the previous photo</p>
+                    break;
+                case PhotoImageStatus.Available:
+                    <p class="muted small">Your @PoseName(review.Pose).ToLowerInvariant() photo from @review.Previous.LocalDate is shown faded on top. Line yourself up with it, or retake.</p>
+                    break;
+                case PhotoImageStatus.NotUploaded:
+                    <p class="muted small" role="status">Your previous @PoseName(review.Pose).ToLowerInvariant() photo hasn't finished uploading from the device it was taken on, so it can't be shown.</p>
+                    break;
+                default:
+                    <p class="muted small" role="status">Your previous @PoseName(review.Pose).ToLowerInvariant() photo couldn't be loaded, so it can't be shown.</p>
+                    break;
+            }
+            <div class="inline">
+                <button type="button" id="photo-review-keep" @onclick="KeepAsync">Keep photo</button>
+                <button type="button" class="secondary" id="photo-review-retake" @onclick="RetakeAsync">@(review.Take ? "Retake" : "Choose another")</button>
+                @if (review.GhostUri is not null)
+                {
+                    <button type="button" class="secondary" id="photo-review-ghost" aria-pressed="@(showGhost ? "true" : "false")"
+                            @onclick="() => showGhost = !showGhost">Show previous</button>
+                }
+                <button type="button" class="secondary" id="photo-review-cancel" @onclick="CancelReview">Cancel</button>
+            </div>
+        </figure>
+    }
+    @if (busy && review is null)
     {
         <p class="muted small" role="status">Saving photo</p>
     }
@@ -224,6 +265,8 @@
         thumbs.Clear();
         thumbUris.Clear();
         CloseViewer();
+        // The photo was for the profile that left; a sign-out or switch also changes the generation Keep would check.
+        EndReview();
         if (profileId is null)
         {
             return;
@@ -387,11 +430,42 @@
         viewVersion++;
         viewLoad?.Cancel();
         viewLoad?.Dispose();
+        review?.Loading.Dispose();
         viewLoad = null;
         viewing = null;
         full = null;
         fullUri = null;
     }
+
+    /// <summary>A photo taken or chosen and waiting for Keep, Retake or Cancel, with the previous photo in its pose.</summary>
+    private sealed class PhotoReview(CapturedPhoto captured, bool take, int generation, string profileId, string pose, ProgressPhotoRow previous)
+    {
+        public CapturedPhoto Captured { get; } = captured;
+
+        public bool Take { get; } = take;
+
+        public int Generation { get; } = generation;
+
+        public string ProfileId { get; } = profileId;
+
+        public string Pose { get; } = pose;
+
+        public ProgressPhotoRow Previous { get; } = previous;
+
+        public string NewUri { get; } = DataUri(captured.Photo);
+
+        public PhotoImage? Ghost { get; set; }
+
+        public string? GhostUri { get; set; }
+
+        public CancellationTokenSource Loading { get; } = new();
+    }
+
+    private PhotoReview? review;
+    private bool showGhost = true;
+
+    /// <summary>The newest photo in this pose, which the new one is lined up against.</summary>
+    private ProgressPhotoRow? PreviousIn(string code) => photos?.FirstOrDefault(p => p.Pose == code);
 
     private async Task AddAsync(bool take)
     {
@@ -423,28 +497,145 @@
                 return;
             }
 
-            // Resolved now, not before the picker opened: one left open across midnight takes the new day.
-            var date = chosenDate ?? Today;
-            await Uploader.AddAsync(profileId, pose, TakenAt(date), date, captured.Photo, captured.Thumbnail, generation);
-            saved = $"{PoseName(pose)} photo saved. It uploads when you're online.";
-            chosenDate = null;
+            // With an earlier photo in this pose, show the ghost overlay first; the save happens on Keep.
+            if (PreviousIn(pose) is { } previous)
+            {
+                StartReview(new PhotoReview(captured, take, generation, profileId, pose, previous));
+                return;
+            }
+
+            await SaveAsync(captured, profileId, pose, generation);
         }
-        catch (ArgumentException)
+        catch (Exception e)
         {
-            error = "That image couldn't be used. Choose a JPEG photo and try again.";
+            error = SaveError(e);
         }
-        catch (InvalidOperationException)
+        finally
         {
-            error = "Your account changed while the photo was being taken or saved, so it wasn't kept.";
+            busy = review is not null;
         }
-        catch (Exception)
+    }
+
+    private void StartReview(PhotoReview next)
+    {
+        review = next;
+        showGhost = true;
+        var token = next.Loading.Token;
+        _ = Task.Run(async () =>
         {
-            error = "The photo couldn't be saved on this device. Try again.";
+            PhotoImage image;
+            try
+            {
+                image = await Library.PhotoAsync(next.ProfileId, next.Previous.Id, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception)
+            {
+                image = PhotoImage.Unreachable;
+            }
+
+            var uri = image.Jpeg is { } jpeg ? DataUri(jpeg) : null;
+            await InvokeAsync(() =>
+            {
+                if (ReferenceEquals(review, next) && !token.IsCancellationRequested)
+                {
+                    next.Ghost = image;
+                    next.GhostUri = uri;
+                    StateHasChanged();
+                }
+            });
+        }, CancellationToken.None);
+    }
+
+    private void EndReview()
+    {
+        if (review is { } ending)
+        {
+            ending.Loading.Cancel();
+            ending.Loading.Dispose();
+        }
+
+        review = null;
+        busy = false;
+    }
+
+    private async Task KeepAsync()
+    {
+        if (review is not { } kept)
+        {
+            return;
+        }
+
+        EndReview();
+        busy = true;
+        try
+        {
+            await SaveAsync(kept.Captured, kept.ProfileId, kept.Pose, kept.Generation);
+        }
+        catch (Exception e)
+        {
+            error = SaveError(e);
         }
         finally
         {
             busy = false;
         }
+    }
+
+    private async Task RetakeAsync()
+    {
+        if (review is not { } previous)
+        {
+            return;
+        }
+
+        EndReview();
+        error = null;
+        busy = true;
+        try
+        {
+            var captured = previous.Take ? await Capture.TakeAsync() : await Capture.PickAsync();
+            if (captured is null)
+            {
+                return;
+            }
+
+            // The same account check as the first capture: the generation read before the camera first opened.
+            StartReview(new PhotoReview(captured, previous.Take, previous.Generation, previous.ProfileId, previous.Pose, previous.Previous));
+        }
+        catch (Exception e)
+        {
+            error = SaveError(e);
+        }
+        finally
+        {
+            busy = review is not null;
+        }
+    }
+
+    private void CancelReview()
+    {
+        EndReview();
+        saved = "Photo not saved.";
+    }
+
+    private static string SaveError(Exception e) => e switch
+    {
+        ArgumentException => "That image couldn't be used. Choose a JPEG photo and try again.",
+        InvalidOperationException => "Your account changed while the photo was being taken or saved, so it wasn't kept.",
+        _ => "The photo couldn't be saved on this device. Try again.",
+    };
+
+    private async Task SaveAsync(CapturedPhoto captured, string profileId, string pose, int generation)
+    {
+        // Resolved now, not before the picker opened: one left open across midnight (or a review left open) takes the new day.
+        var date = chosenDate ?? Today;
+        await Uploader.AddAsync(profileId, pose, TakenAt(date), date, captured.Photo, captured.Thumbnail, generation);
+        saved = $"{PoseName(pose)} photo saved. It uploads when you're online.";
+        chosenDate = null;
     }
 
     private async Task RetryAsync(string id)

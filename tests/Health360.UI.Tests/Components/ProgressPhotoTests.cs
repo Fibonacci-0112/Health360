@@ -228,4 +228,88 @@ public sealed class ProgressPhotoTests : AppTestContext
 
         cut.WaitForAssertion(() => Assert.StartsWith("data:image/jpeg;base64,", cut.Find(".photo-viewer img").GetAttribute("src"), StringComparison.Ordinal), Wait);
     }
+
+    [Fact]
+    public async Task ASecondPhotoInAPoseShowsTheFirstFadedOverItBeforeItIsKept()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+
+        await ClickAsync(cut, "#photos-take");
+
+        cut.WaitForAssertion(() =>
+        {
+            var ghost = cut.Find(".photo-review .photo-ghost");
+            Assert.StartsWith("Previous Front photo from 2026-10-30", ghost.GetAttribute("alt"), StringComparison.Ordinal);
+            Assert.StartsWith("data:image/jpeg;base64,", ghost.GetAttribute("src"), StringComparison.Ordinal);
+        }, Wait);
+        // Nothing is saved until Keep.
+        Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+        Assert.True(cut.Find("#photos-take").HasAttribute("disabled"));
+
+        await ClickAsync(cut, "#photo-review-ghost");
+        Assert.Empty(cut.FindAll(".photo-ghost"));
+        await ClickAsync(cut, "#photo-review-ghost");
+        cut.Find(".photo-ghost");
+
+        await ClickAsync(cut, "#photo-review-keep");
+
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        Assert.Empty(cut.FindAll(".photo-review"));
+        Assert.Contains("Front photo saved.", cut.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RetakeOpensTheCameraAgainAndCancelSavesNothing()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => cut.Find(".photo-review"), Wait);
+
+        await ClickAsync(cut, "#photo-review-retake");
+        cut.WaitForAssertion(() => cut.Find(".photo-review .photo-ghost"), Wait);
+        Assert.Equal(["take", "take", "take"], App.Camera.Calls);
+
+        await ClickAsync(cut, "#photo-review-cancel");
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".photo-review")), Wait);
+        Assert.False(cut.Find("#photos-take").HasAttribute("disabled"));
+        Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+        Assert.Equal(2, App.PhotoFiles.Files.Count);
+    }
+
+    [Fact]
+    public async Task APreviousPhotoNotUploadedYetIsExplainedAndTheNewOneCanStillBeKept()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "front", "2026-10-29");
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+
+        await ClickAsync(cut, "#photos-take");
+
+        cut.WaitForAssertion(() => Assert.Contains("hasn't finished uploading", cut.Find(".photo-review").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(cut.FindAll(".photo-ghost"));
+        Assert.Empty(cut.FindAll("#photo-review-ghost"));
+
+        await ClickAsync(cut, "#photo-review-keep");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+    }
+
+    [Fact]
+    public async Task AFirstPhotoInAPoseIsSavedWithoutAReviewEvenWhenOtherPosesExist()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+
+        await ClickAsync(() => cut.FindAll("#photos-pose ~ .choices [role=radio]").Single(b => b.TextContent.Trim() == "Back"));
+        await ClickAsync(cut, "#photos-take");
+
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        Assert.Empty(cut.FindAll(".photo-review"));
+    }
 }
