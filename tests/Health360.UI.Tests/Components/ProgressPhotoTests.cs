@@ -327,4 +327,57 @@ public sealed class ProgressPhotoTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
         Assert.Empty(cut.FindAll(".photo-review"));
     }
+
+    [Fact]
+    public async Task TwoTickedPhotosAreShownSideBySideOlderFirst()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-01");
+        App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+
+        // Newest first in the list: tick the new photo, then the old one.
+        await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
+        Assert.Contains("Tick Compare on one more photo", cut.Markup, StringComparison.Ordinal);
+        await ChangeAsync(cut, "input[aria-label='Compare the Back photo from 2026-10-01']", "on");
+
+        cut.WaitForAssertion(() =>
+        {
+            var images = cut.FindAll(".photo-compare img");
+            Assert.Equal(2, images.Count);
+            Assert.Equal("Back progress photo from 2026-10-01", images[0].GetAttribute("alt"));
+            Assert.Equal("Front progress photo from 2026-10-30", images[1].GetAttribute("alt"));
+        }, Wait);
+
+        await ClickAsync(cut, "#photo-compare-close");
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".photo-compare")), Wait);
+        Assert.All(cut.FindAll(".photo-compare-pick input"), i => Assert.False(i.HasAttribute("checked")));
+    }
+
+    [Fact]
+    public async Task AComparedPhotoNotUploadedYetSaysSoAndAThirdCannotBeTicked()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-01");
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        await ClickAsync(cut, "#photos-take");
+        await ClickAsync(() => cut.FindAll("#photos-pose ~ .choices [role=radio]").Single(b => b.TextContent.Trim() == "Left side"));
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Equal(3, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+
+        await ChangeAsync(cut, "input[aria-label='Compare the Back photo from 2026-10-01']", "on");
+        await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
+
+        // Each side loads on its own, so wait for both.
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("hasn't finished uploading", cut.Find(".photo-compare").TextContent, StringComparison.Ordinal);
+            Assert.Single(cut.FindAll(".photo-compare img"));
+        }, Wait);
+        Assert.True(cut.Find("input[aria-label='Compare the Left side photo from 2026-10-30']").HasAttribute("disabled"));
+    }
 }

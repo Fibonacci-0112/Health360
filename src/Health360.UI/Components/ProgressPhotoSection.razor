@@ -14,7 +14,8 @@
    shows its thumbnail and opens full size; one whose files haven't uploaded from the device that took it says so.
    When there's an earlier photo in the same pose, a new one is shown with that photo over it at 30% (the ghost
    overlay) before it's saved, so the user can keep it or retake it with the same framing. The system camera can't
-   draw an overlay, so this is a review after capture rather than a live one. *@
+   draw an overlay, so this is a review after capture rather than a live one. Ticking Compare on two photos shows
+   them side by side, older on the left. *@
 <section class="card" aria-labelledby="photos-title">
     <h2 id="photos-title">Progress photos</h2>
     <p class="muted small">Private to you unless you share photos with a household member. Location and camera details are removed on this device before upload.</p>
@@ -120,6 +121,50 @@
             </figure>
         }
 
+        @if (compared.Count == 2)
+        {
+            <figure class="photo-compare" aria-labelledby="photo-compare-title">
+                <figcaption id="photo-compare-title" class="strong">Side by side</figcaption>
+                <div class="photo-compare-grid">
+                    @foreach (var photo in compared)
+                    {
+                        <div @key="photo.Id" class="photo-compare-cell">
+                            <span class="small">@PoseName(photo.Pose) · @photo.LocalDate</span>
+                            @switch (compareImages.GetValueOrDefault(photo.Id)?.Status)
+                            {
+                                case null:
+                                    <p class="muted small" role="status">Loading photo</p>
+                                    break;
+                                case PhotoImageStatus.Available:
+                                    <img src="@compareUris[photo.Id]" alt="@($"{PoseName(photo.Pose)} progress photo from {photo.LocalDate}")" />
+                                    break;
+                                case PhotoImageStatus.NotUploaded:
+                                    <p class="muted small" role="status">Not available yet. It hasn't finished uploading from the device it was taken on.</p>
+                                    break;
+                                case PhotoImageStatus.Unreachable:
+                                    <p class="error small" role="alert">Couldn't load this photo. Check your connection.</p>
+                                    break;
+                                default:
+                                    <p class="error small" role="alert">The server wouldn't send this photo.</p>
+                                    break;
+                            }
+                        </div>
+                    }
+                </div>
+                <div class="inline">
+                    @if (compareImages.Values.Any(i => i?.Status == PhotoImageStatus.Unreachable))
+                    {
+                        <button type="button" class="secondary" id="photo-compare-retry" @onclick="LoadComparison">Try again</button>
+                    }
+                    <button type="button" class="secondary" id="photo-compare-close" @onclick="ClearComparison">Close comparison</button>
+                </div>
+            </figure>
+        }
+        else if (compared.Count == 1)
+        {
+            <p class="muted small" role="status">Tick Compare on one more photo to see them side by side.</p>
+        }
+
         <ul class="measurement-list" aria-label="Your progress photos">
             @foreach (var photo in photos)
             {
@@ -139,6 +184,12 @@
                         <span class="strong">@PoseName(photo.Pose)</span>
                         <span class="muted small">@photo.LocalDate · @StateText(photo, thumbs.GetValueOrDefault(photo.Id))</span>
                     </div>
+                    <label class="photo-compare-pick small">
+                        <input type="checkbox" checked="@IsCompared(photo.Id)" disabled="@(compared.Count == 2 && !IsCompared(photo.Id))"
+                               aria-label="@($"Compare the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                               @onchange="() => ToggleCompare(photo)" />
+                        Compare
+                    </label>
                     @if (photo.State == PhotoUploadState.Failed)
                     {
                         <div class="inline">
@@ -265,6 +316,7 @@
         thumbs.Clear();
         thumbUris.Clear();
         CloseViewer();
+        ClearComparison();
         // The photo was for the profile that left; a sign-out or switch also changes the generation Keep would check.
         EndReview();
         if (profileId is null)
@@ -337,6 +389,13 @@
             thumbUris.Remove(id);
         }
 
+        // A compared photo was deleted or discarded meanwhile.
+        if (compared.Any(c => !rows.Any(r => r.Id == c.Id)))
+        {
+            compared = [.. compared.Where(c => rows.Any(r => r.Id == c.Id))];
+            LoadComparison();
+        }
+
         // The open photo was deleted or discarded meanwhile.
         if (viewing is not null && !rows.Any(r => r.Id == viewing.Id))
         {
@@ -385,6 +444,87 @@
                 });
             }, CancellationToken.None);
         }
+    }
+
+    // The photos ticked for comparison (at most two, older first) and their full images and data URIs.
+    private List<ProgressPhotoRow> compared = [];
+    private readonly Dictionary<string, PhotoImage?> compareImages = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> compareUris = new(StringComparer.Ordinal);
+    private CancellationTokenSource? compareLoad;
+
+    private bool IsCompared(string id) => compared.Any(p => p.Id == id);
+
+    private void ToggleCompare(ProgressPhotoRow photo)
+    {
+        if (IsCompared(photo.Id))
+        {
+            compared = [.. compared.Where(p => p.Id != photo.Id)];
+        }
+        else if (compared.Count < 2)
+        {
+            compared = [.. compared.Append(photo).OrderBy(p => p.TakenAt, StringComparer.Ordinal).ThenBy(p => p.Id, StringComparer.Ordinal)];
+        }
+
+        LoadComparison();
+    }
+
+    /// <summary>Loads the full photos once two are ticked; anything less cancels a load in progress.</summary>
+    private void LoadComparison()
+    {
+        compareLoad?.Cancel();
+        compareLoad?.Dispose();
+        compareLoad = null;
+        compareImages.Clear();
+        compareUris.Clear();
+        if (compared.Count != 2 || watchedProfile is not { } profileId)
+        {
+            return;
+        }
+
+        compareLoad = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+        var token = compareLoad.Token;
+        foreach (var photo in compared)
+        {
+            var id = photo.Id;
+            compareImages[id] = null;
+            _ = Task.Run(async () =>
+            {
+                PhotoImage image;
+                try
+                {
+                    image = await Library.PhotoAsync(profileId, id, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (Exception)
+                {
+                    image = PhotoImage.Unreachable;
+                }
+
+                var uri = image.Jpeg is { } jpeg ? DataUri(jpeg) : null;
+                await InvokeAsync(() =>
+                {
+                    if (!token.IsCancellationRequested && compareImages.ContainsKey(id))
+                    {
+                        compareImages[id] = image;
+                        if (uri is not null)
+                        {
+                            compareUris[id] = uri;
+                        }
+
+                        StateHasChanged();
+                    }
+                });
+            }, CancellationToken.None);
+        }
+    }
+
+    private void ClearComparison()
+    {
+        compared = [];
+        LoadComparison();
     }
 
     private async Task ViewAsync(ProgressPhotoRow photo)
@@ -722,6 +862,7 @@
         stop.Cancel();
         watch?.Dispose();
         viewLoad?.Dispose();
+        compareLoad?.Dispose();
         EndReview();
         stop.Dispose();
     }

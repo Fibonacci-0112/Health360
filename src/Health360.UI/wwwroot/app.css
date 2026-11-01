@@ -711,3 +711,36 @@ button.compact {
     opacity: 0.3;
     pointer-events: none;
 }
+
+/* Side-by-side comparison: two photos in equal columns, older on the left, on phones and desktop alike. */
+.photo-compare {
+    margin: var(--space-sm) 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.photo-compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-sm);
+}
+
+.photo-compare-cell {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    min-width: 0;
+}
+
+.photo-compare-cell img {
+    width: 100%;
+    max-height: 70vh;
+    object-fit: contain;
+}
+
+.photo-compare-pick {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+}
