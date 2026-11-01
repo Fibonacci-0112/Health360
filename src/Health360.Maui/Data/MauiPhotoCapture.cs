@@ -1,5 +1,4 @@
 using Health360.UI.Data;
-using Microsoft.Maui.Graphics;
 using Microsoft.Maui.Graphics.Platform;
 
 namespace Health360.Maui.Data;
