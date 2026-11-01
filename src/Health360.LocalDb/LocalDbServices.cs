@@ -55,6 +55,7 @@ public static class LocalDbServices
                     http, provider.GetRequiredService<ISupabaseSession>(), provider.GetRequiredService<IDatabaseOwnerStore>(), endpoints.SupabaseApiKey);
             });
             services.AddSingleton<PhotoUploader>();
+            services.AddSingleton<PhotoLibrary>();
         }
 
         services.AddSingleton(provider => new LocalDatabase(

@@ -505,6 +505,219 @@ public sealed class PhotoUploaderTests
         }
     }
 
+    private static async Task<long> DeletionsAsync(TestDatabase t) =>
+        (await t.Db.Get<CountRow>($"SELECT count(*) AS N FROM {PhotoUploader.DeletionsTable}")).N;
+
+    [Fact]
+    public async Task DeletingAPhotoRemovesItsRowAndLocalFilesThenItsStoredFilesOnceTheRowDeleteIsUp()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var files = new MemoryPhotoFiles();
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, files, storage, Clock);
+        var id = await AddAsync(uploader);
+        await uploader.ProcessAsync(Ct);
+        await t.Db.Execute("DELETE FROM ps_crud");
+
+        await uploader.DeleteAsync(Profile, id, Ct);
+
+        Assert.Equal(0, (await t.Db.Get<CountRow>("SELECT count(*) AS N FROM progress_photos")).N);
+        Assert.Empty(files.List());
+        Assert.Equal(1, await DeletionsAsync(t));
+        Assert.Equal(1, await uploader.PendingCountAsync());
+        // The row delete is still in the upload queue, so the files stay until it reaches the server.
+        await uploader.ProcessAsync(Ct);
+        Assert.Empty(storage.Deleted);
+
+        await t.Db.Execute("DELETE FROM ps_crud");
+        var report = await uploader.ProcessAsync(Ct);
+
+        Assert.Equal(1, report.Deleted);
+        Assert.Equal([$"{Profile}/{id}_thumb.jpg", $"{Profile}/{id}.jpg"], storage.Deleted);
+        Assert.Equal(0, await DeletionsAsync(t));
+        Assert.Equal(0, await uploader.PendingCountAsync());
+    }
+
+    [Fact]
+    public async Task DeletingAPhotoStillWaitingToUploadCancelsItsUpload()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var files = new MemoryPhotoFiles();
+        var storage = new FakePhotoStorage { Offline = true };
+        using var uploader = new PhotoUploader(t.Db, files, storage, Clock);
+        var id = await AddAsync(uploader);
+
+        await uploader.DeleteAsync(Profile, id, Ct);
+
+        Assert.Equal(0, (await t.Db.Get<CountRow>($"SELECT count(*) AS N FROM {PhotoUploader.Table}")).N);
+        Assert.Empty(files.List());
+        // Offline the file deletes wait; the insert and the delete cancel out in the upload queue or go up in order.
+        await t.Db.Execute("DELETE FROM ps_crud");
+        var offline = await uploader.ProcessAsync(Ct);
+        Assert.True(offline.Stopped);
+        Assert.Equal(1, await DeletionsAsync(t));
+
+        storage.Offline = false;
+        await uploader.ProcessAsync(Ct);
+        Assert.Empty(storage.Uploads);
+        Assert.Equal(2, storage.Deleted.Count);
+        Assert.Equal(0, await DeletionsAsync(t));
+    }
+
+    [Fact]
+    public async Task ARefusedRowDeleteKeepsTheStoredFiles()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var id = await AddAsync(uploader);
+        await uploader.ProcessAsync(Ct);
+        await uploader.DeleteAsync(Profile, id, Ct);
+        await t.Db.Execute("DELETE FROM ps_crud");
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) VALUES (uuid(), 'progress_photos', ?, 'DELETE', '{}', '42501')", [id]);
+
+        await uploader.ProcessAsync(Ct);
+
+        Assert.Empty(storage.Deleted);
+        Assert.Equal(1, await DeletionsAsync(t));
+    }
+
+    [Fact]
+    public async Task AnUploadThatKeepsFailingDoesNotHoldBackAnotherPhotosFileDeletes()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FailingUploadStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var deletedId = await AddAsync(uploader);
+        await uploader.DeleteAsync(Profile, deletedId, Ct);
+        await AddAsync(uploader, "back");
+        await t.Db.Execute("DELETE FROM ps_crud");
+
+        var report = await uploader.ProcessAsync(Ct);
+
+        Assert.True(report.Stopped);
+        Assert.Equal(1, report.Deleted);
+        Assert.Equal(2, storage.Deleted.Count);
+        Assert.Equal(0, await DeletionsAsync(t));
+    }
+
+    [Fact]
+    public async Task AnEarlierRefusedWriteOfADeletedPhotoIsDroppedAndDoesNotBlockItsFileDeletes()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var id = await AddAsync(uploader);
+        await uploader.ProcessAsync(Ct);
+        await t.Db.Execute("DELETE FROM ps_crud");
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) VALUES (uuid(), 'progress_photos', ?, 'PATCH', '{}', '23514')", [id]);
+
+        await uploader.DeleteAsync(Profile, id, Ct);
+        await t.Db.Execute("DELETE FROM ps_crud");
+        await uploader.ProcessAsync(Ct);
+
+        Assert.Equal(0, (await t.Db.Get<CountRow>("SELECT count(*) AS N FROM failed_uploads")).N);
+        Assert.Equal(2, storage.Deleted.Count);
+    }
+
+    [Fact]
+    public async Task APhotoDeletedOnAnotherDeviceStopsUploadingAndAnythingOfItAlreadyUpIsDeleted()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var files = new MemoryPhotoFiles();
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, files, storage, Clock);
+        var id = await AddAsync(uploader);
+        // Its row went up, then another device deleted it and sync removed it here.
+        await t.Db.Execute("DELETE FROM ps_crud");
+        await t.Db.Execute("DELETE FROM progress_photos WHERE id = ?", [id]);
+        await t.Db.Execute("DELETE FROM ps_crud");
+
+        await uploader.ProcessAsync(Ct);
+
+        Assert.Empty(storage.Uploads);
+        Assert.Empty(files.List());
+        Assert.Equal(0, (await t.Db.Get<CountRow>($"SELECT count(*) AS N FROM {PhotoUploader.Table}")).N);
+        Assert.Equal([$"{Profile}/{id}_thumb.jpg", $"{Profile}/{id}.jpg"], storage.Deleted);
+        Assert.Equal(0, await DeletionsAsync(t));
+    }
+
+    [Fact]
+    public async Task DiscardingARefusedDeleteKeepsTheStoredFiles()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var id = await AddAsync(uploader);
+        await uploader.ProcessAsync(Ct);
+        await uploader.DeleteAsync(Profile, id, Ct);
+        await t.Db.Execute("DELETE FROM ps_crud");
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) VALUES ('f1', 'progress_photos', ?, 'DELETE', '{}', '42501')", [id]);
+
+        await uploader.DiscardRefusedDeleteAsync("f1", id);
+        await uploader.ProcessAsync(Ct);
+
+        Assert.Empty(storage.Deleted);
+        Assert.Equal(0, await DeletionsAsync(t));
+        Assert.Equal(0, (await t.Db.Get<CountRow>("SELECT count(*) AS N FROM failed_uploads")).N);
+    }
+
+    [Fact]
+    public async Task ADeleteRetriedFromSettingsRemovesTheFilesEvenBeforeSyncRemovesTheRestoredRow()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        var storage = new FakePhotoStorage();
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), storage, Clock);
+        var id = await AddAsync(uploader, "back");
+        await uploader.ProcessAsync(Ct);
+        await uploader.DeleteAsync(Profile, id, Ct);
+        await t.Db.Execute("DELETE FROM ps_crud");
+        // The DELETE was refused and the row restored by sync...
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) VALUES ('f1', 'progress_photos', ?, 'DELETE', '{}', '42501')", [id]);
+        await t.Db.Execute(
+            "INSERT INTO progress_photos (id, profile_id, pose, taken_at, local_date, storage_path, thumb_path, created_at, updated_at) " +
+            "VALUES (?, ?, 'back', '2026-10-31T09:30:00.000Z', '2026-10-31', ?, ?, '2026-10-31T09:30:00.000Z', '2026-10-31T09:30:00.000Z')",
+            [id, Profile, $"{Profile}/{id}.jpg", $"{Profile}/{id}_thumb.jpg"]);
+        await t.Db.Execute("DELETE FROM ps_crud");
+        await uploader.ProcessAsync(Ct);
+        Assert.Empty(storage.Deleted);
+
+        // ...then retried successfully from Settings, which drops the refusal before sync removes the row here.
+        await t.Db.Execute("DELETE FROM failed_uploads WHERE id = 'f1'");
+        await uploader.ProcessAsync(Ct);
+
+        Assert.Equal(2, storage.Deleted.Count);
+        Assert.Equal(0, await DeletionsAsync(t));
+        Assert.Equal(0, await uploader.PendingCountAsync());
+    }
+
+    [Fact]
+    public async Task DeletingAPhotoThatIsNotHereOrNotThisProfilesIsRefused()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.SeedProfileAsync(Profile);
+        using var uploader = new PhotoUploader(t.Db, new MemoryPhotoFiles(), new FakePhotoStorage(), Clock);
+        var id = await AddAsync(uploader);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => uploader.DeleteAsync(Profile, "0190a0b0-0000-7000-8000-0000000000ff", Ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => uploader.DeleteAsync("0190a0b0-0000-7000-8000-000000000002", id, Ct));
+
+        Assert.Equal(1, (await t.Db.Get<CountRow>("SELECT count(*) AS N FROM progress_photos")).N);
+        Assert.Equal(0, await DeletionsAsync(t));
+    }
+
     [Fact]
     public async Task StorageUploadsAsTheOwnerWithUpsert()
     {
@@ -519,6 +732,72 @@ public sealed class PhotoUploaderTests
         Assert.Equal("anon-key", request.Headers["apikey"]);
         Assert.Equal("true", request.Headers["x-upsert"]);
         Assert.Equal("image/jpeg", request.ContentType);
+    }
+
+    [Fact]
+    public async Task StorageDownloadsAsTheOwnerThroughTheAuthenticatedRoute()
+    {
+        var (storage, server) = Storage();
+        server.Replies.Enqueue(HttpStatusCode.OK);
+        server.Body = "jpeg";
+
+        var bytes = await storage.DownloadAsync($"{Profile}/x_thumb.jpg", Ct);
+
+        Assert.Equal("jpeg"u8.ToArray(), bytes);
+        var request = Assert.Single(server.Requests);
+        Assert.Equal($"GET /storage/v1/object/authenticated/progress-photos/{Profile}/x_thumb.jpg", request.Line);
+        Assert.Equal("Bearer user-token", request.Headers["Authorization"]);
+        Assert.Equal("anon-key", request.Headers["apikey"]);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, "{}")]
+    [InlineData(HttpStatusCode.BadRequest, """{"statusCode":"404","error":"not_found","message":"Object not found"}""")]
+    public async Task StorageReportsAFileNotUploadedYetAsMissing(HttpStatusCode status, string body)
+    {
+        var (storage, server) = Storage();
+        server.Replies.Enqueue(status);
+        server.Body = body;
+
+        Assert.Null(await storage.DownloadAsync($"{Profile}/x.jpg", Ct));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden, true)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, false)]
+    [InlineData(HttpStatusCode.Unauthorized, false)]
+    public async Task StorageDownloadFailuresAreNotMissingFiles(HttpStatusCode status, bool permanent)
+    {
+        var (storage, server) = Storage();
+        server.Replies.Enqueue(status);
+
+        var error = await Assert.ThrowsAsync<PhotoUploadException>(() => storage.DownloadAsync($"{Profile}/x.jpg", Ct));
+
+        Assert.Equal(permanent, error.Permanent);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, """{"statusCode":"404","error":"Bucket not found","message":"Bucket not found"}""")]
+    [InlineData(HttpStatusCode.BadRequest, """{"statusCode":"404","error":"not_found","message":"Bucket not found"}""")]
+    public async Task StorageReportsAMissingBucketAsBrokenNotPending(HttpStatusCode status, string body)
+    {
+        var (storage, server) = Storage();
+        server.Replies.Enqueue(status);
+        server.Body = body;
+
+        var error = await Assert.ThrowsAsync<PhotoUploadException>(() => storage.DownloadAsync($"{Profile}/x.jpg", Ct));
+
+        Assert.True(error.Permanent);
+    }
+
+    [Fact]
+    public async Task StorageDownloadsNothingWithoutTheOwnersSession()
+    {
+        var (storage, server) = Storage(owner: "user-b");
+
+        await Assert.ThrowsAsync<PhotoUploadException>(() => storage.DownloadAsync($"{Profile}/x.jpg", Ct));
+
+        Assert.Empty(server.Requests);
     }
 
     [Theory]
@@ -765,6 +1044,31 @@ public sealed class FakePhotoStorage : IPhotoStorage
 
     public List<string> Deleted { get; } = [];
 
+    /// <summary>Files Storage holds, by path, for downloads.</summary>
+    public Dictionary<string, byte[]> Stored { get; } = new(StringComparer.Ordinal);
+
+    public List<string> Downloads { get; } = [];
+
+    /// <summary>Runs inside each download before it answers.</summary>
+    public Action? DuringDownload { get; set; }
+
+    public Task<byte[]?> DownloadAsync(string path, CancellationToken cancellationToken)
+    {
+        DuringDownload?.Invoke();
+        if (Offline)
+        {
+            throw new PhotoUploadException("offline", permanent: false, code: null);
+        }
+
+        if (Refuse.Any(id => path.Contains(id, StringComparison.Ordinal)))
+        {
+            throw new PhotoUploadException("denied", permanent: true, code: "403");
+        }
+
+        Downloads.Add(path);
+        return Task.FromResult(Stored.TryGetValue(path, out var jpeg) ? jpeg : null);
+    }
+
     public Task DeleteAsync(string path, CancellationToken cancellationToken)
     {
         if (Offline)
@@ -794,10 +1098,29 @@ public sealed class FakePhotoStorage : IPhotoStorage
     }
 }
 
+/// <summary>Storage that deletes but can't take uploads, as during a server error on uploads only.</summary>
+public sealed class FailingUploadStorage : IPhotoStorage
+{
+    public List<string> Deleted { get; } = [];
+
+    public Task DeleteAsync(string path, CancellationToken cancellationToken)
+    {
+        Deleted.Add(path);
+        return Task.CompletedTask;
+    }
+
+    public Task<byte[]?> DownloadAsync(string path, CancellationToken cancellationToken) => Task.FromResult<byte[]?>(null);
+
+    public Task UploadAsync(string path, byte[] jpeg, CancellationToken cancellationToken) =>
+        throw new PhotoUploadException("server error", permanent: false, code: "503");
+}
+
 /// <summary>Storage whose upload never answers until it is cancelled.</summary>
 public sealed class BlockingPhotoStorage : IPhotoStorage
 {
     public Task DeleteAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task<byte[]?> DownloadAsync(string path, CancellationToken cancellationToken) => Task.FromResult<byte[]?>(null);
 
     public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

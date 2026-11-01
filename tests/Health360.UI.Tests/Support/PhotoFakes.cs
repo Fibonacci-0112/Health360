@@ -64,6 +64,14 @@ public sealed class TestPhotoStorage : IPhotoStorage
 
     public List<string> Deleted { get; } = [];
 
+    /// <summary>Files Storage holds, by path; only served once <see cref="Reachable"/>.</summary>
+    public Dictionary<string, byte[]> Stored { get; } = new(StringComparer.Ordinal);
+
+    public Task<byte[]?> DownloadAsync(string path, CancellationToken cancellationToken) =>
+        Reachable
+            ? Task.FromResult(Stored.TryGetValue(path, out var jpeg) ? jpeg : null)
+            : throw new PhotoUploadException("offline", permanent: false, code: null);
+
     public Task DeleteAsync(string path, CancellationToken cancellationToken)
     {
         if (!Reachable)

@@ -45,6 +45,18 @@ public sealed class TestDatabase : IAsyncDisposable
             await tx.Execute("DELETE FROM ps_crud WHERE id = (SELECT max(id) FROM ps_crud)");
         });
 
+    /// <summary>A progress photo row as sync brings it down from another device: no local files, nothing queued.</summary>
+    public Task SeedPhotoAsync(string id, string profileId, string pose, string localDate) =>
+        Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute(
+                "INSERT INTO progress_photos (id, profile_id, pose, taken_at, local_date, storage_path, thumb_path, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [id, profileId, pose, localDate + "T12:00:00.000Z", localDate, $"{profileId}/{id}.jpg", $"{profileId}/{id}_thumb.jpg",
+                 localDate + "T12:00:00.000Z", localDate + "T12:00:00.000Z"]);
+            await tx.Execute("DELETE FROM ps_crud");
+        });
+
     /// <summary>
     /// Metric definitions as the reference stream brings them down, copied from the migration
     /// (20261031000001_body_measurements.sql) for the metrics the screens' tests use.

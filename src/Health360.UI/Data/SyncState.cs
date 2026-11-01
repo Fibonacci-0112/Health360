@@ -71,6 +71,13 @@ public sealed partial class SyncState : IDisposable
             return;
         }
 
+        // A refused delete of a photo: the server kept the row, so its queued file deletes are dropped with it.
+        if (photos is not null && entry is { TableName: "progress_photos", Op: "DELETE" })
+        {
+            await photos.DiscardRefusedDeleteAsync(id, entry.RowId).ConfigureAwait(false);
+            return;
+        }
+
         await Uploads.DiscardFailedUploadAsync(db, id).ConfigureAwait(false);
     }
 

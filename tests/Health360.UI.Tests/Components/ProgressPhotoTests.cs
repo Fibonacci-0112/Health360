@@ -171,4 +171,294 @@ public sealed class ProgressPhotoTests : AppTestContext
         Assert.Equal(0, await App.Photos.PendingCountAsync());
         Assert.Equal(2, App.PhotoStorage.Deleted.Count);
     }
+
+    private const string OtherDevicePhoto = "0192f0c0-0000-7000-8000-0000000000bb";
+
+    [Fact]
+    public async Task APhotoWaitingToUploadShowsItsThumbnailAndOpensFullSizeOffline()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+
+        cut.WaitForAssertion(() => Assert.StartsWith("data:image/jpeg;base64,", cut.Find(".photo-thumb img").GetAttribute("src"), StringComparison.Ordinal), Wait);
+        await ClickAsync(() => cut.Find("button[aria-label^='View the Front photo']"));
+
+        cut.WaitForAssertion(() =>
+        {
+            var image = cut.Find(".photo-viewer img");
+            Assert.StartsWith("Front progress photo from 2026-10-30", image.GetAttribute("alt"), StringComparison.Ordinal);
+            Assert.StartsWith("data:image/jpeg;base64,", image.GetAttribute("src"), StringComparison.Ordinal);
+        }, Wait);
+
+        await ClickAsync(cut, "#photo-viewer-close");
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".photo-viewer")), Wait);
+    }
+
+    [Fact]
+    public async Task APhotoFromAnotherDeviceThatHasntUploadedSaysItIsNotAvailableYet()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-29");
+        var cut = await BodyAsync();
+
+        cut.WaitForAssertion(() => Assert.Contains("Not available yet: still uploading from the device it was taken on",
+            cut.Find("[aria-label='Your progress photos']").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(cut.FindAll(".photo-thumb img"));
+
+        await ClickAsync(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"));
+        cut.WaitForAssertion(() => Assert.Contains("hasn't finished uploading from the device it was taken on",
+            cut.Find(".photo-viewer").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(cut.FindAll(".photo-viewer img"));
+    }
+
+    [Fact]
+    public async Task AnUploadedPhotoIsDownloadedAndOfflineItCanBeTriedAgain()
+    {
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-29");
+        App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Contains("Couldn't load the preview", cut.Find("[aria-label='Your progress photos']").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Equal("Offline", cut.Find(".photo-thumb").TextContent.Trim());
+
+        await ClickAsync(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"));
+        cut.WaitForAssertion(() => Assert.Contains("Check your connection", cut.Find(".photo-viewer [role=alert]").TextContent, StringComparison.Ordinal), Wait);
+
+        App.PhotoStorage.Reachable = true;
+        await ClickAsync(cut, "#photo-viewer-retry");
+
+        cut.WaitForAssertion(() => Assert.StartsWith("data:image/jpeg;base64,", cut.Find(".photo-viewer img").GetAttribute("src"), StringComparison.Ordinal), Wait);
+    }
+
+    [Fact]
+    public async Task ASecondPhotoInAPoseShowsTheFirstFadedOverItBeforeItIsKept()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+
+        await ClickAsync(cut, "#photos-take");
+
+        cut.WaitForAssertion(() =>
+        {
+            var ghost = cut.Find(".photo-review .photo-ghost");
+            Assert.StartsWith("Previous Front photo from 2026-10-30", ghost.GetAttribute("alt"), StringComparison.Ordinal);
+            Assert.StartsWith("data:image/jpeg;base64,", ghost.GetAttribute("src"), StringComparison.Ordinal);
+        }, Wait);
+        // Nothing is saved until Keep.
+        Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+        Assert.True(cut.Find("#photos-take").HasAttribute("disabled"));
+
+        await ClickAsync(cut, "#photo-review-ghost");
+        Assert.Empty(cut.FindAll(".photo-ghost"));
+        await ClickAsync(cut, "#photo-review-ghost");
+        cut.Find(".photo-ghost");
+
+        await ClickAsync(cut, "#photo-review-keep");
+
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        Assert.Empty(cut.FindAll(".photo-review"));
+        Assert.Contains("Front photo saved.", cut.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RetakeOpensTheCameraAgainAndCancelSavesNothing()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => cut.Find(".photo-review"), Wait);
+
+        await ClickAsync(cut, "#photo-review-retake");
+        cut.WaitForAssertion(() => cut.Find(".photo-review .photo-ghost"), Wait);
+        Assert.Equal(["take", "take", "take"], App.Camera.Calls);
+
+        await ClickAsync(cut, "#photo-review-cancel");
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".photo-review")), Wait);
+        Assert.False(cut.Find("#photos-take").HasAttribute("disabled"));
+        Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+        Assert.Equal(2, App.PhotoFiles.Files.Count);
+    }
+
+    [Fact]
+    public async Task APreviousPhotoNotUploadedYetIsExplainedAndTheNewOneCanStillBeKept()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "front", "2026-10-29");
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+
+        await ClickAsync(cut, "#photos-take");
+
+        cut.WaitForAssertion(() => Assert.Contains("hasn't finished uploading", cut.Find(".photo-review").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(cut.FindAll(".photo-ghost"));
+        Assert.Empty(cut.FindAll("#photo-review-ghost"));
+
+        await ClickAsync(cut, "#photo-review-keep");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+    }
+
+    [Fact]
+    public async Task AFirstPhotoInAPoseIsSavedWithoutAReviewEvenWhenOtherPosesExist()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+
+        await ClickAsync(() => cut.FindAll("#photos-pose ~ .choices [role=radio]").Single(b => b.TextContent.Trim() == "Back"));
+        await ClickAsync(cut, "#photos-take");
+
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        Assert.Empty(cut.FindAll(".photo-review"));
+    }
+
+    [Fact]
+    public async Task ABackdatedPhotoIsComparedOnlyWithEarlierOnes()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+
+        // Earlier than the only front photo: nothing to line up with, so it saves directly.
+        await ChangeAsync(cut, "#photos-date", "2026-06-01");
+        await ClickAsync(cut, "#photos-pick");
+
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        Assert.Empty(cut.FindAll(".photo-review"));
+    }
+
+    [Fact]
+    public async Task TwoTickedPhotosAreShownSideBySideOlderFirst()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-01");
+        App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+
+        // Newest first in the list: tick the new photo, then the old one.
+        await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
+        Assert.Contains("Tick Compare on one more photo", cut.Markup, StringComparison.Ordinal);
+        await ChangeAsync(cut, "input[aria-label='Compare the Back photo from 2026-10-01']", "on");
+
+        cut.WaitForAssertion(() =>
+        {
+            var images = cut.FindAll(".photo-compare img");
+            Assert.Equal(2, images.Count);
+            Assert.Equal("Back progress photo from 2026-10-01", images[0].GetAttribute("alt"));
+            Assert.Equal("Front progress photo from 2026-10-30", images[1].GetAttribute("alt"));
+        }, Wait);
+
+        await ClickAsync(cut, "#photo-compare-close");
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".photo-compare")), Wait);
+        Assert.All(cut.FindAll(".photo-compare-pick input"), i => Assert.False(i.HasAttribute("checked")));
+    }
+
+    [Fact]
+    public async Task AComparedPhotoNotUploadedYetSaysSoAndAThirdCannotBeTicked()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-01");
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        await ClickAsync(cut, "#photos-take");
+        await ClickAsync(() => cut.FindAll("#photos-pose ~ .choices [role=radio]").Single(b => b.TextContent.Trim() == "Left side"));
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Equal(3, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+
+        await ChangeAsync(cut, "input[aria-label='Compare the Back photo from 2026-10-01']", "on");
+        await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
+
+        // Each side loads on its own, so wait for both.
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("hasn't finished uploading", cut.Find(".photo-compare").TextContent, StringComparison.Ordinal);
+            Assert.Single(cut.FindAll(".photo-compare img"));
+        }, Wait);
+        Assert.True(cut.Find("input[aria-label='Compare the Left side photo from 2026-10-30']").HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public async Task AComparedPhotoThatCouldNotLoadIsLoadedAgainWithoutReloadingTheOther()
+    {
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-01");
+        App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+
+        // Offline: the photo on this device shows, the uploaded one can't be fetched.
+        await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
+        await ChangeAsync(cut, "input[aria-label='Compare the Back photo from 2026-10-01']", "on");
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Single(cut.FindAll(".photo-compare img"));
+            cut.Find("#photo-compare-retry");
+        }, Wait);
+
+        App.PhotoStorage.Reachable = true;
+        await ClickAsync(cut, "#photo-compare-retry");
+
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll(".photo-compare img").Count), Wait);
+        Assert.Empty(cut.FindAll("#photo-compare-retry"));
+    }
+
+    [Fact]
+    public async Task DeletingAPhotoAsksFirstThenRemovesItAndQueuesItsFiles()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+
+        await ClickAsync(() => cut.Find("button[aria-label='Delete the Front photo from 2026-10-30']"));
+        await ClickAsync(() => cut.FindAll("[aria-label='Your progress photos'] button").Single(b => b.TextContent == "Keep"));
+        Assert.Single(await ProgressPhotos.ListAsync(App.Database.Db, ProfileId));
+
+        await ClickAsync(() => cut.Find("button[aria-label='Delete the Front photo from 2026-10-30']"));
+        await ClickAsync(() => cut.Find("button[aria-label='Confirm deleting the Front photo from 2026-10-30']"));
+
+        cut.WaitForAssertion(() => Assert.Contains("No photos yet", cut.Markup, StringComparison.Ordinal), Wait);
+        Assert.Contains("Front photo from 2026-10-30 deleted.", cut.Markup, StringComparison.Ordinal);
+        Assert.Empty(App.PhotoFiles.Files);
+        Assert.Equal(1, await App.Photos.PendingCountAsync());
+    }
+
+    [Fact]
+    public async Task OlderPhotosComeInPages()
+    {
+        App.PhotoStorage.Reachable = true;
+        for (var i = 0; i < 30; i++)
+        {
+            await App.Database.SeedPhotoAsync($"0192f0c0-0000-7000-8000-0000000001{i:D2}", ProfileId, "front", $"2026-09-{i + 1:D2}");
+        }
+
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Equal(24, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        Assert.Contains("6 more", cut.Find("#photos-more").TextContent, StringComparison.Ordinal);
+
+        await ClickAsync(cut, "#photos-more");
+
+        cut.WaitForAssertion(() => Assert.Equal(30, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        Assert.Empty(cut.FindAll("#photos-more"));
+    }
+
+    [Fact]
+    public async Task AnOpenPhotoNotUploadedYetCanBeCheckedAgain()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-29");
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"), Wait);
+        await ClickAsync(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"));
+        cut.WaitForAssertion(() => cut.Find("#photo-viewer-retry"), Wait);
+
+        App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
+        await ClickAsync(cut, "#photo-viewer-retry");
+
+        cut.WaitForAssertion(() => cut.Find(".photo-viewer img"), Wait);
+    }
 }

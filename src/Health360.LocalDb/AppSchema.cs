@@ -175,11 +175,24 @@ public static class AppSchema
             ("created_at", ColumnType.Text)),
         new TableOptions(localOnly: true));
 
+    /// <summary>
+    /// Local only: files of deleted photos still to be removed from Storage (<see cref="PhotoUploader.DeleteAsync"/>).
+    /// The id is the photo's. Cleared with the rest of the database when the owner changes.
+    /// </summary>
+    public static Table PhotoDeletionsTable { get; } = new(
+        PhotoUploader.DeletionsTable,
+        Columns(
+            ("profile_id", ColumnType.Text),
+            ("attempts", ColumnType.Integer),
+            ("error_code", ColumnType.Text),
+            ("created_at", ColumnType.Text)),
+        new TableOptions(localOnly: true));
+
     public static IReadOnlyList<Table> Tables { get; } =
         [
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
             MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, Notes, FailedUploadsTable,
-            PhotoUploadsTable,
+            PhotoUploadsTable, PhotoDeletionsTable,
         ];
 
     public static Schema Schema { get; } = new([.. Tables]);

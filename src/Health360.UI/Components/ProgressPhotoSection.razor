@@ -3,13 +3,20 @@
 @implements IDisposable
 @inject PowerSyncDatabase Db
 @inject PhotoUploader Uploader
+@inject PhotoLibrary Library
 @inject IPhotoCapture Capture
 @inject ProfileService Profiles
 @inject TimeProvider Clock
 
 @* Progress photos (FEATURES.md §1.5): take or pick a photo in a standard pose. It's resized and turned upright on
    the device, stripped of EXIF and location by the upload queue, and goes up when there's a connection. The list
-   says which photos are still on this device and which the server refused, with retry and discard. *@
+   says which photos are still on this device and which the server refused, with retry and discard. Each photo
+   shows its thumbnail and opens full size; one whose files haven't uploaded from the device that took it says so.
+   When there's an earlier photo in the same pose, a new one is shown with that photo over it at 30% (the ghost
+   overlay) before it's saved, so the user can keep it or retake it with the same framing. The system camera can't
+   draw an overlay, so this is a review after capture rather than a live one. Ticking Compare on two photos shows
+   them side by side, older on the left. Delete (with a confirmation) removes a photo's row through the upload queue
+   and its files from Storage once that delete has reached the server. *@
 <section class="card" aria-labelledby="photos-title">
     <h2 id="photos-title">Progress photos</h2>
     <p class="muted small">Private to you unless you share photos with a household member. Location and camera details are removed on this device before upload.</p>
@@ -25,12 +32,50 @@
     <div class="inline">
         @if (Capture.CanTakePhoto)
         {
-            <button type="button" id="photos-take" disabled="@(busy || pose is null)" @onclick="() => AddAsync(take: true)">Take photo</button>
+            <button type="button" id="photos-take" disabled="@(busy || pose is null || photos is null)" @onclick="() => AddAsync(take: true)">Take photo</button>
         }
-        <button type="button" id="photos-pick" class="@(Capture.CanTakePhoto ? "secondary" : "")" disabled="@(busy || pose is null)"
+        <button type="button" id="photos-pick" class="@(Capture.CanTakePhoto ? "secondary" : "")" disabled="@(busy || pose is null || photos is null)"
                 @onclick="() => AddAsync(take: false)">Choose photo</button>
     </div>
-    @if (busy)
+    @if (review is not null)
+    {
+        <figure class="photo-review" aria-labelledby="photo-review-title">
+            <figcaption id="photo-review-title" class="strong">Check the framing</figcaption>
+            <div class="photo-stack">
+                <img src="@review.NewUri" alt="@($"New {PoseName(review.Pose)} photo")" />
+                @if (review.GhostUri is not null && showGhost)
+                {
+                    <img class="photo-ghost" src="@review.GhostUri" alt="@($"Previous {PoseName(review.Pose)} photo from {review.Previous.LocalDate}, faded over the new one")" />
+                }
+            </div>
+            @switch (review.Ghost?.Status)
+            {
+                case null:
+                    <p class="muted small" role="status">Loading the previous photo</p>
+                    break;
+                case PhotoImageStatus.Available:
+                    <p class="muted small">Your @PoseName(review.Pose).ToLowerInvariant() photo from @review.Previous.LocalDate is shown faded on top. Line yourself up with it, or retake.</p>
+                    break;
+                case PhotoImageStatus.NotUploaded:
+                    <p class="muted small" role="status">Your previous @PoseName(review.Pose).ToLowerInvariant() photo hasn't finished uploading from the device it was taken on, so it can't be shown.</p>
+                    break;
+                default:
+                    <p class="muted small" role="status">Your previous @PoseName(review.Pose).ToLowerInvariant() photo couldn't be loaded, so it can't be shown.</p>
+                    break;
+            }
+            <div class="inline">
+                <button type="button" id="photo-review-keep" @onclick="KeepAsync">Keep photo</button>
+                <button type="button" class="secondary" id="photo-review-retake" @onclick="RetakeAsync">@(review.Take ? "Retake" : "Choose another")</button>
+                @if (review.GhostUri is not null)
+                {
+                    <button type="button" class="secondary" id="photo-review-ghost" aria-pressed="@(showGhost ? "true" : "false")"
+                            @onclick="() => showGhost = !showGhost">Show previous</button>
+                }
+                <button type="button" class="secondary" id="photo-review-cancel" @onclick="CancelReview">Cancel</button>
+            </div>
+        </figure>
+    }
+    @if (busy && review is null)
     {
         <p class="muted small" role="status">Saving photo</p>
     }
@@ -50,14 +95,119 @@
     }
     else
     {
+        @if (viewing is not null)
+        {
+            <figure class="photo-viewer" aria-labelledby="photo-viewer-title">
+                <figcaption id="photo-viewer-title" class="strong">@PoseName(viewing.Pose) · @viewing.LocalDate</figcaption>
+                @switch (full?.Status)
+                {
+                    case null:
+                        <p class="muted" role="status">Loading photo</p>
+                        break;
+                    case PhotoImageStatus.Available:
+                        <img src="@fullUri" alt="@($"{PoseName(viewing.Pose)} progress photo from {viewing.LocalDate}")" />
+                        break;
+                    case PhotoImageStatus.NotUploaded:
+                        <p class="muted" role="status">Not available yet. This photo hasn't finished uploading from the device it was taken on; it appears here once that device is online.</p>
+                        <button type="button" class="secondary" id="photo-viewer-retry" @onclick="() => ViewAsync(viewing)">Check again</button>
+                        break;
+                    case PhotoImageStatus.Unreachable:
+                        <p class="error" role="alert">Couldn't load the photo. Check your connection and try again.</p>
+                        <button type="button" class="secondary" id="photo-viewer-retry" @onclick="() => ViewAsync(viewing)">Try again</button>
+                        break;
+                    default:
+                        <p class="error" role="alert">The server wouldn't send this photo.</p>
+                        break;
+                }
+                <button type="button" class="secondary" id="photo-viewer-close" @onclick="CloseViewer">Close</button>
+            </figure>
+        }
+
+        @if (compared.Count == 2)
+        {
+            <figure class="photo-compare" aria-labelledby="photo-compare-title">
+                <figcaption id="photo-compare-title" class="strong">Side by side</figcaption>
+                <div class="photo-compare-grid">
+                    @foreach (var photo in compared)
+                    {
+                        <div @key="photo.Id" class="photo-compare-cell">
+                            <span class="small">@PoseName(photo.Pose) · @photo.LocalDate</span>
+                            @switch (compareImages.GetValueOrDefault(photo.Id)?.Status)
+                            {
+                                case null:
+                                    <p class="muted small" role="status">Loading photo</p>
+                                    break;
+                                case PhotoImageStatus.Available:
+                                    <img src="@compareUris[photo.Id]" alt="@($"{PoseName(photo.Pose)} progress photo from {photo.LocalDate}")" />
+                                    break;
+                                case PhotoImageStatus.NotUploaded:
+                                    <p class="muted small" role="status">Not available yet. It hasn't finished uploading from the device it was taken on.</p>
+                                    break;
+                                case PhotoImageStatus.Unreachable:
+                                    <p class="error small" role="alert">Couldn't load this photo. Check your connection.</p>
+                                    break;
+                                default:
+                                    <p class="error small" role="alert">The server wouldn't send this photo.</p>
+                                    break;
+                            }
+                        </div>
+                    }
+                </div>
+                <div class="inline">
+                    @if (compareImages.Values.Any(i => i?.Status == PhotoImageStatus.Unreachable))
+                    {
+                        <button type="button" class="secondary" id="photo-compare-retry" @onclick="RetryMissingComparison">Try again</button>
+                    }
+                    <button type="button" class="secondary" id="photo-compare-close" @onclick="ClearComparison">Close comparison</button>
+                </div>
+            </figure>
+        }
+        else if (compared.Count == 1)
+        {
+            <p class="muted small" role="status">Tick Compare on one more photo to see them side by side.</p>
+        }
+
         <ul class="measurement-list" aria-label="Your progress photos">
-            @foreach (var photo in photos)
+            @foreach (var photo in photos.Take(shown))
             {
                 <li @key="photo.Id" class="measurement">
+                    <button type="button" class="photo-thumb" aria-label="@($"View the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                            @onclick="() => ViewAsync(photo)">
+                        @if (thumbUris.TryGetValue(photo.Id, out var thumbUri))
+                        {
+                            <img src="@thumbUri" alt="" />
+                        }
+                        else
+                        {
+                            <span aria-hidden="true">@Placeholder(thumbs.GetValueOrDefault(photo.Id))</span>
+                        }
+                    </button>
                     <div class="measurement-text">
                         <span class="strong">@PoseName(photo.Pose)</span>
-                        <span class="muted small">@photo.LocalDate · @StateText(photo)</span>
+                        <span class="muted small">@photo.LocalDate · @StateText(photo, thumbs.GetValueOrDefault(photo.Id))</span>
                     </div>
+                    <label class="photo-compare-pick small">
+                        <input type="checkbox" checked="@IsCompared(photo.Id)" disabled="@(compared.Count == 2 && !IsCompared(photo.Id))"
+                               aria-label="@($"Compare the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                               @onchange="() => ToggleCompare(photo)" />
+                        Compare
+                    </label>
+                    @if (photo.State != PhotoUploadState.Failed)
+                    {
+                        <div class="inline">
+                            @if (confirmingDelete == photo.Id)
+                            {
+                                <button type="button" class="danger" disabled="@busy" aria-label="@($"Confirm deleting the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                                        @onclick="() => DeleteAsync(photo)">Delete for good</button>
+                                <button type="button" class="secondary" disabled="@busy" @onclick="() => confirmingDelete = null">Keep</button>
+                            }
+                            else
+                            {
+                                <button type="button" class="secondary" disabled="@busy" aria-label="@($"Delete the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                                        @onclick="() => confirmingDelete = photo.Id">Delete</button>
+                            }
+                        </div>
+                    }
                     @if (photo.State == PhotoUploadState.Failed)
                     {
                         <div class="inline">
@@ -73,6 +223,10 @@
                 </li>
             }
         </ul>
+        @if (photos.Count > shown)
+        {
+            <button type="button" class="secondary" id="photos-more" @onclick="ShowMore">Show older photos (@(photos.Count - shown) more)</button>
+        }
     }
 </section>
 
@@ -100,6 +254,17 @@
 
     private DateOnly Today => DateOnly.FromDateTime(Clock.GetLocalNow().DateTime);
     private bool busy;
+
+    // Thumbnails by photo id (null entry: loading), the photo open in the viewer and its full image (null: loading).
+    private readonly Dictionary<string, PhotoImage?> thumbs = new(StringComparer.Ordinal);
+
+    // Each image's data URI, encoded once when it loads rather than on every render.
+    private readonly Dictionary<string, string> thumbUris = new(StringComparer.Ordinal);
+    private ProgressPhotoRow? viewing;
+    private PhotoImage? full;
+    private string? fullUri;
+    private CancellationTokenSource? viewLoad;
+    private int viewVersion;
     private string? saved;
     private string? error;
 
@@ -122,8 +287,22 @@
 
     private static string PoseName(string code) => PoseLabels.TryGetValue(code, out var name) ? name : code;
 
-    private static string StateText(ProgressPhotoRow photo) => photo.State switch
+    private static string Placeholder(PhotoImage? thumb) => thumb?.Status switch
     {
+        null => "…",
+        PhotoImageStatus.NotUploaded => "Not yet",
+        PhotoImageStatus.Unreachable => "Offline",
+        _ => "Error",
+    };
+
+    private static string DataUri(byte[] jpeg) => "data:image/jpeg;base64," + Convert.ToBase64String(jpeg);
+
+    private static string StateText(ProgressPhotoRow photo, PhotoImage? thumb) => photo.State switch
+    {
+        // Nothing of it is waiting here, but Storage has no file: another device took it and hasn't uploaded it yet.
+        PhotoUploadState.Uploaded when thumb?.Status == PhotoImageStatus.NotUploaded => "Not available yet: still uploading from the device it was taken on",
+        PhotoUploadState.Uploaded when thumb?.Status == PhotoImageStatus.Unreachable => "Uploaded. Couldn't load the preview; check your connection",
+        PhotoUploadState.Uploaded when thumb?.Status == PhotoImageStatus.Refused => "Uploaded. The server wouldn't send the preview",
         PhotoUploadState.Pending => "Waiting to upload",
         PhotoUploadState.Failed when photo.FilesFailed => $"Upload refused ({photo.ErrorCode ?? "no reason given"})",
         // A refused row is listed with the other rejected changes in Settings, which can retry it.
@@ -156,6 +335,13 @@
         watch = null;
         watchedProfile = profileId;
         photos = null;
+        thumbs.Clear();
+        thumbUris.Clear();
+        shown = PageSize;
+        CloseViewer();
+        ClearComparison();
+        // The photo was for the profile that left; a sign-out or switch also changes the generation Keep would check.
+        EndReview();
         if (profileId is null)
         {
             return;
@@ -172,6 +358,7 @@
                     await InvokeAsync(() =>
                     {
                         photos = rows;
+                        LoadThumbnails(profileId, rows, token);
                         StateHasChanged();
                     });
                 }
@@ -188,6 +375,347 @@
                 });
             }
         }, CancellationToken.None);
+
+        // A photo not uploaded yet from another device changes nothing here when its files arrive (they aren't synced
+        // rows), so thumbnails that weren't there are tried again now and then while the tab is open.
+        _ = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(PhotoUploader.RetryInterval);
+            try
+            {
+                while (await timer.WaitForNextTickAsync(token))
+                {
+                    await InvokeAsync(() =>
+                    {
+                        if (photos is { } rows && !token.IsCancellationRequested)
+                        {
+                            LoadThumbnails(profileId, rows, token);
+                            RetryMissingComparison();
+                            RetryMissingViewer();
+                            StateHasChanged();
+                        }
+                    });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Loads the thumbnails not yet shown. One that wasn't there (not uploaded yet, or offline) is tried again when the
+    /// list next changes, such as when sync brings news of it.
+    /// </summary>
+    // How many photos the list shows, newest first; older ones come in pages, so thumbnails (and their memory and
+    // downloads) grow with what's on screen rather than the whole history.
+    private const int PageSize = 24;
+    private int shown = PageSize;
+
+    // At most this many thumbnails download at once.
+    private readonly SemaphoreSlim thumbnailSlots = new(4, 4);
+
+    private void ShowMore()
+    {
+        shown += PageSize;
+        if (watchedProfile is { } profileId && photos is { } rows && watch is { } w)
+        {
+            LoadThumbnails(profileId, rows, w.Token);
+        }
+    }
+
+    /// <summary>Loads the open photo again if it wasn't there (not uploaded yet, or offline), on the tab's periodic check.</summary>
+    private void RetryMissingViewer()
+    {
+        if (viewing is { } open && full?.Status is PhotoImageStatus.NotUploaded or PhotoImageStatus.Unreachable)
+        {
+            _ = InvokeAsync(async () =>
+            {
+                await ViewAsync(open);
+                StateHasChanged();
+            });
+        }
+    }
+
+    private void LoadThumbnails(string profileId, IReadOnlyList<ProgressPhotoRow> rows, CancellationToken token)
+    {
+        foreach (var id in thumbs.Keys.Except(rows.Select(r => r.Id)).ToList())
+        {
+            // Deleted here or on another device: its cached copy goes too.
+            thumbs.Remove(id);
+            thumbUris.Remove(id);
+            Library.Forget(id);
+        }
+
+        // A compared photo was deleted or discarded meanwhile.
+        if (compared.Any(c => !rows.Any(r => r.Id == c.Id)))
+        {
+            compared = [.. compared.Where(c => rows.Any(r => r.Id == c.Id))];
+            LoadComparison();
+        }
+
+        // The open photo was deleted or discarded meanwhile.
+        if (viewing is not null && !rows.Any(r => r.Id == viewing.Id))
+        {
+            CloseViewer();
+        }
+
+        // Thumbnails of photos no longer on screen (a profile's list shrank) are let go; only shown ones load.
+        var visible = rows.Take(shown).Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var id in thumbUris.Keys.Where(id => !visible.Contains(id)).ToList())
+        {
+            thumbs.Remove(id);
+            thumbUris.Remove(id);
+        }
+
+        foreach (var row in rows.Take(shown))
+        {
+            // Pending, shown, or refused for good (retrying a refusal or a broken file would fail the same way).
+            if (thumbs.TryGetValue(row.Id, out var known) && (known is null || known.Status is PhotoImageStatus.Available or PhotoImageStatus.Refused))
+            {
+                continue;
+            }
+
+            thumbs[row.Id] = null;
+            var id = row.Id;
+            _ = Task.Run(async () =>
+            {
+                PhotoImage image;
+                string? uri = null;
+                try
+                {
+                    await thumbnailSlots.WaitAsync(token);
+                    try
+                    {
+                        image = await Library.ThumbnailAsync(profileId, id, token);
+                    }
+                    finally
+                    {
+                        thumbnailSlots.Release();
+                    }
+
+                    uri = image.Jpeg is { } jpeg ? DataUri(jpeg) : null;
+                    // Only the data URI is kept here; the bytes stay in the library's bounded cache.
+                    image = image with { Jpeg = null };
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return;
+                }
+                catch (Exception)
+                {
+                    image = PhotoImage.Unreachable;
+                }
+
+                await InvokeAsync(() =>
+                {
+                    if (!token.IsCancellationRequested && thumbs.ContainsKey(id))
+                    {
+                        thumbs[id] = image;
+                        if (uri is not null)
+                        {
+                            thumbUris[id] = uri;
+                        }
+
+                        StateHasChanged();
+                    }
+                });
+            }, CancellationToken.None);
+        }
+    }
+
+    // The photos ticked for comparison (at most two, older first) and their full images and data URIs.
+    private List<ProgressPhotoRow> compared = [];
+    private readonly Dictionary<string, PhotoImage?> compareImages = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> compareUris = new(StringComparer.Ordinal);
+    private CancellationTokenSource? compareLoad;
+
+    private bool IsCompared(string id) => compared.Any(p => p.Id == id);
+
+    private void ToggleCompare(ProgressPhotoRow photo)
+    {
+        if (IsCompared(photo.Id))
+        {
+            compared = [.. compared.Where(p => p.Id != photo.Id)];
+        }
+        else if (compared.Count < 2)
+        {
+            compared = [.. compared.Append(photo).OrderBy(p => p.TakenAt, StringComparer.Ordinal).ThenBy(p => p.Id, StringComparer.Ordinal)];
+        }
+
+        LoadComparison();
+    }
+
+    /// <summary>Loads the full photos once two are ticked; anything less cancels a load in progress.</summary>
+    private void LoadComparison()
+    {
+        compareLoad?.Cancel();
+        compareLoad?.Dispose();
+        compareLoad = null;
+        compareImages.Clear();
+        compareUris.Clear();
+        if (compared.Count != 2 || watchedProfile is not { } profileId)
+        {
+            return;
+        }
+
+        compareLoad = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+        foreach (var photo in compared)
+        {
+            LoadComparedImage(profileId, photo.Id, compareLoad.Token);
+        }
+    }
+
+    /// <summary>
+    /// Loads again the compared photos that weren't there (not uploaded yet, or offline), leaving a shown one as it is.
+    /// The tab's periodic retry calls this, since files arriving from another device change no synced row.
+    /// </summary>
+    private void RetryMissingComparison()
+    {
+        if (compareLoad is not { } load || watchedProfile is not { } profileId)
+        {
+            return;
+        }
+
+        foreach (var (id, image) in compareImages.ToList())
+        {
+            if (image?.Status is PhotoImageStatus.NotUploaded or PhotoImageStatus.Unreachable)
+            {
+                LoadComparedImage(profileId, id, load.Token);
+            }
+        }
+    }
+
+    private void LoadComparedImage(string profileId, string id, CancellationToken token)
+    {
+        compareImages[id] = null;
+        _ = Task.Run(async () =>
+        {
+            PhotoImage image;
+            try
+            {
+                image = await Library.PhotoAsync(profileId, id, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception)
+            {
+                image = PhotoImage.Unreachable;
+            }
+
+            var uri = image.Jpeg is { } jpeg ? DataUri(jpeg) : null;
+            await InvokeAsync(() =>
+            {
+                if (!token.IsCancellationRequested && compareImages.ContainsKey(id))
+                {
+                    compareImages[id] = image;
+                    if (uri is not null)
+                    {
+                        compareUris[id] = uri;
+                    }
+
+                    StateHasChanged();
+                }
+            });
+        }, CancellationToken.None);
+    }
+
+    private void ClearComparison()
+    {
+        compared = [];
+        LoadComparison();
+    }
+
+    private async Task ViewAsync(ProgressPhotoRow photo)
+    {
+        var profileId = watchedProfile;
+        if (profileId is null)
+        {
+            return;
+        }
+
+        CloseViewer();
+        var version = viewVersion;
+        viewing = photo;
+        // Cancelled when the viewer closes, another photo opens, or the profile changes.
+        viewLoad = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+        var token = viewLoad.Token;
+        PhotoImage image;
+        string? uri = null;
+        try
+        {
+            image = await Library.PhotoAsync(profileId, photo.Id, token);
+            uri = image.Jpeg is { } jpeg ? DataUri(jpeg) : null;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception)
+        {
+            image = PhotoImage.Unreachable;
+        }
+
+        // Another photo was opened, or the viewer closed, meanwhile.
+        if (version == viewVersion && !token.IsCancellationRequested)
+        {
+            full = image;
+            fullUri = uri;
+        }
+    }
+
+    private void CloseViewer()
+    {
+        viewVersion++;
+        viewLoad?.Cancel();
+        viewLoad?.Dispose();
+        viewLoad = null;
+        viewing = null;
+        full = null;
+        fullUri = null;
+    }
+
+    /// <summary>A photo taken or chosen and waiting for Keep, Retake or Cancel, with the previous photo in its pose.</summary>
+    private sealed class PhotoReview(CapturedPhoto captured, bool take, int generation, string profileId, string pose, ProgressPhotoRow previous)
+    {
+        public CapturedPhoto Captured { get; } = captured;
+
+        public bool Take { get; } = take;
+
+        public int Generation { get; } = generation;
+
+        public string ProfileId { get; } = profileId;
+
+        public string Pose { get; } = pose;
+
+        public ProgressPhotoRow Previous { get; } = previous;
+
+        public string NewUri { get; } = DataUri(captured.Photo);
+
+        public PhotoImage? Ghost { get; set; }
+
+        public string? GhostUri { get; set; }
+
+        public CancellationTokenSource Loading { get; } = new();
+    }
+
+    private PhotoReview? review;
+    private bool showGhost = true;
+
+    /// <summary>
+    /// The newest photo in this pose on or before the day the new one will be dated (the list is newest first), which
+    /// the new one is lined up against. A backdated photo is compared with the one before it, not a later one.
+    /// </summary>
+    private ProgressPhotoRow? PreviousIn(string code, DateOnly day)
+    {
+        var last = day.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        return photos?.FirstOrDefault(p => p.Pose == code && string.CompareOrdinal(p.LocalDate, last) <= 0);
     }
 
     private async Task AddAsync(bool take)
@@ -220,26 +748,193 @@
                 return;
             }
 
-            // Resolved now, not before the picker opened: one left open across midnight takes the new day.
-            var date = chosenDate ?? Today;
-            await Uploader.AddAsync(profileId, pose, TakenAt(date), date, captured.Photo, captured.Thumbnail, generation);
-            saved = $"{PoseName(pose)} photo saved. It uploads when you're online.";
-            chosenDate = null;
+            // Signed out, switched account or profile while the camera was open: don't show this photo to whoever is
+            // here now (Keep would be refused anyway).
+            if (Profiles.Profile?.Id != profileId || Uploader.ClearGeneration != generation)
+            {
+                error = "Your account changed while the photo was being taken or saved, so it wasn't kept.";
+                return;
+            }
+
+            // With an earlier photo in this pose, show the ghost overlay first; the save happens on Keep.
+            if (PreviousIn(pose, chosenDate ?? Today) is { } previous)
+            {
+                StartReview(new PhotoReview(captured, take, generation, profileId, pose, previous));
+                return;
+            }
+
+            await SaveAsync(captured, profileId, pose, generation);
         }
-        catch (ArgumentException)
+        catch (Exception e)
         {
-            error = "That image couldn't be used. Choose a JPEG photo and try again.";
-        }
-        catch (InvalidOperationException)
-        {
-            error = "Your account changed while the photo was being taken or saved, so it wasn't kept.";
-        }
-        catch (Exception)
-        {
-            error = "The photo couldn't be saved on this device. Try again.";
+            error = SaveError(e);
         }
         finally
         {
+            busy = review is not null;
+        }
+    }
+
+    private void StartReview(PhotoReview next)
+    {
+        review = next;
+        showGhost = true;
+        var token = next.Loading.Token;
+        _ = Task.Run(async () =>
+        {
+            PhotoImage image;
+            try
+            {
+                image = await Library.PhotoAsync(next.ProfileId, next.Previous.Id, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception)
+            {
+                image = PhotoImage.Unreachable;
+            }
+
+            var uri = image.Jpeg is { } jpeg ? DataUri(jpeg) : null;
+            await InvokeAsync(() =>
+            {
+                if (ReferenceEquals(review, next) && !token.IsCancellationRequested)
+                {
+                    next.Ghost = image;
+                    next.GhostUri = uri;
+                    StateHasChanged();
+                }
+            });
+        }, CancellationToken.None);
+    }
+
+    private void EndReview()
+    {
+        if (review is { } ending)
+        {
+            ending.Loading.Cancel();
+            ending.Loading.Dispose();
+        }
+
+        review = null;
+        busy = false;
+    }
+
+    private async Task KeepAsync()
+    {
+        if (review is not { } kept)
+        {
+            return;
+        }
+
+        EndReview();
+        busy = true;
+        try
+        {
+            await SaveAsync(kept.Captured, kept.ProfileId, kept.Pose, kept.Generation);
+        }
+        catch (Exception e)
+        {
+            error = SaveError(e);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task RetakeAsync()
+    {
+        if (review is not { } previous)
+        {
+            return;
+        }
+
+        EndReview();
+        error = null;
+        busy = true;
+        try
+        {
+            var captured = previous.Take ? await Capture.TakeAsync() : await Capture.PickAsync();
+            if (captured is null)
+            {
+                return;
+            }
+
+            // Signed out, switched account or profile while the camera was open: the photo isn't this screen's any more.
+            if (Profiles.Profile?.Id != previous.ProfileId || Uploader.ClearGeneration != previous.Generation)
+            {
+                error = "Your account changed while the photo was being taken or saved, so it wasn't kept.";
+                return;
+            }
+
+            // The same account check as the first capture: the generation read before the camera first opened.
+            StartReview(new PhotoReview(captured, previous.Take, previous.Generation, previous.ProfileId, previous.Pose, previous.Previous));
+        }
+        catch (Exception e)
+        {
+            error = SaveError(e);
+        }
+        finally
+        {
+            busy = review is not null;
+        }
+    }
+
+    private void CancelReview()
+    {
+        EndReview();
+        saved = "Photo not saved.";
+    }
+
+    private static string SaveError(Exception e) => e switch
+    {
+        ArgumentException => "That image couldn't be used. Choose a JPEG photo and try again.",
+        InvalidOperationException => "Your account changed while the photo was being taken or saved, so it wasn't kept.",
+        _ => "The photo couldn't be saved on this device. Try again.",
+    };
+
+    private async Task SaveAsync(CapturedPhoto captured, string profileId, string pose, int generation)
+    {
+        // Resolved now, not before the picker opened: one left open across midnight (or a review left open) takes the new day.
+        var date = chosenDate ?? Today;
+        await Uploader.AddAsync(profileId, pose, TakenAt(date), date, captured.Photo, captured.Thumbnail, generation);
+        saved = $"{PoseName(pose)} photo saved. It uploads when you're online.";
+        chosenDate = null;
+    }
+
+    // The photo whose Delete was pressed and now asks for confirmation.
+    private string? confirmingDelete;
+
+    private async Task DeleteAsync(ProgressPhotoRow photo)
+    {
+        var profileId = watchedProfile;
+        if (busy || profileId is null)
+        {
+            return;
+        }
+
+        busy = true;
+        error = null;
+        saved = null;
+        try
+        {
+            await Uploader.DeleteAsync(profileId, photo.Id);
+            Library.Forget(photo.Id);
+            saved = $"{PoseName(photo.Pose)} photo from {photo.LocalDate} deleted. Its files are removed from the server when you're online.";
+        }
+        catch (InvalidOperationException)
+        {
+            error = "That photo is already gone.";
+        }
+        catch (Exception)
+        {
+            error = "Couldn't delete the photo. Try again.";
+        }
+        finally
+        {
+            confirmingDelete = null;
             busy = false;
         }
     }
@@ -306,6 +1001,10 @@
         Profiles.Changed -= ProfileChanged;
         stop.Cancel();
         watch?.Dispose();
+        viewLoad?.Dispose();
+        compareLoad?.Dispose();
+        EndReview();
+        thumbnailSlots.Dispose();
         stop.Dispose();
     }
 }
