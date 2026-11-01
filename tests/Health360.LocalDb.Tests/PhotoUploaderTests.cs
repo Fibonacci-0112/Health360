@@ -546,7 +546,7 @@ public sealed class PhotoUploaderTests
         try
         {
             await using var t = await TestDatabase.OpenAsync();
-        await t.SeedProfileAsync(Profile);
+            await t.SeedProfileAsync(Profile);
             var store = new DirectoryPhotoFileStore(root);
             using var uploader = new PhotoUploader(t.Db, store, new FakePhotoStorage(), Clock);
             Directory.CreateDirectory(root);
