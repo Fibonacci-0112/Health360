@@ -643,3 +643,39 @@ button.compact {
     flex-direction: column;
     gap: 2px;
 }
+
+/* Progress photos: a thumbnail per photo in the list, and the open photo above it. */
+.photo-thumb {
+    width: 56px;
+    height: 56px;
+    padding: 0;
+    flex: none;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    font-size: 0.75rem;
+}
+
+.photo-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.photo-viewer {
+    margin: var(--space-sm) 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-sm);
+}
+
+.photo-viewer img {
+    max-width: 100%;
+    max-height: 70vh;
+    object-fit: contain;
+}

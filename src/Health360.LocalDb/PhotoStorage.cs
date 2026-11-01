@@ -19,6 +19,13 @@ public interface IPhotoStorage
     /// <see cref="PhotoUploadException"/> when it can't.
     /// </summary>
     Task DeleteAsync(string path, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The file at <paramref name="path"/>, read with the owner's session, or null when Storage has no such file (its
+    /// row synced but the device that took it hasn't uploaded it yet). Throws <see cref="PhotoUploadException"/> when
+    /// it can't tell.
+    /// </summary>
+    Task<byte[]?> DownloadAsync(string path, CancellationToken cancellationToken);
 }
 
 /// <summary>A failed file upload. <see cref="Permanent"/> ones fail the same way on every retry.</summary>
@@ -96,13 +103,48 @@ public sealed class SupabasePhotoStorage(HttpClient http, ISupabaseSession sessi
             $"Storage answered {status}.", IsPermanent(response.StatusCode, body), status.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
-    private async Task<HttpRequestMessage> RequestAsync(HttpMethod method, string path, CancellationToken cancellationToken)
+    public async Task<byte[]?> DownloadAsync(string path, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        // The authenticated route, not a signed URL: no bearer URL for the photo ever exists to leak into logs or the
+        // web view, and the bucket's select policy decides who may read it.
+        using var request = await RequestAsync(HttpMethod.Get, path, cancellationToken, "authenticated/").ConfigureAwait(false);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.IsSuccessStatusCode)
+        {
+            try
+            {
+                return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (HttpRequestException error)
+            {
+                throw new PhotoUploadException("Storage could not be reached.", error);
+            }
+        }
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.BadRequest && InnerStatus(body) == "404")
+        {
+            return null;
+        }
+
+        var status = (int)response.StatusCode;
+        throw new PhotoUploadException(
+            $"Storage answered {status}.", IsPermanent(response.StatusCode, body), status.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private async Task<HttpRequestMessage> RequestAsync(HttpMethod method, string path, CancellationToken cancellationToken, string route = "")
     {
         // Not the owner's session: wait for them rather than touch their photos as someone else.
         var token = await OwnerSession.TokenAsync(session, owner, cancellationToken).ConfigureAwait(false)
             ?? throw new PhotoUploadException("Not signed in as the local database's owner.", permanent: false, code: null);
         var segments = string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
-        var request = new HttpRequestMessage(method, $"storage/v1/object/{Bucket}/{segments}");
+        var request = new HttpRequestMessage(method, $"storage/v1/object/{route}{Bucket}/{segments}");
         request.Headers.Add("apikey", apiKey);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return request;

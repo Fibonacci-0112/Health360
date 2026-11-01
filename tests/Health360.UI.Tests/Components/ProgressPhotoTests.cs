@@ -171,4 +171,60 @@ public sealed class ProgressPhotoTests : AppTestContext
         Assert.Equal(0, await App.Photos.PendingCountAsync());
         Assert.Equal(2, App.PhotoStorage.Deleted.Count);
     }
+
+    private const string OtherDevicePhoto = "0192f0c0-0000-7000-8000-0000000000bb";
+
+    [Fact]
+    public async Task APhotoWaitingToUploadShowsItsThumbnailAndOpensFullSizeOffline()
+    {
+        var cut = await BodyAsync();
+        await ClickAsync(cut, "#photos-take");
+
+        cut.WaitForAssertion(() => Assert.StartsWith("data:image/jpeg;base64,", cut.Find(".photo-thumb img").GetAttribute("src"), StringComparison.Ordinal), Wait);
+        await ClickAsync(() => cut.Find("button[aria-label^='View the Front photo']"));
+
+        cut.WaitForAssertion(() =>
+        {
+            var image = cut.Find(".photo-viewer img");
+            Assert.StartsWith("Front progress photo from 2026-10-30", image.GetAttribute("alt"), StringComparison.Ordinal);
+            Assert.StartsWith("data:image/jpeg;base64,", image.GetAttribute("src"), StringComparison.Ordinal);
+        }, Wait);
+
+        await ClickAsync(cut, "#photo-viewer-close");
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".photo-viewer")), Wait);
+    }
+
+    [Fact]
+    public async Task APhotoFromAnotherDeviceThatHasntUploadedSaysItIsNotAvailableYet()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-29");
+        var cut = await BodyAsync();
+
+        cut.WaitForAssertion(() => Assert.Contains("Not available yet: still uploading from the device it was taken on",
+            cut.Find("[aria-label='Your progress photos']").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(cut.FindAll(".photo-thumb img"));
+
+        await ClickAsync(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"));
+        cut.WaitForAssertion(() => Assert.Contains("hasn't finished uploading from the device it was taken on",
+            cut.Find(".photo-viewer").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(cut.FindAll(".photo-viewer img"));
+    }
+
+    [Fact]
+    public async Task AnUploadedPhotoIsDownloadedAndOfflineItCanBeTriedAgain()
+    {
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-29");
+        App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"), Wait);
+
+        await ClickAsync(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"));
+        cut.WaitForAssertion(() => Assert.Contains("Check your connection", cut.Find(".photo-viewer [role=alert]").TextContent, StringComparison.Ordinal), Wait);
+
+        App.PhotoStorage.Reachable = true;
+        await ClickAsync(cut, "#photo-viewer-retry");
+
+        cut.WaitForAssertion(() => Assert.StartsWith("data:image/jpeg;base64,", cut.Find(".photo-viewer img").GetAttribute("src"), StringComparison.Ordinal), Wait);
+    }
 }

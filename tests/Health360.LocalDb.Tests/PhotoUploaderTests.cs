@@ -521,6 +521,58 @@ public sealed class PhotoUploaderTests
         Assert.Equal("image/jpeg", request.ContentType);
     }
 
+    [Fact]
+    public async Task StorageDownloadsAsTheOwnerThroughTheAuthenticatedRoute()
+    {
+        var (storage, server) = Storage();
+        server.Replies.Enqueue(HttpStatusCode.OK);
+        server.Body = "jpeg";
+
+        var bytes = await storage.DownloadAsync($"{Profile}/x_thumb.jpg", Ct);
+
+        Assert.Equal("jpeg"u8.ToArray(), bytes);
+        var request = Assert.Single(server.Requests);
+        Assert.Equal($"GET /storage/v1/object/authenticated/progress-photos/{Profile}/x_thumb.jpg", request.Line);
+        Assert.Equal("Bearer user-token", request.Headers["Authorization"]);
+        Assert.Equal("anon-key", request.Headers["apikey"]);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, "{}")]
+    [InlineData(HttpStatusCode.BadRequest, """{"statusCode":"404","error":"not_found","message":"Object not found"}""")]
+    public async Task StorageReportsAFileNotUploadedYetAsMissing(HttpStatusCode status, string body)
+    {
+        var (storage, server) = Storage();
+        server.Replies.Enqueue(status);
+        server.Body = body;
+
+        Assert.Null(await storage.DownloadAsync($"{Profile}/x.jpg", Ct));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden, true)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, false)]
+    [InlineData(HttpStatusCode.Unauthorized, false)]
+    public async Task StorageDownloadFailuresAreNotMissingFiles(HttpStatusCode status, bool permanent)
+    {
+        var (storage, server) = Storage();
+        server.Replies.Enqueue(status);
+
+        var error = await Assert.ThrowsAsync<PhotoUploadException>(() => storage.DownloadAsync($"{Profile}/x.jpg", Ct));
+
+        Assert.Equal(permanent, error.Permanent);
+    }
+
+    [Fact]
+    public async Task StorageDownloadsNothingWithoutTheOwnersSession()
+    {
+        var (storage, server) = Storage(owner: "user-b");
+
+        await Assert.ThrowsAsync<PhotoUploadException>(() => storage.DownloadAsync($"{Profile}/x.jpg", Ct));
+
+        Assert.Empty(server.Requests);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Forbidden, true)]
     [InlineData(HttpStatusCode.BadRequest, true)]
@@ -765,6 +817,27 @@ public sealed class FakePhotoStorage : IPhotoStorage
 
     public List<string> Deleted { get; } = [];
 
+    /// <summary>Files Storage holds, by path, for downloads.</summary>
+    public Dictionary<string, byte[]> Stored { get; } = new(StringComparer.Ordinal);
+
+    public List<string> Downloads { get; } = [];
+
+    public Task<byte[]?> DownloadAsync(string path, CancellationToken cancellationToken)
+    {
+        if (Offline)
+        {
+            throw new PhotoUploadException("offline", permanent: false, code: null);
+        }
+
+        if (Refuse.Any(id => path.Contains(id, StringComparison.Ordinal)))
+        {
+            throw new PhotoUploadException("denied", permanent: true, code: "403");
+        }
+
+        Downloads.Add(path);
+        return Task.FromResult(Stored.TryGetValue(path, out var jpeg) ? jpeg : null);
+    }
+
     public Task DeleteAsync(string path, CancellationToken cancellationToken)
     {
         if (Offline)
@@ -798,6 +871,8 @@ public sealed class FakePhotoStorage : IPhotoStorage
 public sealed class BlockingPhotoStorage : IPhotoStorage
 {
     public Task DeleteAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task<byte[]?> DownloadAsync(string path, CancellationToken cancellationToken) => Task.FromResult<byte[]?>(null);
 
     public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

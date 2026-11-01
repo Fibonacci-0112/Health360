@@ -3,13 +3,15 @@
 @implements IDisposable
 @inject PowerSyncDatabase Db
 @inject PhotoUploader Uploader
+@inject PhotoLibrary Library
 @inject IPhotoCapture Capture
 @inject ProfileService Profiles
 @inject TimeProvider Clock
 
 @* Progress photos (FEATURES.md §1.5): take or pick a photo in a standard pose. It's resized and turned upright on
    the device, stripped of EXIF and location by the upload queue, and goes up when there's a connection. The list
-   says which photos are still on this device and which the server refused, with retry and discard. *@
+   says which photos are still on this device and which the server refused, with retry and discard. Each photo
+   shows its thumbnail and opens full size; one whose files haven't uploaded from the device that took it says so. *@
 <section class="card" aria-labelledby="photos-title">
     <h2 id="photos-title">Progress photos</h2>
     <p class="muted small">Private to you unless you share photos with a household member. Location and camera details are removed on this device before upload.</p>
@@ -50,13 +52,51 @@
     }
     else
     {
+        @if (viewing is not null)
+        {
+            <figure class="photo-viewer" aria-labelledby="photo-viewer-title">
+                <figcaption id="photo-viewer-title" class="strong">@PoseName(viewing.Pose) · @viewing.LocalDate</figcaption>
+                @switch (full?.Status)
+                {
+                    case null:
+                        <p class="muted" role="status">Loading photo</p>
+                        break;
+                    case PhotoImageStatus.Available:
+                        <img src="@DataUri(full.Jpeg!)" alt="@($"{PoseName(viewing.Pose)} progress photo from {viewing.LocalDate}")" />
+                        break;
+                    case PhotoImageStatus.NotUploaded:
+                        <p class="muted" role="status">Not available yet. This photo hasn't finished uploading from the device it was taken on; it appears here once that device is online.</p>
+                        break;
+                    case PhotoImageStatus.Unreachable:
+                        <p class="error" role="alert">Couldn't load the photo. Check your connection and try again.</p>
+                        <button type="button" class="secondary" id="photo-viewer-retry" @onclick="() => ViewAsync(viewing)">Try again</button>
+                        break;
+                    default:
+                        <p class="error" role="alert">The server wouldn't send this photo.</p>
+                        break;
+                }
+                <button type="button" class="secondary" id="photo-viewer-close" @onclick="CloseViewer">Close</button>
+            </figure>
+        }
+
         <ul class="measurement-list" aria-label="Your progress photos">
             @foreach (var photo in photos)
             {
                 <li @key="photo.Id" class="measurement">
+                    <button type="button" class="photo-thumb" aria-label="@($"View the {PoseName(photo.Pose)} photo from {photo.LocalDate}")"
+                            @onclick="() => ViewAsync(photo)">
+                        @if (thumbs.GetValueOrDefault(photo.Id) is { Status: PhotoImageStatus.Available, Jpeg: { } thumb })
+                        {
+                            <img src="@DataUri(thumb)" alt="" />
+                        }
+                        else
+                        {
+                            <span aria-hidden="true">@(thumbs.GetValueOrDefault(photo.Id)?.Status == PhotoImageStatus.NotUploaded ? "Not yet" : "…")</span>
+                        }
+                    </button>
                     <div class="measurement-text">
                         <span class="strong">@PoseName(photo.Pose)</span>
-                        <span class="muted small">@photo.LocalDate · @StateText(photo)</span>
+                        <span class="muted small">@photo.LocalDate · @StateText(photo, thumbs.GetValueOrDefault(photo.Id))</span>
                     </div>
                     @if (photo.State == PhotoUploadState.Failed)
                     {
@@ -100,6 +140,12 @@
 
     private DateOnly Today => DateOnly.FromDateTime(Clock.GetLocalNow().DateTime);
     private bool busy;
+
+    // Thumbnails by photo id (null entry: loading), the photo open in the viewer and its full image (null: loading).
+    private readonly Dictionary<string, PhotoImage?> thumbs = new(StringComparer.Ordinal);
+    private ProgressPhotoRow? viewing;
+    private PhotoImage? full;
+    private int viewVersion;
     private string? saved;
     private string? error;
 
@@ -122,8 +168,12 @@
 
     private static string PoseName(string code) => PoseLabels.TryGetValue(code, out var name) ? name : code;
 
-    private static string StateText(ProgressPhotoRow photo) => photo.State switch
+    private static string DataUri(byte[] jpeg) => "data:image/jpeg;base64," + Convert.ToBase64String(jpeg);
+
+    private static string StateText(ProgressPhotoRow photo, PhotoImage? thumb) => photo.State switch
     {
+        // Nothing of it is waiting here, but Storage has no file: another device took it and hasn't uploaded it yet.
+        PhotoUploadState.Uploaded when thumb?.Status == PhotoImageStatus.NotUploaded => "Not available yet: still uploading from the device it was taken on",
         PhotoUploadState.Pending => "Waiting to upload",
         PhotoUploadState.Failed when photo.FilesFailed => $"Upload refused ({photo.ErrorCode ?? "no reason given"})",
         // A refused row is listed with the other rejected changes in Settings, which can retry it.
@@ -156,6 +206,8 @@
         watch = null;
         watchedProfile = profileId;
         photos = null;
+        thumbs.Clear();
+        CloseViewer();
         if (profileId is null)
         {
             return;
@@ -172,6 +224,7 @@
                     await InvokeAsync(() =>
                     {
                         photos = rows;
+                        LoadThumbnails(profileId, rows, token);
                         StateHasChanged();
                     });
                 }
@@ -188,6 +241,99 @@
                 });
             }
         }, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Loads the thumbnails not yet shown. One that wasn't there (not uploaded yet, or offline) is tried again when the
+    /// list next changes, such as when sync brings news of it.
+    /// </summary>
+    private void LoadThumbnails(string profileId, IReadOnlyList<ProgressPhotoRow> rows, CancellationToken token)
+    {
+        foreach (var id in thumbs.Keys.Except(rows.Select(r => r.Id)).ToList())
+        {
+            thumbs.Remove(id);
+        }
+
+        // The open photo was deleted or discarded meanwhile.
+        if (viewing is not null && !rows.Any(r => r.Id == viewing.Id))
+        {
+            CloseViewer();
+        }
+
+        foreach (var row in rows)
+        {
+            if (thumbs.TryGetValue(row.Id, out var known) && (known is null || known.Status == PhotoImageStatus.Available))
+            {
+                continue;
+            }
+
+            thumbs[row.Id] = null;
+            var id = row.Id;
+            _ = Task.Run(async () =>
+            {
+                PhotoImage image;
+                try
+                {
+                    image = await Library.ThumbnailAsync(profileId, id, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (Exception)
+                {
+                    image = PhotoImage.Unreachable;
+                }
+
+                await InvokeAsync(() =>
+                {
+                    if (!token.IsCancellationRequested && thumbs.ContainsKey(id))
+                    {
+                        thumbs[id] = image;
+                        StateHasChanged();
+                    }
+                });
+            }, CancellationToken.None);
+        }
+    }
+
+    private async Task ViewAsync(ProgressPhotoRow photo)
+    {
+        var profileId = watchedProfile;
+        if (profileId is null)
+        {
+            return;
+        }
+
+        var version = ++viewVersion;
+        viewing = photo;
+        full = null;
+        PhotoImage image;
+        try
+        {
+            image = await Library.PhotoAsync(profileId, photo.Id, stop.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception)
+        {
+            image = PhotoImage.Unreachable;
+        }
+
+        // Another photo was opened, or the viewer closed, meanwhile.
+        if (version == viewVersion)
+        {
+            full = image;
+        }
+    }
+
+    private void CloseViewer()
+    {
+        viewVersion++;
+        viewing = null;
+        full = null;
     }
 
     private async Task AddAsync(bool take)
