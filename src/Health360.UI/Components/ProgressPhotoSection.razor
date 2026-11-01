@@ -503,6 +503,14 @@
                 return;
             }
 
+            // Signed out, switched account or profile while the camera was open: don't show this photo to whoever is
+            // here now (Keep would be refused anyway).
+            if (Profiles.Profile?.Id != profileId || Uploader.ClearGeneration != generation)
+            {
+                error = "Your account changed while the photo was being taken or saved, so it wasn't kept.";
+                return;
+            }
+
             // With an earlier photo in this pose, show the ghost overlay first; the save happens on Keep.
             if (PreviousIn(pose, chosenDate ?? Today) is { } previous)
             {
