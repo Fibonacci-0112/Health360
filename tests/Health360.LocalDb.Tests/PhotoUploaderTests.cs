@@ -563,6 +563,20 @@ public sealed class PhotoUploaderTests
         Assert.Equal(permanent, error.Permanent);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, """{"statusCode":"404","error":"Bucket not found","message":"Bucket not found"}""")]
+    [InlineData(HttpStatusCode.BadRequest, """{"statusCode":"404","error":"not_found","message":"Bucket not found"}""")]
+    public async Task StorageReportsAMissingBucketAsBrokenNotPending(HttpStatusCode status, string body)
+    {
+        var (storage, server) = Storage();
+        server.Replies.Enqueue(status);
+        server.Body = body;
+
+        var error = await Assert.ThrowsAsync<PhotoUploadException>(() => storage.DownloadAsync($"{Profile}/x.jpg", Ct));
+
+        Assert.True(error.Permanent);
+    }
+
     [Fact]
     public async Task StorageDownloadsNothingWithoutTheOwnersSession()
     {
@@ -822,8 +836,12 @@ public sealed class FakePhotoStorage : IPhotoStorage
 
     public List<string> Downloads { get; } = [];
 
+    /// <summary>Runs inside each download before it answers.</summary>
+    public Action? DuringDownload { get; set; }
+
     public Task<byte[]?> DownloadAsync(string path, CancellationToken cancellationToken)
     {
+        DuringDownload?.Invoke();
         if (Offline)
         {
             throw new PhotoUploadException("offline", permanent: false, code: null);

@@ -1,3 +1,5 @@
+using Health360.Domain.Photos;
+
 namespace Health360.LocalDb;
 
 /// <summary>Whether a progress photo's image could be shown.</summary>
@@ -38,7 +40,7 @@ public sealed record PhotoImage(PhotoImageStatus Status, byte[]? Jpeg = null)
 /// account's data is cleared (sign-out or another user), and full photos not at all.
 /// </para>
 /// </summary>
-public sealed class PhotoLibrary(IPhotoFileStore files, IPhotoStorage storage, PhotoUploader uploader)
+public sealed class PhotoLibrary
 {
     /// <summary>The most thumbnails kept in memory (about 20 KB each).</summary>
     public const int ThumbnailCacheSize = 200;
@@ -46,7 +48,38 @@ public sealed class PhotoLibrary(IPhotoFileStore files, IPhotoStorage storage, P
     private readonly Lock gate = new();
     private readonly Dictionary<string, byte[]> thumbnails = new(StringComparer.Ordinal);
     private readonly Queue<string> order = new();
+    private readonly IPhotoFileStore files;
+    private readonly IPhotoStorage storage;
+    private readonly PhotoUploader uploader;
     private int cachedGeneration;
+
+    public PhotoLibrary(IPhotoFileStore files, IPhotoStorage storage, PhotoUploader uploader)
+    {
+        ArgumentNullException.ThrowIfNull(uploader);
+        this.files = files;
+        this.storage = storage;
+        this.uploader = uploader;
+        // Dropped as soon as a sign-out or account switch begins, not at the next lookup.
+        uploader.Clearing += () =>
+        {
+            lock (gate)
+            {
+                Reset(uploader.ClearGeneration);
+            }
+        };
+    }
+
+    /// <summary>How many thumbnails are held in memory.</summary>
+    public int CachedCount
+    {
+        get
+        {
+            lock (gate)
+            {
+                return thumbnails.Count;
+            }
+        }
+    }
 
     /// <summary>The photo's thumbnail.</summary>
     public Task<PhotoImage> ThumbnailAsync(string profileId, string id, CancellationToken cancellationToken = default) =>
@@ -72,9 +105,11 @@ public sealed class PhotoLibrary(IPhotoFileStore files, IPhotoStorage storage, P
         }
 
         // Still waiting to upload from this device: the stripped file is here.
-        if (await files.ReadAsync(name, cancellationToken).ConfigureAwait(false) is { } local)
+        var local = await files.ReadAsync(name, cancellationToken).ConfigureAwait(false);
+        ThrowIfCleared(generation);
+        if (local is not null)
         {
-            return new PhotoImage(PhotoImageStatus.Available, local);
+            return IsJpeg(local) ? new PhotoImage(PhotoImageStatus.Available, local) : PhotoImage.Refused;
         }
 
         byte[]? jpeg;
@@ -84,15 +119,18 @@ public sealed class PhotoLibrary(IPhotoFileStore files, IPhotoStorage storage, P
         }
         catch (PhotoUploadException error)
         {
+            ThrowIfCleared(generation);
             return error.Permanent ? PhotoImage.Refused : PhotoImage.Unreachable;
         }
 
+        // A sign-out or account switch began while this waited: the bytes belong to the account that left.
+        ThrowIfCleared(generation);
         if (jpeg is null)
         {
             return PhotoImage.NotUploaded;
         }
 
-        if (jpeg.Length < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8)
+        if (!IsJpeg(jpeg))
         {
             return PhotoImage.Refused;
         }
@@ -145,6 +183,17 @@ public sealed class PhotoLibrary(IPhotoFileStore files, IPhotoStorage storage, P
             cachedGeneration = generation;
         }
     }
+
+    private void ThrowIfCleared(int generation)
+    {
+        if (generation != uploader.ClearGeneration)
+        {
+            throw new OperationCanceledException("The account's data was cleared while the photo loaded.");
+        }
+    }
+
+    /// <summary>A whole, well-formed JPEG (frame, scan and end marker), not just its first bytes.</summary>
+    private static bool IsJpeg(byte[] jpeg) => JpegMetadata.TryStrip(jpeg, out _);
 
     private static bool IsUuid(string value) => Guid.TryParse(value, out var guid) && guid.ToString() == value;
 }

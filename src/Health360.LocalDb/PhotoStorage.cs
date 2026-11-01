@@ -122,18 +122,20 @@ public sealed class SupabasePhotoStorage(HttpClient http, ISupabaseSession sessi
             }
         }
 
-        if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            return null;
-        }
-
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        if (response.StatusCode == HttpStatusCode.BadRequest && InnerStatus(body) == "404")
+        var status = (int)response.StatusCode;
+        if (response.StatusCode == HttpStatusCode.NotFound
+            || (response.StatusCode == HttpStatusCode.BadRequest && InnerStatus(body) == "404"))
         {
+            // A missing bucket is answered the same way; it is a broken deployment, not a file still to come.
+            if (NamesBucket(body))
+            {
+                throw new PhotoUploadException("The photo bucket is missing.", permanent: true, code: "no_bucket");
+            }
+
             return null;
         }
 
-        var status = (int)response.StatusCode;
         throw new PhotoUploadException(
             $"Storage answered {status}.", IsPermanent(response.StatusCode, body), status.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
@@ -172,6 +174,29 @@ public sealed class SupabasePhotoStorage(HttpClient http, ISupabaseSession sessi
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         return new PhotoUploadException(
             $"Storage answered {status}.", IsPermanent(response.StatusCode, body), status.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private static bool NamesBucket(string? body)
+    {
+        if (string.IsNullOrEmpty(body))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (JsonNode.Parse(body) is not JsonObject error)
+            {
+                return false;
+            }
+
+            var text = $"{(error["error"] as JsonValue)?.ToString()} {(error["message"] as JsonValue)?.ToString()} {(error["code"] as JsonValue)?.ToString()}";
+            return text.Contains("bucket", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string? InnerStatus(string? body)

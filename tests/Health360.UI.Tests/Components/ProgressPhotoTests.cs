@@ -217,7 +217,8 @@ public sealed class ProgressPhotoTests : AppTestContext
         await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-29");
         App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
         var cut = await BodyAsync();
-        cut.WaitForAssertion(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"), Wait);
+        cut.WaitForAssertion(() => Assert.Contains("Couldn't load the preview", cut.Find("[aria-label='Your progress photos']").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Equal("Offline", cut.Find(".photo-thumb").TextContent.Trim());
 
         await ClickAsync(() => cut.Find("button[aria-label='View the Back photo from 2026-10-29']"));
         cut.WaitForAssertion(() => Assert.Contains("Check your connection", cut.Find(".photo-viewer [role=alert]").TextContent, StringComparison.Ordinal), Wait);

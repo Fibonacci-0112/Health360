@@ -57,6 +57,9 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     /// <summary>Raised after a pass changed the queue, possibly off the UI thread.</summary>
     public event Action? Changed;
 
+    /// <summary>Raised when a clear of the account's data begins, before it waits for work in progress.</summary>
+    public event Action? Clearing;
+
     /// <summary>
     /// Changes each time the account's data is cleared. A screen reads it before opening the camera or library and
     /// passes it to <see cref="AddAsync"/>, so a photo picked across a sign-out or account switch is refused.
@@ -345,6 +348,7 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     {
         ArgumentNullException.ThrowIfNull(clear);
         Interlocked.Increment(ref generation);
+        Clearing?.Invoke();
         try
         {
             running?.Cancel();

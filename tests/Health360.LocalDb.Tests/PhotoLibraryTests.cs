@@ -13,7 +13,7 @@ public sealed class PhotoLibraryTests
 
     private static readonly FixedClock Clock = new(new DateTimeOffset(2026, 10, 31, 9, 30, 0, TimeSpan.Zero));
 
-    private static readonly byte[] Jpeg = [0xFF, 0xD8, 0x01, 0x02, 0xFF, 0xD9];
+    private static readonly byte[] Jpeg = Jpegs.Stripped();
 
     private static async Task<(TestDatabase Db, MemoryPhotoFiles Files, FakePhotoStorage Storage, PhotoUploader Uploader, PhotoLibrary Library)> OpenAsync()
     {
@@ -111,6 +111,46 @@ public sealed class PhotoLibraryTests
         await uploader.ClearAsync(() => Task.CompletedTask);
 
         Assert.Equal(PhotoImageStatus.Unreachable, (await library.ThumbnailAsync(Profile, Photo, Ct)).Status);
+    }
+
+    [Fact]
+    public async Task ClearingTheAccountsDataDropsCachedThumbnailsAtOnce()
+    {
+        var (t, _, storage, uploader, library) = await OpenAsync();
+        await using var ___ = t;
+        using var __ = uploader;
+        storage.Stored[$"{Profile}/{Photo}_thumb.jpg"] = Jpeg;
+        await library.ThumbnailAsync(Profile, Photo, Ct);
+        Assert.Equal(1, library.CachedCount);
+
+        await uploader.ClearAsync(() => Task.CompletedTask);
+
+        Assert.Equal(0, library.CachedCount);
+    }
+
+    [Fact]
+    public async Task APhotoThatArrivesAfterASignOutBeganIsNotReturned()
+    {
+        var (t, _, storage, uploader, library) = await OpenAsync();
+        await using var ___ = t;
+        using var __ = uploader;
+        storage.Stored[$"{Profile}/{Photo}.jpg"] = Jpeg;
+        storage.DuringDownload = () => uploader.ClearAsync(() => Task.CompletedTask).GetAwaiter().GetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => library.PhotoAsync(Profile, Photo, Ct));
+    }
+
+    [Fact]
+    public async Task ATruncatedJpegIsNotShown()
+    {
+        var (t, files, storage, uploader, library) = await OpenAsync();
+        await using var ___ = t;
+        using var __ = uploader;
+        files.Files[PhotoUploader.PhotoName(Photo)] = Jpeg[..^2];
+        storage.Stored[$"{Profile}/{Photo}_thumb.jpg"] = Jpeg[..^2];
+
+        Assert.Equal(PhotoImageStatus.Refused, (await library.PhotoAsync(Profile, Photo, Ct)).Status);
+        Assert.Equal(PhotoImageStatus.Refused, (await library.ThumbnailAsync(Profile, Photo, Ct)).Status);
     }
 
     [Fact]
