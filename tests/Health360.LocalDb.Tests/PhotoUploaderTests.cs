@@ -673,7 +673,7 @@ public sealed class PhotoUploaderTests
     }
 
     [Fact]
-    public async Task ARowSyncedBackAfterADeleteKeepsItsFiles()
+    public async Task ADeleteRetriedFromSettingsRemovesTheFilesEvenBeforeSyncRemovesTheRestoredRow()
     {
         await using var t = await TestDatabase.OpenAsync();
         await t.SeedProfileAsync(Profile);
@@ -683,16 +683,22 @@ public sealed class PhotoUploaderTests
         await uploader.ProcessAsync(Ct);
         await uploader.DeleteAsync(Profile, id, Ct);
         await t.Db.Execute("DELETE FROM ps_crud");
-        // The server kept the row and sync brought it back.
+        // The DELETE was refused and the row restored by sync...
+        await t.Db.Execute(
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code) VALUES ('f1', 'progress_photos', ?, 'DELETE', '{}', '42501')", [id]);
         await t.Db.Execute(
             "INSERT INTO progress_photos (id, profile_id, pose, taken_at, local_date, storage_path, thumb_path, created_at, updated_at) " +
             "VALUES (?, ?, 'back', '2026-10-31T09:30:00.000Z', '2026-10-31', ?, ?, '2026-10-31T09:30:00.000Z', '2026-10-31T09:30:00.000Z')",
             [id, Profile, $"{Profile}/{id}.jpg", $"{Profile}/{id}_thumb.jpg"]);
         await t.Db.Execute("DELETE FROM ps_crud");
+        await uploader.ProcessAsync(Ct);
+        Assert.Empty(storage.Deleted);
 
+        // ...then retried successfully from Settings, which drops the refusal before sync removes the row here.
+        await t.Db.Execute("DELETE FROM failed_uploads WHERE id = 'f1'");
         await uploader.ProcessAsync(Ct);
 
-        Assert.Empty(storage.Deleted);
+        Assert.Equal(2, storage.Deleted.Count);
         Assert.Equal(0, await DeletionsAsync(t));
         Assert.Equal(0, await uploader.PendingCountAsync());
     }

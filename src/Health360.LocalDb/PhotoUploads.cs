@@ -341,24 +341,18 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     /// <summary>
     /// Removes the files of deleted photos from Storage, oldest first, once each photo's row delete has left the
     /// upload queue. One whose delete the server refused (quarantined in <c>failed_uploads</c>) keeps its files until
-    /// that is retried from Settings, since the row is still there. An already-deleted file counts as deleted. A
+    /// that is retried from Settings, since the row is still there; discarding that refusal drops the entry
+    /// (<see cref="DiscardRefusedDeleteAsync"/>). Once no DELETE of the row is queued or quarantined the server has
+    /// deleted it, even if sync hasn't yet removed a copy restored here, so the files go. An already-deleted file counts as deleted. A
     /// missing connection stops; a refusal is recorded and the entry kept for the next pass, without blocking others.
     /// </summary>
     private async Task<(int Deleted, bool Stopped)> DeleteFilesAsync(CancellationToken cancellationToken)
     {
         var deleted = 0;
-        // A row the server kept and sync restored: its files stay, so its deletes are no longer outstanding (and no
-        // longer count as unsynced). One whose DELETE is quarantined is kept, for a retry from Settings.
-        await db.Execute(
-            $"DELETE FROM {DeletionsTable} WHERE id IN (SELECT p.id FROM progress_photos p) " +
-            $"AND NOT EXISTS (SELECT 1 FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = {DeletionsTable}.id AND f.op = 'DELETE')",
-            []).ConfigureAwait(false);
         var waiting = await db.GetAll<PendingRow>(
             $"SELECT d.id AS Id, d.profile_id AS ProfileId FROM {DeletionsTable} d " +
             "WHERE NOT EXISTS (SELECT 1 FROM ps_crud c WHERE json_extract(c.data, '$.type') = 'progress_photos' AND json_extract(c.data, '$.id') = d.id) " +
             $"AND NOT EXISTS (SELECT 1 FROM {AppSchema.FailedUploads} f WHERE f.table_name = 'progress_photos' AND f.row_id = d.id AND f.op = 'DELETE') " +
-            // The row is back (the server kept it and sync restored it): its files stay.
-            "AND NOT EXISTS (SELECT 1 FROM progress_photos p WHERE p.id = d.id) " +
             "ORDER BY d.created_at, d.id", []).ConfigureAwait(false);
         foreach (var row in waiting)
         {
