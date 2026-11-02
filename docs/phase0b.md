@@ -12,7 +12,7 @@ Status of the move to .NET MAUI Blazor Hybrid and ASP.NET Core ([ADR 0002](adr/0
 | `Health360.Domain` units and UUIDv7 ids, with FsCheck property tests | **Done.** `Units/` and `Ids/UuidV7` port `packages/domain`, with the same factors and property tests (FsCheck) |
 | `Health360.Server`: Supabase JWT and signed-in-user validation, queries as that user, one test Claude call | **Auth and user-scoped queries done** (see [API authentication](#api-authentication)), with `/me` and `/profiles/{id}` as the first endpoints. **Test Claude call started:** `POST /ai/hello` (see [Claude calls](#claude-calls)), tested against recorded responses only. The live run is deferred to Phase 1's first AI endpoint (`ai-label-ocr`, PLAN.md §3), because nothing before it calls Claude |
 | MAUI app: tabs, emailed-code login, onboarding, PowerSync .NET, `failed_uploads` quarantine | **Built; run on Android (emulator) and Windows** (see [MAUI app](#maui-app)): sign-in by emailed code, onboarding with every unit type and locale defaults, the five tabs and Settings (units, rejected writes with retry and discard, sign-out), syncing over the existing `me`, `household` and `reference` streams. The app's services (everything below the BlazorWebView) were run against `supabase start` and the local PowerSync: emailed-code sign-in, the profile arriving over `me`, onboarding reaching the server, an RLS-rejected write quarantined without blocking the queue, and a second user never receiving the first user's rows. Run on Windows and in the Android emulator (sign-in, onboarding, notes) |
-| Throwaway `notes` table on Android and Windows | **Done on Android and Windows** (see [Notes sync test](#notes-sync-test)): the Today tab adds and lists notes through the local database. Two-device sync, kill-while-offline on both targets, and the two-user check passed. The two-client leak test also runs on the .NET sync stack (see [Two-client sync test](#two-client-sync-test)) |
+| Throwaway `notes` table on Android and Windows | **Done on Android and Windows** (see [Notes sync test](#notes-sync-test)): the Today tab adds and lists notes through the local database. Two-device sync, kill-while-offline on both targets, and the two-user check passed. Removed in Phase 1 (2026-11-02), once body measurements carried the sync tests. The two-client leak test also runs on the .NET sync stack (see [Two-client sync test](#two-client-sync-test)) |
 | `tools/drift` against the PowerSync .NET schema | **Done for `AppSchema`** (see [Schema drift](#schema-drift)): runs in CI's database job. The C# contracts are not compared yet |
 | Remove the TypeScript prototype once the gate passes | **Done** (2026-10-31): `apps/`, `packages/`, `e2e/sync/`, `supabase/functions/`, `tools/codegen/` and the pnpm workspace are gone, and so are their CI jobs |
 
@@ -24,7 +24,7 @@ Deferred on purpose, not missed:
 - **AI usage controls.** Per-profile daily quotas, `ai_generations` usage logging and prompt caching ([Claude calls](#claude-calls)).
 - **Real Auth server for the API's checks.** The `/auth/v1/user` lookup and the JWKS format are tested against a fake that follows Supabase's documented responses ([API authentication](#api-authentication)).
 - **Contracts in the drift check.** `tools/drift` compares `AppSchema` with Postgres, not the C# contracts ([Schema drift](#schema-drift)).
-- **Remove `notes`.** The throwaway table goes, in a new migration, once a real synced table (such as body metrics in step 1.1) replaces it in the sync tests and the Today tab.
+- **Remove `notes`.** **Done** (2026-11-02): `20261102000001_drop_notes.sql` drops the table, its `notes` sharing grants and the category. The two-client sync tests, the upload and account-binding tests and the identity pgTAP test (`01_identity_sharing`) use weigh-ins in `measurements` instead, and the Today tab no longer has the sync test. A device that still has a queued notes write gets PostgREST's `PGRST205` (no such table), which is quarantined in `failed_uploads` rather than blocking the queue.
 - **Physical Android phone.** The Android checks ran in the emulator.
 
 ## What the scaffold contains
@@ -150,7 +150,9 @@ Tests: `tests/Health360.UI.Tests` runs the Auth client, the session and `AuthSer
 
 ## Notes sync test
 
-The throwaway `notes` table (PLAN.md §3) ports the prototype's `NotesTest`; don't build features on it. The table, its RLS and the `me` stream already existed, so this is client code only:
+Removed in Phase 1 (2026-11-02, see [Carried into Phase 1](#carried-into-phase-1)); the code is in the git history. This records what it was and what it proved.
+
+The throwaway `notes` table (PLAN.md §3) ported the prototype's `NotesTest`. The table, its RLS and the `me` stream already existed, so this was client code only:
 
 - `Health360.Contracts/Notes`: `NoteInput` and its validator (ports `noteInputSchema`: 1 to 2000 characters after trimming, the table's constraint). Characters are counted as Postgres's `char_length` counts them (code points), so an emoji counts once; zod and an HTML `maxlength` count UTF-16 units, which would refuse notes the table accepts.
 - `Health360.LocalDb/Notes`: `AddAsync` writes the note with a UUIDv7 id made on the device, the signed-in profile, today's date in the device's time zone (`TimeProvider.GetLocalNow`) and `created_at`/`updated_at`; it uploads through the usual queue. `Watch` lists every note the device has, newest first. It doesn't filter by profile, so a row the streams shouldn't have delivered would show up rather than be hidden.
@@ -162,7 +164,7 @@ Tests: `NotesTests` in `Health360.LocalDb.Tests` (id, local date across midnight
 
 `tests/Health360.Sync.Tests` ports `e2e/sync` to the app's own .NET sync stack: each device is a real PowerSync database in a temporary file with `LocalDatabase`, `SupabaseConnector` and `PostgrestWriter`, exactly as `AddLocalDatabase` wires them (only the session and owner store are in memory). Users are created through the Auth admin API with the service-role key, which only the test harness holds; the devices sign in with a password and then use only the publishable key and their own access token. The users are deleted afterwards. Two users, Alex (devices A1 and A2) and Blake (B), share one fixture; each test makes its own rows, so they pass in any order.
 
-It checks that each device starts with only its own profile and household; that a note written offline on A1 reaches A2 within 5 s of reconnecting (measured from `ConnectAsync`, with the app's 2 s retry delay); that B never receives A's rows (B waits for its own note to come back first, so the stream has caught up); that jsonb goes up as an object and the server recomputes `height_cm`; that an offline edit to a note another device deleted is quarantined as `PGRST116` and stays rejected on retry; that a consent delete RLS silently blocks is quarantined as `42501` and sync puts the row back; that a forged write into another profile is quarantined (`42501`) without blocking the next write, and the connector's log line holds no id or note text; and, beyond the prototype's test, that a second user signing in on the same install without a sign-out gets a cleared database and the first user's unsent write never reaches the server.
+It checks that each device starts with only its own profile and household; that a weigh-in (a `measurements` row) recorded offline on A1 reaches A2 within 5 s of reconnecting (measured from `ConnectAsync`, with the app's 2 s retry delay); that B never receives A's rows (B waits for its own weigh-in to come back first, so the stream has caught up); that jsonb goes up as an object and the server recomputes `height_cm`; that an offline edit to a value another device deleted is quarantined as `PGRST116` and stays rejected on retry; that a consent delete RLS silently blocks is quarantined as `42501` and sync puts the row back; that a forged write into another profile is quarantined (`42501`) without blocking the next write, and the connector's log line holds no id, profile or value; and, beyond the prototype's test, that a second user signing in on the same install without a sign-out gets a cleared database and the first user's unsent write never reaches the server.
 
 Every test is skipped unless `SYNC_E2E=1` (trait `Category=Sync`), so the main `dotnet test` run skips them; CI's sync job runs them against this stack and environment:
 
@@ -173,7 +175,7 @@ SYNC_E2E=1 SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_ANON_KEY=<ANON_KEY> SUPA
   POWERSYNC_URL=http://127.0.0.1:8080 dotnet test --project tests/Health360.Sync.Tests
 ```
 
-The keys are the ones `supabase status -o env` prints. **Run locally** (2026-10-31, Linux, `supabase start` with CLI 2.122.0 and PowerSync 1.27.2): 8 of 8 passed, three runs in a row, about 26 s each. With the `notes` stream loosened to every row (`SELECT * FROM notes`), the leak test and the account-switch test failed, as they should.
+The keys are the ones `supabase status -o env` prints. These tests used the `notes` table until 2026-11-02. **Run locally** (2026-10-31, Linux, `supabase start` with CLI 2.122.0 and PowerSync 1.27.2): 8 of 8 passed, three runs in a row, about 26 s each. With the `notes` stream loosened to every row (`SELECT * FROM notes`), the leak test and the account-switch test failed, as they should.
 
 ## Running it
 

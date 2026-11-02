@@ -26,14 +26,14 @@ public class PostgrestWriterTests
         var (writer, server) = Create();
         server.Reply(HttpStatusCode.Created, "");
 
-        await writer.PutAsync("notes", "n1", new JsonObject { ["body"] = "hi" }, Ct);
+        await writer.PutAsync("measurements", "n1", new JsonObject { ["method"] = "hi" }, Ct);
 
         var request = Assert.Single(server.Requests);
-        Assert.Equal("POST /rest/v1/notes?on_conflict=id", request.Line);
+        Assert.Equal("POST /rest/v1/measurements?on_conflict=id", request.Line);
         Assert.Equal("Bearer user-token", request.Headers["Authorization"]);
         Assert.Equal("anon-key", request.Headers["apikey"]);
         Assert.Equal("resolution=merge-duplicates,return=minimal", request.Headers["Prefer"]);
-        Assert.Equal("""{"body":"hi","id":"n1"}""", request.Body);
+        Assert.Equal("""{"method":"hi","id":"n1"}""", request.Body);
     }
 
     [Fact]
@@ -53,12 +53,12 @@ public class PostgrestWriterTests
         var (writer, server) = Create();
         server.Reply(HttpStatusCode.OK, """[{"id":"n1"}]""");
 
-        await writer.PatchAsync("notes", "n1", new JsonObject { ["body"] = "edited" }, Ct);
+        await writer.PatchAsync("measurements", "n1", new JsonObject { ["method"] = "edited" }, Ct);
 
         var request = server.Requests[0];
-        Assert.Equal("PATCH /rest/v1/notes?id=eq.n1&select=id", request.Line);
+        Assert.Equal("PATCH /rest/v1/measurements?id=eq.n1&select=id", request.Line);
         Assert.Equal("return=representation", request.Headers["Prefer"]);
-        Assert.Equal("""{"body":"edited"}""", request.Body);
+        Assert.Equal("""{"method":"edited"}""", request.Body);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class PostgrestWriterTests
         var (writer, server) = Create();
         server.Reply(HttpStatusCode.OK, "[]");
 
-        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PatchAsync("notes", "n1", new JsonObject { ["body"] = "x" }, Ct));
+        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PatchAsync("measurements", "n1", new JsonObject { ["method"] = "x" }, Ct));
 
         Assert.Equal(PostgrestWriter.NoRow, error.Code);
         Assert.True(Uploads.IsPermanentError(error.Code));
@@ -79,9 +79,9 @@ public class PostgrestWriterTests
         var (writer, server) = Create();
         server.Reply(HttpStatusCode.OK, "[]").Reply(HttpStatusCode.OK, "[]");
 
-        await writer.DeleteAsync("notes", "n1", Ct);
+        await writer.DeleteAsync("measurements", "n1", Ct);
 
-        Assert.Equal(["DELETE /rest/v1/notes?id=eq.n1&select=id", "GET /rest/v1/notes?id=eq.n1&select=id"], server.Requests.Select(r => r.Line));
+        Assert.Equal(["DELETE /rest/v1/measurements?id=eq.n1&select=id", "GET /rest/v1/measurements?id=eq.n1&select=id"], server.Requests.Select(r => r.Line));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class PostgrestWriterTests
         var (writer, server) = Create();
         server.Reply(HttpStatusCode.OK, """[{"id":"n1"}]""");
 
-        await writer.DeleteAsync("notes", "n1", Ct);
+        await writer.DeleteAsync("measurements", "n1", Ct);
 
         Assert.Single(server.Requests);
     }
@@ -112,18 +112,18 @@ public class PostgrestWriterTests
         var (writer, server) = Create();
         server.Reply(HttpStatusCode.OK, """[{"id":"x"}]""");
 
-        await writer.PatchAsync("notes", "a&b=c", new JsonObject { ["body"] = "x" }, Ct);
+        await writer.PatchAsync("measurements", "a&b=c", new JsonObject { ["method"] = "x" }, Ct);
 
-        Assert.Equal("PATCH /rest/v1/notes?id=eq.a%26b%3Dc&select=id", server.Requests[0].Line);
+        Assert.Equal("PATCH /rest/v1/measurements?id=eq.a%26b%3Dc&select=id", server.Requests[0].Line);
     }
 
     [Fact]
     public async Task CarriesThePostgresErrorCode()
     {
         var (writer, server) = Create();
-        server.Reply(HttpStatusCode.Forbidden, """{"code":"42501","message":"new row violates row-level security policy for table \"notes\"","details":null,"hint":null}""");
+        server.Reply(HttpStatusCode.Forbidden, """{"code":"42501","message":"new row violates row-level security policy for table \"measurements\"","details":null,"hint":null}""");
 
-        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PutAsync("notes", "n1", [], Ct));
+        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PutAsync("measurements", "n1", [], Ct));
 
         Assert.Equal("42501", error.Code);
         Assert.Contains("row-level security", error.Message, StringComparison.Ordinal);
@@ -135,7 +135,7 @@ public class PostgrestWriterTests
         var (writer, server) = Create();
         server.Reply(HttpStatusCode.BadGateway, "<html>bad gateway</html>");
 
-        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PutAsync("notes", "n1", [], Ct));
+        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PutAsync("measurements", "n1", [], Ct));
 
         Assert.Null(error.Code);
         Assert.False(Uploads.IsPermanentError(error.Code));
@@ -146,7 +146,7 @@ public class PostgrestWriterTests
     {
         var (writer, server) = Create(signedOut: true);
 
-        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PutAsync("notes", "n1", [], Ct));
+        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PutAsync("measurements", "n1", [], Ct));
 
         Assert.False(Uploads.IsPermanentError(error.Code));
         Assert.Empty(server.Requests);
@@ -158,7 +158,7 @@ public class PostgrestWriterTests
         // User B signed in, but the database still holds user A's queued writes until it is rebound.
         var (writer, server) = Create(token: new SessionToken("user-b", "b-token"), owner: "user-a");
 
-        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PutAsync("notes", "n1", [], Ct));
+        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PutAsync("measurements", "n1", [], Ct));
 
         Assert.False(Uploads.IsPermanentError(error.Code));
         Assert.Empty(server.Requests);
@@ -170,7 +170,7 @@ public class PostgrestWriterTests
         var (writer, server) = Create();
         server.Reply(HttpStatusCode.OK, "<html>Sign in to the Wi-Fi</html>");
 
-        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PatchAsync("notes", "n1", new JsonObject { ["body"] = "x" }, Ct));
+        var error = await Assert.ThrowsAsync<RemoteWriteException>(() => writer.PatchAsync("measurements", "n1", new JsonObject { ["method"] = "x" }, Ct));
 
         Assert.False(Uploads.IsPermanentError(error.Code));
     }

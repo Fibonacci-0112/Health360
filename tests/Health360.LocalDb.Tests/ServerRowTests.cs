@@ -75,7 +75,7 @@ public class ServerRowTests
     {
         Assert.Equal("""{"unit_prefs":null}""", Uploads.ToServerRow("profiles", new JsonObject { ["unit_prefs"] = null }).ToJsonString());
         Assert.Equal("""{"display_name":"A"}""", Uploads.ToServerRow("profiles", new JsonObject { ["display_name"] = "A" }).ToJsonString());
-        Assert.Equal("""{"x":1}""", Uploads.ToServerRow("notes", new JsonObject { ["body"] = """{"x":1}""" })["body"]!.GetValue<string>());
+        Assert.Equal("""{"x":1}""", Uploads.ToServerRow("measurements", new JsonObject { ["method"] = """{"x":1}""" })["method"]!.GetValue<string>());
     }
 
     [Fact]

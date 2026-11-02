@@ -1,7 +1,8 @@
--- A vs B, member vs non-member, and sharing grants, on the Phase 0 tables.
+-- A vs B, member vs non-member, and sharing grants, on the identity tables and a body measurement.
+-- Also checks that the Phase 0 throwaway notes table and its sharing category are gone.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(33);
+select plan(35);
 
 -- Users A and B each get a profile and a personal household from the sign-up trigger.
 -- C is a member of A's household; B is not.
@@ -57,13 +58,16 @@ select results_eq('select id from households', format('values (%L::uuid)', curre
 select is((select count(*) from household_members), 2::bigint, 'A sees both members of their household');
 
 select lives_ok(
-  format($$ insert into notes (id, profile_id, body, local_date)
-            values ('10000000-0000-0000-0000-000000000001', %L, 'A private note', '2026-10-25') $$, current_setting('t.a')),
-  'A can write a note for their own profile'
+  format($$ insert into measurements (id, profile_id, metric_code, category, value, unit, value_canonical, measured_at, local_date, source)
+            values ('10000000-0000-0000-0000-000000000001', %L, 'weight', 'body', 80, 'kg', 80, '2026-10-25T07:00:00Z', '2026-10-25', 'manual') $$,
+         current_setting('t.a')),
+  'A can record a weight for their own profile'
 );
 select throws_ok(
-  format($$ insert into notes (profile_id, body, local_date) values (%L, 'forged', '2026-10-25') $$, current_setting('t.b')),
-  '42501', null, 'A cannot write a note into B''s profile'
+  format($$ insert into measurements (id, profile_id, metric_code, category, value, unit, value_canonical, measured_at, local_date, source)
+            values (gen_random_uuid(), %L, 'weight', 'body', 1, 'kg', 1, '2026-10-25T07:00:00Z', '2026-10-25', 'manual') $$,
+         current_setting('t.b')),
+  '42501', null, 'A cannot write a weight into B''s profile'
 );
 select throws_ok($$ update profiles set user_id = '00000000-0000-0000-0000-00000000000b' $$,
   '42501', null, 'A cannot change the login a profile belongs to');
@@ -98,11 +102,11 @@ select throws_ok($$ insert into reference_datasets (code, version) values ('x', 
 
 -------- B (another household)
 select pg_temp.login('b');
-select is((select count(*) from notes), 0::bigint, 'B cannot see A''s note');
+select is((select count(*) from measurements), 0::bigint, 'B cannot see A''s weight');
 select is((select count(*) from profiles where id = current_setting('t.a')::uuid), 0::bigint, 'B cannot see A''s profile');
 select is(
-  pg_temp.affected($$ update notes set body = 'hijacked' $$),
-  0::bigint, 'B cannot update A''s note'
+  pg_temp.affected($$ update measurements set value = 1 $$),
+  0::bigint, 'B cannot update A''s weight'
 );
 select is(
   pg_temp.affected($$ update profiles set display_name = 'hijacked' where id = current_setting('t.a')::uuid $$),
@@ -111,18 +115,18 @@ select is(
 
 -------- C (A's household, no grant yet)
 select pg_temp.login('c');
-select is((select count(*) from notes), 0::bigint, 'a household member cannot see A''s note without a grant');
+select is((select count(*) from measurements), 0::bigint, 'a household member cannot see A''s weight without a grant');
 
--------- A shares notes with C only, then a household-wide grant
+-------- A shares body values with C only, then a household-wide grant
 select pg_temp.login('a');
 select lives_ok(
   format($$ insert into sharing_grants (profile_id, household_id, grantee_profile_id, category)
-            values (%L, %L, %L, 'notes') $$, current_setting('t.a'), current_setting('t.ha'), current_setting('t.c')),
-  'A can share notes with a member of their household'
+            values (%L, %L, %L, 'body') $$, current_setting('t.a'), current_setting('t.ha'), current_setting('t.c')),
+  'A can share body values with a member of their household'
 );
 select throws_ok(
   format($$ insert into sharing_grants (profile_id, household_id, grantee_profile_id, category)
-            values (%L, %L, %L, 'notes') $$, current_setting('t.a'), current_setting('t.ha'), current_setting('t.b')),
+            values (%L, %L, %L, 'body') $$, current_setting('t.a'), current_setting('t.ha'), current_setting('t.b')),
   '42501', null, 'A cannot share with someone outside the household'
 );
 -- Managed profiles, set up as superuser (only the server creates them).
@@ -148,32 +152,41 @@ select pg_temp.login('a');
 
 select throws_ok(
   format($$ insert into sharing_grants (profile_id, household_id, category)
-            values (%L, %L, 'notes') $$, current_setting('t.a'), current_setting('t.hb')),
+            values (%L, %L, 'body') $$, current_setting('t.a'), current_setting('t.hb')),
   '42501', null, 'a grant must name a household its owner profile belongs to, not just another of the user''s profiles'
 );
 select throws_ok(
   format($$ insert into sharing_grants (profile_id, household_id, grantee_profile_id, category, access)
-            values (%L, %L, %L, 'notes', 'write') $$, current_setting('t.a'), current_setting('t.ha'), current_setting('t.c')),
+            values (%L, %L, %L, 'body', 'write') $$, current_setting('t.a'), current_setting('t.ha'), current_setting('t.c')),
   '23514', null, 'write grants are not accepted until something enforces them'
 );
 
 select pg_temp.login('c');
-select is((select count(*) from notes), 1::bigint, 'C sees A''s note once it is shared');
+select is((select count(*) from measurements), 1::bigint, 'C sees A''s weight once it is shared');
 select is(
-  pg_temp.affected($$ update notes set body = 'edited by C' $$),
-  0::bigint, 'a read grant does not let C edit A''s note'
+  pg_temp.affected($$ update measurements set value = 1 $$),
+  0::bigint, 'a read grant does not let C edit A''s weight'
 );
 
 select pg_temp.login('a');
 insert into sharing_grants (profile_id, household_id, grantee_profile_id, category)
-  values (current_setting('t.a')::uuid, current_setting('t.ha')::uuid, null, 'notes');
+  values (current_setting('t.a')::uuid, current_setting('t.ha')::uuid, null, 'body');
 select pg_temp.login('b');
-select is((select count(*) from notes), 0::bigint, 'a household-wide grant still excludes non-members');
+select is((select count(*) from measurements), 0::bigint, 'a household-wide grant still excludes non-members');
+
+-------- the Phase 0 notes table is gone
+select hasnt_table('public', 'notes', 'the throwaway notes table is dropped');
+select pg_temp.login('a');
+select throws_ok(
+  format($$ insert into sharing_grants (profile_id, household_id, grantee_profile_id, category)
+            values (%L, %L, %L, 'notes') $$, current_setting('t.a'), current_setting('t.ha'), current_setting('t.c')),
+  '23514', null, 'notes is no longer a sharing category'
+);
 
 -------- anon
 reset role;
 set local role anon;
-select throws_ok($$ select * from notes $$, '42501', null, 'anon cannot read anything');
+select throws_ok($$ select * from profiles $$, '42501', null, 'anon cannot read anything');
 
 select * from finish();
 rollback;

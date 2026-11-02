@@ -17,14 +17,14 @@ public class LocalDatabaseTests
 
     private static async Task SeedAsync(TestDatabase t)
     {
-        await t.Db.Execute("INSERT INTO notes (id, profile_id, body) VALUES (?, ?, ?)", ["n1", "p", "mine"]);
+        await t.Db.Execute("INSERT INTO measurements (id, profile_id, method) VALUES (?, ?, ?)", ["n1", "p", "mine"]);
         await t.Db.Execute(
             "INSERT INTO failed_uploads (id, table_name, row_id, op, data) VALUES (?, ?, ?, ?, ?)",
-            ["crud-9", "notes", "n0", "PUT", "{}"]);
+            ["crud-9", "measurements", "n0", "PUT", "{}"]);
     }
 
-    private static async Task<(long Notes, long Pending, long Failed)> CountsAsync(TestDatabase t) =>
-        ((await t.Db.Get<Count>("SELECT count(*) AS N FROM notes")).N,
+    private static async Task<(long Rows, long Pending, long Failed)> CountsAsync(TestDatabase t) =>
+        ((await t.Db.Get<Count>("SELECT count(*) AS N FROM measurements")).N,
          await Uploads.PendingUploadCountAsync(t.Db),
          await Uploads.FailedUploadCountAsync(t.Db));
 

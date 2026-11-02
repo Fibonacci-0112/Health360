@@ -21,7 +21,7 @@ public class HealthEndpointTests(ServerFactory factory) : IClassFixture<ServerFa
     {
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/notes", UriKind.Relative), TestContext.Current.CancellationToken);
+        var response = await client.GetAsync(new Uri("/no-such-route", UriKind.Relative), TestContext.Current.CancellationToken);
 
         // The fallback policy runs before routing gives up, so probing reveals nothing without a token.
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);

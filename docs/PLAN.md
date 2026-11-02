@@ -298,7 +298,7 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
 - `Health360.Domain/Units` and UUIDv7 ids ported, with the same exact factors and FsCheck property tests. It comes first because every module depends on it.
 - `Health360.Server`: Supabase JWT and signed-in-user validation on every endpoint, queries as the signed-in user, and one test Claude call with structured output validated against `Health360.Contracts`. The call is tested against recorded responses; the first run against the live API is deferred to Phase 1's first AI endpoint (`ai-label-ocr`).
 - MAUI app on Android and Windows: tab navigation, login by emailed code, onboarding with per-type unit preferences and locale defaults, PowerSync .NET with the existing streams, and the `failed_uploads` quarantine.
-- A throwaway `notes` table on **both targets**: the Android app and the Windows app.
+- A throwaway `notes` table on **both targets**: the Android app and the Windows app. (Dropped in Phase 1 once body measurements carried the sync tests.)
 
 **Exit criteria**
 - Android and Windows: sign in, create a note offline, reconnect, and see it on the other device within about 5 seconds; the note survives killing the app while offline.

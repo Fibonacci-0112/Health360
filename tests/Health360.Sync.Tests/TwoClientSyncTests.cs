@@ -5,7 +5,7 @@ using Health360.Sync.Tests.Support;
 namespace Health360.Sync.Tests;
 
 /// <summary>
-/// Phase 0b exit criteria (PLAN.md §3), through the app's own .NET sync stack: a note written offline
+/// Phase 0b exit criteria (PLAN.md §3), through the app's own .NET sync stack: a weigh-in recorded offline
 /// reaches a second device within about 5 seconds of reconnecting, and user B never receives it. pgTAP
 /// proves the RLS half; this proves the Sync Streams half. Each test
 /// makes its own rows, so they pass in any order.
@@ -49,39 +49,39 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
     }
 
     [Fact]
-    public async Task AnOfflineNoteReachesTheSecondDeviceWithinAboutFiveSeconds()
+    public async Task AnOfflineWeighInReachesTheSecondDeviceWithinAboutFiveSeconds()
     {
         await A1.DrainAsync();
         await A1.DisconnectAsync();
-        var id = await A1.AddNoteAsync("written offline");
+        var id = await A1.AddWeightAsync(80.5);
         Assert.Equal(1, await A1.PendingAsync());
 
         var elapsed = Stopwatch.StartNew();
         await A1.Local.ConnectAsync(fx.Alex.UserId);
-        await Wait.ForAsync(A2.NotesAsync, notes => notes.Any(n => n.Id == id), TimeSpan.FromSeconds(15));
+        await Wait.ForAsync(A2.MeasurementsAsync, rows => rows.Any(r => r.Id == id), TimeSpan.FromSeconds(15));
         elapsed.Stop();
 
         Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5), $"Took {elapsed.Elapsed.TotalSeconds:0.0} s.");
-        Assert.Equal("written offline", (await A2.NotesAsync()).Single(n => n.Id == id).Body);
+        Assert.Equal(80.5, (await A2.MeasurementsAsync()).Single(r => r.Id == id).Value);
         await A1.DrainAsync();
     }
 
     [Fact]
     public async Task UserBNeverReceivesAnotherUsersRows()
     {
-        var alexs = await A1.AddNoteAsync("alex's");
-        await A2.SyncedAsync("notes", alexs);
+        var alexs = await A1.AddWeightAsync(81);
+        await A2.SyncedAsync("measurements", alexs);
 
-        // B writes a note of its own and waits for the server's copy. Once it has it, B's stream has
+        // B records a weight of its own and waits for the server's copy. Once it has it, B's stream has
         // caught up past A's write, so anything of A's that leaked would be here too.
-        var blakes = await B.AddNoteAsync("blake's");
-        await B.SyncedAsync("notes", blakes);
+        var blakes = await B.AddWeightAsync(70);
+        await B.SyncedAsync("measurements", blakes);
 
-        Assert.All(await IdsAsync(B, "SELECT profile_id AS Id FROM notes"), p => Assert.Equal(fx.Blake.ProfileId, p));
-        Assert.DoesNotContain(await B.NotesAsync(), n => n.Id == alexs);
+        Assert.All(await B.MeasurementsAsync(), r => Assert.Equal(fx.Blake.ProfileId, r.ProfileId));
+        Assert.DoesNotContain(await B.MeasurementsAsync(), r => r.Id == alexs);
         Assert.Empty(await IdsAsync(B, "SELECT id AS Id FROM profiles WHERE id = ?", fx.Alex.ProfileId));
         Assert.Empty(await IdsAsync(B, "SELECT row_id AS Id FROM ps_oplog WHERE row_id = ?", alexs));
-        Assert.DoesNotContain(await A2.NotesAsync(), n => n.Id == blakes);
+        Assert.DoesNotContain(await A2.MeasurementsAsync(), r => r.Id == blakes);
     }
 
     [Fact]
@@ -181,8 +181,8 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
             System.Text.Json.JsonSerializer.Deserialize<double[]>(canonical!.BoundariesCanonical!)!);
 
         // B's own write coming back means B's stream has caught up past A's; nothing of A's arrived.
-        var marker = await B.AddNoteAsync("marker");
-        await B.SyncedAsync("notes", marker);
+        var marker = await B.AddWeightAsync(70);
+        await B.SyncedAsync("measurements", marker);
         foreach (var (table, id) in new[] { ("measurement_groups", group), ("measurements", weight), ("zone_sets", zones) })
         {
             Assert.Empty(await IdsAsync(B, $"SELECT id AS Id FROM {table} WHERE id = ?", id));
@@ -251,8 +251,8 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         Assert.Equal(("measurement", measured), (kept.Target, kept.MeasurementId));
 
         // B's own write coming back means B's stream has caught up past A's; Alex's pin never arrived.
-        var marker = await B.AddNoteAsync("marker");
-        await B.SyncedAsync("notes", marker);
+        var marker = await B.AddWeightAsync(70);
+        await B.SyncedAsync("measurements", marker);
         Assert.Empty(await IdsAsync(B, "SELECT id AS Id FROM metric_pins"));
         Assert.Empty(await IdsAsync(B, "SELECT row_id AS Id FROM ps_oplog WHERE row_id = ?", pinId));
 
@@ -264,24 +264,24 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
     }
 
     [Fact]
-    public async Task AnOfflineEditToANoteAnotherDeviceDeletedIsQuarantinedNotLost()
+    public async Task AnOfflineEditToAValueAnotherDeviceDeletedIsQuarantinedNotLost()
     {
-        var id = await A1.AddNoteAsync("to be deleted");
-        await A2.SyncedAsync("notes", id);
+        var id = await A1.AddWeightAsync(82);
+        await A2.SyncedAsync("measurements", id);
 
         await A1.DisconnectAsync();
-        await A1.Db.Execute("UPDATE notes SET body = 'edited offline' WHERE id = ?", [id]);
-        await A2.Db.Execute("DELETE FROM notes WHERE id = ?", [id]);
+        await A1.Db.Execute("UPDATE measurements SET value = 82.5 WHERE id = ?", [id]);
+        await A2.Db.Execute("DELETE FROM measurements WHERE id = ?", [id]);
         await A2.DrainAsync();
 
         await A1.ConnectAsync();
         await A1.DrainAsync();
         var failed = Assert.Single(await FailedAsync(A1, id));
         Assert.Equal(("PATCH", PostgrestWriter.NoRow), (failed.Op, failed.ErrorCode));
-        // The server's state wins: the note is gone here too.
-        await Wait.ForAsync(async () => await IdsAsync(A1, "SELECT id AS Id FROM notes WHERE id = ?", id), ids => ids.Length == 0);
+        // The server's state wins: the value is gone here too.
+        await Wait.ForAsync(async () => await IdsAsync(A1, "SELECT id AS Id FROM measurements WHERE id = ?", id), ids => ids.Length == 0);
 
-        // Retrying sends the saved edit again; the note is still gone, so it stays quarantined.
+        // Retrying sends the saved edit again; the value is still gone, so it stays quarantined.
         Assert.Equal(RetryResult.Rejected, await Uploads.RetryFailedUploadAsync(A1.Db, failed.Id, A1.Writer, TimeProvider.System, TestContext.Current.CancellationToken));
         Assert.Single(await FailedAsync(A1, id));
     }
@@ -311,25 +311,26 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
     {
         // B writes into A's profile: RLS rejects it (42501), so it is parked in failed_uploads, and B's
         // next, valid write still goes through.
-        var forged = await B.AddNoteAsync("forged", fx.Alex.ProfileId);
-        var after = await B.AddNoteAsync("after");
+        var forged = await B.AddWeightAsync(99, fx.Alex.ProfileId);
+        var after = await B.AddWeightAsync(71);
         await B.DrainAsync();
 
         var failed = Assert.Single(await FailedAsync(B, forged));
         Assert.Equal(("PUT", "42501"), (failed.Op, failed.ErrorCode));
         // The connector logs the table and code only: no ids, no row data.
-        var logged = Assert.Single(B.Log.Messages, m => m.Contains("42501", StringComparison.Ordinal) && m.Contains("notes", StringComparison.Ordinal));
+        var logged = Assert.Single(B.Log.Messages, m => m.Contains("42501", StringComparison.Ordinal) && m.Contains("measurements", StringComparison.Ordinal));
         Assert.DoesNotContain(forged, logged, StringComparison.Ordinal);
-        Assert.DoesNotContain("forged", logged, StringComparison.Ordinal);
+        Assert.DoesNotContain(fx.Alex.ProfileId, logged, StringComparison.Ordinal);
+        Assert.DoesNotContain("99", logged, StringComparison.Ordinal);
 
         // The server's state wins: the forged row disappears locally, the valid one stays.
-        await B.SyncedAsync("notes", after);
-        await Wait.ForAsync(B.NotesAsync, notes => notes.All(n => n.Id != forged));
-        Assert.Contains(await B.NotesAsync(), n => n.Id == after);
+        await B.SyncedAsync("measurements", after);
+        await Wait.ForAsync(B.MeasurementsAsync, rows => rows.All(r => r.Id != forged));
+        Assert.Contains(await B.MeasurementsAsync(), r => r.Id == after);
         // Nor did it reach A: by the time A's next write is back on A's devices, it would be there too.
-        var marker = await A1.AddNoteAsync("marker");
-        await A2.SyncedAsync("notes", marker);
-        Assert.DoesNotContain(await A2.NotesAsync(), n => n.Id == forged);
+        var marker = await A1.AddWeightAsync(80);
+        await A2.SyncedAsync("measurements", marker);
+        Assert.DoesNotContain(await A2.MeasurementsAsync(), r => r.Id == forged);
     }
 
     [Fact]
@@ -340,7 +341,7 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         await using var shared = Device.Create(fx.Backend, fx.Alex);
         await shared.ConnectAsync();
         await shared.DisconnectAsync();
-        var unsent = await shared.AddNoteAsync("alex's, never sent");
+        var unsent = await shared.AddWeightAsync(83);
         Assert.Equal(1, await shared.PendingAsync());
 
         shared.SignInAs(fx.Blake);
@@ -349,13 +350,13 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         Assert.Equal(0, await shared.PendingAsync());
         Assert.Equal(0, await Uploads.FailedUploadCountAsync(shared.Db));
         Assert.Equal([fx.Blake.ProfileId], await IdsAsync(shared, "SELECT id AS Id FROM profiles"));
-        Assert.All(await IdsAsync(shared, "SELECT profile_id AS Id FROM notes"), p => Assert.Equal(fx.Blake.ProfileId, p));
+        Assert.All(await shared.MeasurementsAsync(), r => Assert.Equal(fx.Blake.ProfileId, r.ProfileId));
 
-        // Alex's note never reached the server: by the time Alex's next write reaches Alex's other
+        // Alex's weigh-in never reached the server: by the time Alex's next write reaches Alex's other
         // device, the unsent one would have too.
-        var marker = await A1.AddNoteAsync("marker");
-        await A2.SyncedAsync("notes", marker);
-        Assert.DoesNotContain(await A2.NotesAsync(), n => n.Id == unsent);
+        var marker = await A1.AddWeightAsync(80);
+        await A2.SyncedAsync("measurements", marker);
+        Assert.DoesNotContain(await A2.MeasurementsAsync(), r => r.Id == unsent);
     }
 
     private static async Task<string[]> IdsAsync(Device device, string sql, params object[] args) =>

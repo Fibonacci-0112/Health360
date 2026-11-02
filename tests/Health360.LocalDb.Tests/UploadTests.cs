@@ -10,8 +10,8 @@ public class UploadTests
 
     private static readonly FixedClock Clock = new(new DateTimeOffset(2026, 10, 30, 12, 0, 0, TimeSpan.Zero));
 
-    private static Task<PowerSync.Common.DB.NonQueryResult> AddNote(TestDatabase t, string id, string body) =>
-        t.Db.Execute("INSERT INTO notes (id, profile_id, body, local_date) VALUES (?, ?, ?, ?)", [id, Profile, body, "2026-10-30"]);
+    private static Task<PowerSync.Common.DB.NonQueryResult> AddRow(TestDatabase t, string id, string method) =>
+        t.Db.Execute("INSERT INTO measurements (id, profile_id, method, local_date) VALUES (?, ?, ?, ?)", [id, Profile, method, "2026-10-30"]);
 
     private static async Task<long> FailedCount(TestDatabase t) => await Uploads.FailedUploadCountAsync(t.Db);
 
@@ -19,14 +19,14 @@ public class UploadTests
     public async Task UploadsAnInsertAsAPutOfTheWholeRow()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "n1", "hello");
+        await AddRow(t, "n1", "hello");
         var writer = new FakeWriter();
 
         await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
 
         var write = Assert.Single(writer.Writes);
-        Assert.Equal(("PUT", "notes", "n1"), (write.Op, write.Table, write.Id));
-        Assert.Equal("hello", write.Data!["body"]!.GetValue<string>());
+        Assert.Equal(("PUT", "measurements", "n1"), (write.Op, write.Table, write.Id));
+        Assert.Equal("hello", write.Data!["method"]!.GetValue<string>());
         Assert.Equal(Profile, write.Data!["profile_id"]!.GetValue<string>());
         Assert.Equal(0, await Uploads.PendingUploadCountAsync(t.Db));
     }
@@ -35,15 +35,15 @@ public class UploadTests
     public async Task UploadsUpdatesAndDeletes()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "n1", "hello");
-        await t.Db.Execute("UPDATE notes SET body = ? WHERE id = ?", ["edited", "n1"]);
-        await t.Db.Execute("DELETE FROM notes WHERE id = ?", ["n1"]);
+        await AddRow(t, "n1", "hello");
+        await t.Db.Execute("UPDATE measurements SET method = ? WHERE id = ?", ["edited", "n1"]);
+        await t.Db.Execute("DELETE FROM measurements WHERE id = ?", ["n1"]);
         var writer = new FakeWriter();
 
         await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(["PUT", "PATCH", "DELETE"], writer.Writes.Select(w => w.Op));
-        Assert.Equal("""{"body":"edited"}""", writer.Writes[1].Data!.ToJsonString());
+        Assert.Equal("""{"method":"edited"}""", writer.Writes[1].Data!.ToJsonString());
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class UploadTests
     public async Task SendsTimestampsExactlyAsStored(string timestamp)
     {
         await using var t = await TestDatabase.OpenAsync();
-        await t.Db.Execute("INSERT INTO notes (id, profile_id, body, created_at) VALUES (?, ?, ?, ?)", ["n1", Profile, "x", timestamp]);
+        await t.Db.Execute("INSERT INTO measurements (id, profile_id, method, created_at) VALUES (?, ?, ?, ?)", ["n1", Profile, "x", timestamp]);
         var writer = new FakeWriter();
 
         await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
@@ -80,8 +80,8 @@ public class UploadTests
     public async Task SendsNothingForAnUpdateThatChangesNothing()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "n1", "hello");
-        await t.Db.Execute("UPDATE notes SET body = ? WHERE id = ?", ["hello", "n1"]);
+        await AddRow(t, "n1", "hello");
+        await t.Db.Execute("UPDATE measurements SET method = ? WHERE id = ?", ["hello", "n1"]);
         var writer = new FakeWriter();
 
         await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
@@ -94,8 +94,8 @@ public class UploadTests
     public async Task QuarantinesARejectedWriteAndCarriesOn()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "forged", "a");
-        await AddNote(t, "fine", "b");
+        await AddRow(t, "forged", "a");
+        await AddRow(t, "fine", "b");
         var writer = new FakeWriter { Fail = w => w.Id == "forged" ? new RemoteWriteException("rls", "42501") : null };
 
         await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
@@ -104,8 +104,8 @@ public class UploadTests
         Assert.Equal(0, await Uploads.PendingUploadCountAsync(t.Db));
         var row = await t.Db.Get<FailedRow>(
             "SELECT table_name AS TableName, row_id AS RowId, op AS Op, data AS Data, error_code AS ErrorCode, failed_at AS FailedAt FROM failed_uploads");
-        Assert.Equal(("notes", "forged", "PUT", "42501", "2026-10-30T12:00:00.000Z"), (row.TableName, row.RowId, row.Op, row.ErrorCode, row.FailedAt));
-        Assert.Equal("a", JsonNode.Parse(row.Data)!["body"]!.GetValue<string>());
+        Assert.Equal(("measurements", "forged", "PUT", "42501", "2026-10-30T12:00:00.000Z"), (row.TableName, row.RowId, row.Op, row.ErrorCode, row.FailedAt));
+        Assert.Equal("a", JsonNode.Parse(row.Data)!["method"]!.GetValue<string>());
     }
 
     [Fact]
@@ -115,8 +115,8 @@ public class UploadTests
         // One transaction: op 1 is rejected for good, op 2 hits a network error the first time.
         await t.Db.WriteTransaction(async tx =>
         {
-            await tx.Execute("INSERT INTO notes (id, profile_id, body) VALUES (?, ?, ?)", ["a", Profile, "forged"]);
-            await tx.Execute("INSERT INTO notes (id, profile_id, body) VALUES (?, ?, ?)", ["b", Profile, "fine"]);
+            await tx.Execute("INSERT INTO measurements (id, profile_id, method) VALUES (?, ?, ?)", ["a", Profile, "forged"]);
+            await tx.Execute("INSERT INTO measurements (id, profile_id, method) VALUES (?, ?, ?)", ["b", Profile, "fine"]);
         });
         var networkDown = true;
         var writer = new FakeWriter
@@ -141,8 +141,8 @@ public class UploadTests
         await using var t = await TestDatabase.OpenAsync();
         await t.Db.WriteTransaction(async tx =>
         {
-            await tx.Execute("INSERT INTO notes (id, profile_id, body) VALUES (?, ?, ?)", ["a", Profile, "x"]);
-            await tx.Execute("INSERT INTO notes (id, profile_id, body) VALUES (?, ?, ?)", ["b", Profile, "y"]);
+            await tx.Execute("INSERT INTO measurements (id, profile_id, method) VALUES (?, ?, ?)", ["a", Profile, "x"]);
+            await tx.Execute("INSERT INTO measurements (id, profile_id, method) VALUES (?, ?, ?)", ["b", Profile, "y"]);
         });
         var attempt = 0;
         var writer = new FakeWriter
@@ -171,7 +171,7 @@ public class UploadTests
     public async Task LeavesTransientFailuresQueued(string? code)
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "n1", "hello");
+        await AddRow(t, "n1", "hello");
         var writer = new FakeWriter { Fail = _ => new RemoteWriteException("try later", code) };
 
         await Assert.ThrowsAsync<RemoteWriteException>(() => Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken));
@@ -197,7 +197,7 @@ public class UploadTests
     public async Task RetrySendsAFixedWriteAndRemovesTheEntry()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "n1", "hello");
+        await AddRow(t, "n1", "hello");
         var reject = true;
         var writer = new FakeWriter { Fail = _ => reject ? new RemoteWriteException("check", "23514") : null };
         await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
@@ -209,14 +209,14 @@ public class UploadTests
         Assert.Equal(RetryResult.Sent, result);
         Assert.Equal(0, await FailedCount(t));
         var resent = writer.Writes[^1];
-        Assert.Equal(("PUT", "notes", "n1", "hello"), (resent.Op, resent.Table, resent.Id, resent.Data!["body"]!.GetValue<string>()));
+        Assert.Equal(("PUT", "measurements", "n1", "hello"), (resent.Op, resent.Table, resent.Id, resent.Data!["method"]!.GetValue<string>()));
     }
 
     [Fact]
     public async Task RetryKeepsTheEntryWithTheNewErrorWhenRejectedAgain()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "n1", "hello");
+        await AddRow(t, "n1", "hello");
         var code = "23514";
         var writer = new FakeWriter { Fail = _ => new RemoteWriteException("no", code) };
         await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
@@ -233,7 +233,7 @@ public class UploadTests
     public async Task RetryKeepsTheEntryUnchangedWhenOffline()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "n1", "hello");
+        await AddRow(t, "n1", "hello");
         var offline = false;
         var writer = new FakeWriter { Fail = _ => offline ? new HttpRequestException("offline") : new RemoteWriteException("no", "23514") };
         await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
@@ -250,9 +250,9 @@ public class UploadTests
     public async Task RetryReportsOfflineWhenTheReplyIsNotJson()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "n1", "hello");
+        await AddRow(t, "n1", "hello");
         await Uploads.UploadPendingAsync(t.Db, new FakeWriter { Fail = _ => new RemoteWriteException("no", "23514") }, Clock, cancellationToken: TestContext.Current.CancellationToken);
-        await t.Db.Execute("UPDATE notes SET body = ? WHERE id = ?", ["fixed", "n1"]);
+        await t.Db.Execute("UPDATE measurements SET method = ? WHERE id = ?", ["fixed", "n1"]);
         await Uploads.UploadPendingAsync(t.Db, new FakeWriter { Fail = w => w.Op == "PATCH" ? new RemoteWriteException("no", "23514") : null }, Clock, cancellationToken: TestContext.Current.CancellationToken);
         var patchId = (await t.Db.Get<FailedRow>("SELECT id AS Id FROM failed_uploads WHERE op = 'PATCH'")).Id;
         using var http = new HttpClient(new HtmlPage()) { BaseAddress = new Uri("http://127.0.0.1:54321/") };
@@ -268,7 +268,7 @@ public class UploadTests
     public async Task DiscardDropsTheEntry()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "n1", "hello");
+        await AddRow(t, "n1", "hello");
         await Uploads.UploadPendingAsync(t.Db, new FakeWriter { Fail = _ => new RemoteWriteException("no", "23514") }, Clock, cancellationToken: TestContext.Current.CancellationToken);
 
         await Uploads.DiscardFailedUploadAsync(t.Db, await QuarantinedId(t));
@@ -280,7 +280,7 @@ public class UploadTests
     public async Task NeverQueuesWritesToFailedUploads()
     {
         await using var t = await TestDatabase.OpenAsync();
-        await AddNote(t, "n1", "hello");
+        await AddRow(t, "n1", "hello");
         await Uploads.UploadPendingAsync(t.Db, new FakeWriter { Fail = _ => new RemoteWriteException("no", "23514") }, Clock, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(0, await Uploads.PendingUploadCountAsync(t.Db));
@@ -319,14 +319,14 @@ public class UploadTests
         await using var t = await TestDatabase.OpenAsync();
         await t.Db.WriteTransaction(async tx =>
         {
-            await tx.Execute("INSERT INTO notes (id, profile_id, body) VALUES (?, ?, ?)", ["n1", Profile, "hello"]);
+            await tx.Execute("INSERT INTO measurements (id, profile_id, method) VALUES (?, ?, ?)", ["n1", Profile, "hello"]);
             await tx.Execute("DELETE FROM ps_crud");
         });
-        await t.Db.Execute("UPDATE notes SET body = ? WHERE id = ?", ["edited", "n1"]);
+        await t.Db.Execute("UPDATE measurements SET method = ? WHERE id = ?", ["edited", "n1"]);
         // Another device deleted it: sync removes the row here without queueing anything.
         await t.Db.WriteTransaction(async tx =>
         {
-            await tx.Execute("DELETE FROM notes WHERE id = ?", ["n1"]);
+            await tx.Execute("DELETE FROM measurements WHERE id = ?", ["n1"]);
             await tx.Execute("DELETE FROM ps_crud WHERE id = (SELECT max(id) FROM ps_crud)");
         });
         var writer = new FakeWriter { Fail = _ => new RemoteWriteException("no row", PostgrestWriter.NoRow) };

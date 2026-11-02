@@ -138,12 +138,6 @@ public static class AppSchema
         ("storage_path", ColumnType.Text),
         ("thumb_path", ColumnType.Text));
 
-    /// <summary>Phase 0 throwaway table that proves sync on every target.</summary>
-    public static Table Notes { get; } = Synced("notes",
-        ("profile_id", ColumnType.Text),
-        ("body", ColumnType.Text),
-        ("local_date", ColumnType.Text));
-
     /// <summary>
     /// Local only, never uploaded. When the server permanently rejects a write (constraint or RLS
     /// violation), the connector parks it here instead of blocking the upload queue (PLAN.md §4).
@@ -191,7 +185,7 @@ public static class AppSchema
     public static IReadOnlyList<Table> Tables { get; } =
         [
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
-            MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, Notes, FailedUploadsTable,
+            MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, FailedUploadsTable,
             PhotoUploadsTable, PhotoDeletionsTable,
         ];
 
@@ -246,7 +240,7 @@ public static class AppSchema
     /// <summary>Tables the client may write. Everything else synced is read-only on the client.</summary>
     public static IReadOnlySet<string> UploadableTables { get; } =
         new HashSet<string>(
-            ["profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins", "progress_photos", "notes"],
+            ["profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins", "progress_photos"],
             StringComparer.Ordinal);
 
     private static Table Synced(string name, params (string Name, ColumnType Type)[] columns) =>
