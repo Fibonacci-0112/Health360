@@ -30,11 +30,11 @@ public sealed class SyncStateTests : IAsyncLifetime
         await Until(() => sync.Failed.Count == 0);
 
         await app.Database.Db.Execute(
-            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code, error_message, failed_at) VALUES ('crud-7', 'notes', 'n1', 'PUT', '{}', '23505', 'duplicate key', '2026-10-30T11:00:00.000Z')");
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code, error_message, failed_at) VALUES ('crud-7', 'measurements', 'n1', 'PUT', '{}', '23505', 'duplicate key', '2026-10-30T11:00:00.000Z')");
         await Until(() => sync.Failed.Count == 1);
 
         var failed = sync.Failed[0];
-        Assert.Equal(("crud-7", "notes", "PUT", "23505", "duplicate key"), (failed.Id, failed.TableName, failed.Op, failed.ErrorCode, failed.ErrorMessage));
+        Assert.Equal(("crud-7", "measurements", "PUT", "23505", "duplicate key"), (failed.Id, failed.TableName, failed.Op, failed.ErrorCode, failed.ErrorMessage));
 
         await sync.DiscardAsync("crud-7");
         await Until(() => sync.Failed.Count == 0);
@@ -45,7 +45,7 @@ public sealed class SyncStateTests : IAsyncLifetime
     {
         using var sync = new SyncState(app.Database.Db, new App.NoWriter(), TimeProvider.System, NullLogger<SyncState>.Instance);
 
-        await app.Database.Db.Execute("INSERT INTO notes (id, profile_id, body) VALUES ('n1', 'p', 'offline note')");
+        await app.Database.Db.Execute("INSERT INTO measurements (id, profile_id, method) VALUES ('n1', 'p', 'offline')");
 
         await Until(() => sync.Pending == 1);
         Assert.False(sync.Connected);
@@ -56,7 +56,7 @@ public sealed class SyncStateTests : IAsyncLifetime
     {
         using var sync = new SyncState(app.Database.Db, new App.NoWriter(), TimeProvider.System, NullLogger<SyncState>.Instance);
         await app.Database.Db.Execute(
-            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code, error_message, failed_at) VALUES ('crud-7', 'notes', 'n1', 'PUT', '{}', '23505', 'duplicate key', '2026-10-30T11:00:00.000Z')");
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code, error_message, failed_at) VALUES ('crud-7', 'measurements', 'n1', 'PUT', '{}', '23505', 'duplicate key', '2026-10-30T11:00:00.000Z')");
 
         Assert.Equal(RetryResult.Offline, await sync.RetryAsync("crud-7"));
         Assert.Equal(1, await Uploads.FailedUploadCountAsync(app.Database.Db));

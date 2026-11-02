@@ -26,7 +26,7 @@ public sealed class SettingsTests : AppTestContext
 
     private async Task QuarantineAsync(string id, string code) =>
         await App.Database.Db.Execute(
-            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code, error_message, failed_at) VALUES (?, 'notes', 'n1', 'PUT', '{}', ?, 'duplicate key', '2026-10-30T11:00:00.000Z')",
+            "INSERT INTO failed_uploads (id, table_name, row_id, op, data, error_code, error_message, failed_at) VALUES (?, 'measurements', 'n1', 'PUT', '{}', ?, 'duplicate key', '2026-10-30T11:00:00.000Z')",
             [id, code]);
 
     [Fact]
@@ -168,7 +168,7 @@ public sealed class SettingsTests : AppTestContext
         Assert.Empty(cut.FindAll(".failed"));
 
         await QuarantineAsync("crud-7", "23505");
-        cut.WaitForAssertion(() => Assert.Contains("PUT notes · 23505", cut.Find(".failed").TextContent, StringComparison.Ordinal), Wait);
+        cut.WaitForAssertion(() => Assert.Contains("PUT measurements · 23505", cut.Find(".failed").TextContent, StringComparison.Ordinal), Wait);
         cut.WaitForAssertion(() => Assert.Contains("1 rejected", cut.Find(".badge").TextContent, StringComparison.Ordinal), Wait);
 
         await ClickAsync(() => cut.FindAll(".failed button").Single(b => b.TextContent == "Discard"));

@@ -1,4 +1,4 @@
-using Health360.Contracts.Notes;
+using System.Globalization;
 using PowerSync.Common.Client;
 
 namespace Health360.Sync.Tests.Support;
@@ -70,10 +70,31 @@ public sealed class Device : IAsyncDisposable
         Session.Token = user.Session;
     }
 
-    public Task<string> AddNoteAsync(string body, string? profileId = null) =>
-        Notes.AddAsync(Db, profileId ?? User.ProfileId, new NoteInput(body), TimeProvider.System);
+    /// <summary>
+    /// Records a weigh-in in kg, for the signed-in user's profile unless another is given (a forged write). It goes
+    /// straight into the local table, as <see cref="Measurements.AddAsync"/> would write it, so a test can name any
+    /// profile and needn't wait for the metric definitions to sync first.
+    /// </summary>
+    /// <returns>The new row's id, a UUIDv7.</returns>
+    public async Task<string> AddWeightAsync(double kg, string? profileId = null)
+    {
+        var id = Guid.CreateVersion7().ToString();
+        // The app's timestamp form (UTC with milliseconds), and the day in UTC: the server takes local_date as sent.
+        var clock = DateTimeOffset.UtcNow;
+        var now = clock.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
+        await Db.Execute(
+            """
+            INSERT INTO measurements (id, profile_id, metric_code, category, value, unit, value_canonical, measured_at, local_date, source,
+                                      created_at, updated_at)
+            VALUES (?, ?, 'weight', 'body', ?, 'kg', ?, ?, ?, 'manual', ?, ?)
+            """,
+            [id, profileId ?? User.ProfileId, kg, kg, now, clock.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), now, now]);
+        return id;
+    }
 
-    public Task<NoteRow[]> NotesAsync() => Notes.ListAsync(Db);
+    /// <summary>Every measurement this device holds, whoever's profile it is: the leak checks must see all of them.</summary>
+    public Task<MeasurementRow[]> MeasurementsAsync() =>
+        Db.GetAll<MeasurementRow>("SELECT id AS Id, profile_id AS ProfileId, value AS Value FROM measurements");
 
     public async Task<long> PendingAsync() => await Uploads.PendingUploadCountAsync(Db);
 
@@ -106,5 +127,14 @@ public sealed class Device : IAsyncDisposable
     public sealed class Row
     {
         public string Id { get; set; } = "";
+    }
+
+    public sealed class MeasurementRow
+    {
+        public string Id { get; set; } = "";
+
+        public string ProfileId { get; set; } = "";
+
+        public double Value { get; set; }
     }
 }
