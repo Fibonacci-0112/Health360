@@ -10,6 +10,7 @@ namespace Health360.Sync.Tests;
 /// checks them through the Storage API itself.
 /// </summary>
 [Trait("Category", "Sync")]
+[Collection(SerialSync.Name)]
 public sealed class PhotoSyncTests(SyncFixture fx) : IClassFixture<SyncFixture>, IAsyncLifetime
 {
     // Storage hides an object its select policy denies, so a refused read may look like a missing file.
@@ -112,12 +113,14 @@ public sealed class PhotoSyncTests(SyncFixture fx) : IClassFixture<SyncFixture>,
         await GrantAsync(casey, "body");
         await AssertCannotReadAsync(casey, photoPath, stripped);
 
-        // Sharing photos lets Casey read them, still not write: grants are read-only.
+        // Sharing photos lets Casey read them, still not write or delete: grants are read-only.
         await GrantAsync(casey, "photos");
         var shared = await fx.Backend.StorageAsync(casey, HttpMethod.Get, photoPath, null, Ct, "authenticated/");
         Assert.True(shared.Succeeded, $"With a photos grant, the member's download answered {shared.Status}.");
         Assert.Equal(stripped, shared.Body);
         await AssertCannotWriteAsync(casey);
+        await fx.Backend.StorageAsync(casey, HttpMethod.Delete, photoPath, null, Ct);
+        Assert.Equal(stripped, (await fx.Backend.StorageAsync(fx.Alex, HttpMethod.Get, photoPath, null, Ct, "authenticated/")).Body);
 
         await DeleteAsync(id);
     }
