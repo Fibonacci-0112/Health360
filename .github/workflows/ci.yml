@@ -102,8 +102,8 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: 2.122.0
-      - name: Start Supabase (database, auth and REST only)
-        run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,storage-api,postgres-meta
+      - name: Start Supabase (database, auth, REST and Storage)
+        run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,postgres-meta
       - name: Export Supabase settings
         run: |
           supabase status -o env > /tmp/supabase.env
@@ -126,8 +126,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      # Leak and offline tests through the MAUI app's sync stack (Health360.LocalDb).
-      - name: Leak and offline tests
+      # Leak, offline and photo tests through the MAUI app's sync and photo stack (Health360.LocalDb).
+      - name: Leak, offline and photo tests
         run: dotnet test --project tests/Health360.Sync.Tests -c Release -p:ContinuousIntegrationBuild=true
         env:
           DOTNET_NOLOGO: '1'

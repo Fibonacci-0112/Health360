@@ -77,6 +77,56 @@ public sealed class SyncBackend : IAsyncDisposable
         return new TestUser(name, userId, Required(rows[0]!, "id"), new SessionToken(userId, token));
     }
 
+    /// <summary>
+    /// Makes <paramref name="member"/> an adult member of <paramref name="owner"/>'s personal household, as an accepted
+    /// invite will. Only the server adds members (clients can't insert into <c>household_members</c>), so this uses
+    /// the service-role key.
+    /// </summary>
+    public async Task AddToHouseholdAsync(TestUser owner, TestUser member, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(member);
+        string household;
+        using (var find = new HttpRequestMessage(
+            HttpMethod.Get, $"rest/v1/household_members?select=household_id&role=eq.owner&profile_id=eq.{owner.ProfileId}"))
+        {
+            find.Headers.Add("apikey", serviceRoleKey);
+            find.Headers.Authorization = new AuthenticationHeaderValue("Bearer", serviceRoleKey);
+            var rows = (JsonArray)await SendAsync(find, cancellationToken);
+            household = Required(Assert.Single(rows)!, "household_id");
+        }
+
+        using var add = new HttpRequestMessage(HttpMethod.Post, "rest/v1/household_members");
+        add.Headers.Add("apikey", serviceRoleKey);
+        add.Headers.Authorization = new AuthenticationHeaderValue("Bearer", serviceRoleKey);
+        add.Headers.Add("Prefer", "return=representation");
+        add.Content = JsonContent.Create(new JsonObject { ["household_id"] = household, ["profile_id"] = member.ProfileId, ["role"] = "adult" });
+        await SendAsync(add, cancellationToken);
+    }
+
+    /// <summary>
+    /// One Storage request in the <c>progress-photos</c> bucket as <paramref name="user"/>, with the publishable key and
+    /// their own token, the way any client of theirs could send it. <paramref name="route"/> is <c>"authenticated/"</c>
+    /// for a download. The answer's status, Storage's own status in the body when it has one, and the body.
+    /// </summary>
+    public async Task<StorageAnswer> StorageAsync(
+        TestUser user, HttpMethod method, string path, byte[]? jpeg, CancellationToken cancellationToken, string route = "")
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        using var request = new HttpRequestMessage(method, $"storage/v1/object/{route}{SupabasePhotoStorage.Bucket}/{path}");
+        request.Headers.Add("apikey", Endpoints.SupabaseApiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", user.Session.AccessToken);
+        if (jpeg is not null)
+        {
+            request.Content = new ByteArrayContent(jpeg);
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+        }
+
+        using var response = await http.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        return new StorageAnswer((int)response.StatusCode, body);
+    }
+
     /// <summary>Deletes the users this run created; their profiles, households and rows go with them.</summary>
     public async ValueTask DisposeAsync()
     {
@@ -107,6 +157,39 @@ public sealed class SyncBackend : IAsyncDisposable
         Environment.GetEnvironmentVariable(name) is { Length: > 0 } value
             ? value
             : throw new InvalidOperationException($"{name} is not set (see docs/phase0b.md, \"Two-client sync test\").");
+}
+
+/// <summary>What Storage answered. <see cref="Body"/> may be a photo: assert on it, never log it.</summary>
+public sealed record StorageAnswer(int Status, byte[] Body)
+{
+    /// <summary>
+    /// The status Storage means: some versions answer a refusal with HTTP 400 and the real status (403, 404) as
+    /// <c>statusCode</c> in the JSON body.
+    /// </summary>
+    public int Effective
+    {
+        get
+        {
+            if (Status != 400)
+            {
+                return Status;
+            }
+
+            try
+            {
+                return JsonNode.Parse(Body) is JsonObject error
+                    && int.TryParse((error["statusCode"] as JsonValue)?.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var inner)
+                    ? inner
+                    : Status;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return Status;
+            }
+        }
+    }
+
+    public bool Succeeded => Status is >= 200 and < 300;
 }
 
 /// <summary>A signed-in user. <see cref="Session"/> holds their access token; never log it.</summary>

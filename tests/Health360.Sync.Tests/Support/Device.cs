@@ -5,12 +5,17 @@ namespace Health360.Sync.Tests.Support;
 
 /// <summary>
 /// One app install: its own SQLite file and the app's own sync stack (<see cref="LocalDatabase"/>,
-/// <see cref="SupabaseConnector"/>, <see cref="PostgrestWriter"/>), signed in as <see cref="User"/>.
+/// <see cref="SupabaseConnector"/>, <see cref="PostgrestWriter"/>), signed in as <see cref="User"/>. Its progress
+/// photos go through the app's own photo stack too (<see cref="PhotoUploader"/>, <see cref="PhotoLibrary"/> and
+/// <see cref="SupabasePhotoStorage"/>, with the pending files in a folder beside the database), wired as
+/// <c>AddLocalDatabase</c> wires them. The tests drive <see cref="PhotoUploader.ProcessAsync"/> themselves rather than
+/// starting its background loop, so each pass is deterministic.
 /// </summary>
 public sealed class Device : IAsyncDisposable
 {
     private readonly string directory;
     private readonly HttpClient http;
+    private readonly HttpClient storageHttp;
 
     private Device(string directory, SyncEndpoints endpoints, TestUser user)
     {
@@ -26,7 +31,12 @@ public sealed class Device : IAsyncDisposable
             Schema = AppSchema.Schema,
         });
         var connector = new SupabaseConnector(Session, Owner, Writer, endpoints, TimeProvider.System, Log);
-        Local = new LocalDatabase(Db, Owner, connector);
+        storageHttp = new HttpClient(Airplane) { BaseAddress = endpoints.SupabaseUrl };
+        Storage = new SupabasePhotoStorage(storageHttp, Session, Owner, endpoints.SupabaseApiKey);
+        PhotoFiles = new DirectoryPhotoFileStore(Path.Combine(directory, "photos"));
+        Photos = new PhotoUploader(Db, PhotoFiles, Storage, TimeProvider.System);
+        Library = new PhotoLibrary(PhotoFiles, Storage, Photos);
+        Local = new LocalDatabase(Db, Owner, connector, photos: Photos);
     }
 
     public TestUser User { get; private set; }
@@ -40,6 +50,17 @@ public sealed class Device : IAsyncDisposable
     public SwitchableSession Session { get; }
 
     public MemoryOwnerStore Owner { get; }
+
+    /// <summary>Cuts this device's Storage requests; <see cref="GoOfflineAsync"/> cuts sync as well.</summary>
+    public Airplane Airplane { get; } = new();
+
+    public IPhotoStorage Storage { get; }
+
+    public IPhotoFileStore PhotoFiles { get; }
+
+    public PhotoUploader Photos { get; }
+
+    public PhotoLibrary Library { get; }
 
     /// <summary>What the connector logged, quarantined writes included.</summary>
     public ListLogger<SupabaseConnector> Log { get; } = new();
@@ -59,6 +80,20 @@ public sealed class Device : IAsyncDisposable
     }
 
     public Task DisconnectAsync() => Local.DisconnectAsync();
+
+    /// <summary>Airplane mode on: sync stops and Storage can't be reached.</summary>
+    public async Task GoOfflineAsync()
+    {
+        await Local.DisconnectAsync();
+        Airplane.On = true;
+    }
+
+    /// <summary>Airplane mode off: Storage answers again and sync reconnects.</summary>
+    public async Task GoOnlineAsync()
+    {
+        Airplane.On = false;
+        await ConnectAsync();
+    }
 
     /// <summary>
     /// Another user signs in on this device. The session changes first, as it does in the app; the
@@ -113,7 +148,10 @@ public sealed class Device : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await Local.DisposeAsync();
+        Photos.Dispose();
         http.Dispose();
+        // Disposes Airplane too: the client owns its handler.
+        storageHttp.Dispose();
         try
         {
             Directory.Delete(directory, recursive: true);

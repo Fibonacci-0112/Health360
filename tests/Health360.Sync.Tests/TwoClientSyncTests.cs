@@ -11,6 +11,7 @@ namespace Health360.Sync.Tests;
 /// makes its own rows, so they pass in any order.
 /// </summary>
 [Trait("Category", "Sync")]
+[Collection(SerialSync.Name)]
 public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixture>, IAsyncLifetime
 {
     private Device A1 => fx.A1;
