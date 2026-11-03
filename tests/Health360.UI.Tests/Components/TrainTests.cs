@@ -511,4 +511,23 @@ public sealed class TrainTests : AppTestContext
         var row = Assert.Single(await WorkoutPlans.TemplateExercisesAsync(App.Database.Db, ProfileId, template));
         Assert.Equal(new ProgressionRule("linear", 0.000001, "lb"), row.Rule);
     }
+
+    [Fact]
+    public async Task A_tiny_starting_load_is_not_shown_or_saved_as_zero_after_a_unit_change()
+    {
+        string template = "";
+        var cut = await TrainAsync(seed: async () => template = await WorkoutPlans.CreateTemplateAsync(App.Database.Db, ProfileId, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(3, 5, 5, 1e-30, "kg"))], App.Clock));
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Edit Legs']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Edit Legs']");
+        cut.WaitForAssertion(() => Assert.StartsWith("0.000000000000000000000000000001", cut.Find("#load-0").GetAttribute("value"), StringComparison.Ordinal), Wait);
+
+        await ChangeAsync(cut, "#unit-0", "lb");
+        await SubmitAsync(cut, "#save-template");
+
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Edit Legs']"), Wait);
+        var scheme = Assert.Single(await WorkoutPlans.TemplateExercisesAsync(App.Database.Db, ProfileId, template)).Scheme!;
+        Assert.Equal("lb", scheme.LoadUnit);
+        Assert.True(scheme.Load > 0, $"{scheme.Load}");
+    }
 }

@@ -690,13 +690,14 @@ public static class WorkoutLog
             : last.Length > 0 && !fromSchemeFirst
             ? last
             : scheme is not null
-                ? Enumerable.Range(0, scheme.Sets).Select(_ => new SetValues
+                // A row with a rule but no load to suggest yet keeps last time's warm-ups before its scheme's work sets.
+                ? last.Where(s => fromSchemeFirst && s.SetType == "warmup").Concat(Enumerable.Range(0, scheme.Sets).Select(_ => new SetValues
                 {
                     SetType = "working",
                     Reps = scheme.MinReps,
                     Weight = scheme.Load,
                     WeightUnit = scheme.LoadUnit ?? loadUnit,
-                })
+                }))
                 : [new SetValues { SetType = "working", WeightUnit = loadUnit }];
         var i = 0;
         foreach (var values in planned)

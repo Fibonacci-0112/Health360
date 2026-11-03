@@ -299,6 +299,30 @@ public class WorkoutProgressionTests
     }
 
     [Fact]
+    public async Task A_rule_without_a_load_to_suggest_still_keeps_last_times_warm_ups()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(2, 5, 5), null, LinearKg)], clock);
+
+        // Only a warm-up was done last time, so there is no counted session and no starting load.
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+        var first = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[0].Sets[0];
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, first.Id, new SetEntry(5, 40, "kg", SetType: "warmup"), clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, first.Id, clock);
+        await WorkoutLog.FinishAsync(t.Db, Profile, session, clock);
+        clock.Advance(TimeSpan.FromDays(2));
+
+        var next = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+
+        var planned = (await WorkoutLog.ExercisesAsync(t.Db, Profile, next))[0].Sets;
+        Assert.Equal(["warmup", "working", "working"], planned.Select(s => s.SetType));
+        Assert.Equal((40.0, 5), (planned[0].Weight!.Value, planned[1].Reps!.Value));
+        Assert.Null(planned[1].Weight);
+    }
+
+    [Fact]
     public async Task An_edit_is_refused_when_the_template_gained_a_row_after_it_was_loaded()
     {
         await using var t = await OpenAsync();

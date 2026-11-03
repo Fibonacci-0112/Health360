@@ -549,11 +549,21 @@
     private static string Text(long value) => value.ToString(CultureInfo.InvariantCulture);
 
     // Plain decimal text (never 1E-06, which the form's parser doesn't read), to 15 significant digits through
-    // decimal, so a stored value isn't rounded to three places on its way to the form.
-    private static string Number(double value) =>
-        double.IsFinite(value) && Math.Abs(value) < 1e15
-            ? ((decimal)value).ToString(CultureInfo.InvariantCulture)
-            : value.ToString(CultureInfo.InvariantCulture);
+    // decimal, so a stored value isn't rounded to three places on its way to the form. A value too small for decimal
+    // is written out exactly rather than shown as 0.
+    private static string Number(double value)
+    {
+        if (!double.IsFinite(value) || Math.Abs(value) >= 1e15)
+        {
+            return value.ToString(CultureInfo.InvariantCulture);
+        }
+
+        var text = ((decimal)value).ToString(CultureInfo.InvariantCulture);
+        return value != 0 && decimal.Parse(text, CultureInfo.InvariantCulture) == 0 ? value.ToString(ExactDecimal, CultureInfo.InvariantCulture) : text;
+    }
+
+    // Enough places for the smallest double (about 4.9e-324).
+    private static readonly string ExactDecimal = "0." + new string('#', 340);
 
     public void Dispose() => Profiles.Changed -= ProfileChanged;
 }
