@@ -184,12 +184,16 @@ public static class AppSchema
         ("energy_estimate", ColumnType.Text),
         ("rpe", ColumnType.Real));
 
-    /// <summary>U: one exercise in a session, in order.</summary>
+    /// <summary>
+    /// U: one exercise in a session, in order, with the template row it was planned from (null when added by hand;
+    /// a plain link, not a foreign key, so it may name a row deleted since).
+    /// </summary>
     public static Table SessionExercises { get; } = Synced("session_exercises",
         ("profile_id", ColumnType.Text),
         ("session_id", ColumnType.Text),
         ("exercise_id", ColumnType.Text),
-        ("position", ColumnType.Integer));
+        ("position", ColumnType.Integer),
+        ("template_exercise_id", ColumnType.Text));
 
     /// <summary>
     /// U: one set as entered. The server recomputes <c>weight_kg</c>, <c>distance_m</c> and <c>e1rm_kg</c> (for a completed

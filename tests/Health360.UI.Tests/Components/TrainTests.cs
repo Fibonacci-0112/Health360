@@ -530,4 +530,18 @@ public sealed class TrainTests : AppTestContext
         Assert.Equal("lb", scheme.LoadUnit);
         Assert.True(scheme.Load > 0, $"{scheme.Load}");
     }
+
+    [Fact]
+    public async Task The_progression_note_goes_once_every_work_set_is_at_another_load()
+    {
+        var cut = await TrainAsync(seed: () => WorkoutPlans.CreateTemplateAsync(App.Database.Db, ProfileId, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 5, 5, 100, "kg"), null, new ProgressionRule("linear", 2.5, "kg"))], App.Clock));
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Start Legs']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Start Legs']");
+        cut.WaitForAssertion(() => Assert.Contains("starting load", cut.Find(".progression-note").TextContent, StringComparison.Ordinal), Wait);
+
+        await ChangeAsync(cut, "input[aria-label='Barbell Squat set 1 weight in kg']", "90");
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".progression-note")), Wait);
+    }
 }

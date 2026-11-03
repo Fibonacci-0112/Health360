@@ -287,7 +287,10 @@
                     }
                 }
 
-                var shown = suggested;
+                // The cache can outlive the sets it describes: drop a note once no work set is at its load any more.
+                var shown = suggested
+                    .Where(p => batch.FirstOrDefault(e => e.Id == p.Key) is { } e && WorkoutProgression.StillPlanned(p.Value, e))
+                    .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
                 await InvokeAsync(() =>
                 {
                     // A batch queued before the watch was replaced belongs to the old profile or session.

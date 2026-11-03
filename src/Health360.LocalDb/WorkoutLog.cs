@@ -228,14 +228,13 @@ public static class WorkoutLog
                 [id, profileId, templateId, now, Timestamps.LocalDate(clock), now, now]).ConfigureAwait(false);
             for (var i = 0; i < exercises.Length; i++)
             {
-                var suggestion = await WorkoutProgression.SuggestAsync(
-                    tx, profileId, templateId!, exercises[i], WorkoutProgression.Occurrence(exercises, i), now).ConfigureAwait(false);
+                var suggestion = await WorkoutProgression.SuggestAsync(tx, profileId, templateId!, exercises, i, now).ConfigureAwait(false);
 
                 // Linear progression aims for the top of the range, also before there is a load to suggest. A row with a
                 // rule follows its own scheme then, not sets copied from an unrelated workout of the exercise.
                 var scheme = exercises[i].Scheme is { } s && exercises[i].Rule?.Kind == "linear" ? s with { MinReps = s.MaxReps } : exercises[i].Scheme;
                 var ruled = exercises[i].Rule is not null && scheme is not null && exercises[i].TrackingType == "weight_reps";
-                await AddExerciseAsync(tx, profileId, id, exercises[i].ExerciseId, i, scheme, suggestion, loadUnit, clock, ruled)
+                await AddExerciseAsync(tx, profileId, id, exercises[i].ExerciseId, i, scheme, suggestion, loadUnit, clock, ruled, exercises[i].Id)
                     .ConfigureAwait(false);
             }
 
@@ -659,13 +658,15 @@ public static class WorkoutLog
         ExerciseSuggestion? suggestion,
         string loadUnit,
         TimeProvider clock,
-        bool fromSchemeFirst = false)
+        bool fromSchemeFirst = false,
+        string? templateExerciseId = null)
     {
         var id = ExerciseLibrary.NewId(clock);
         var now = Timestamps.UtcNow(clock);
         await tx.Execute(
-            "INSERT INTO session_exercises (id, profile_id, session_id, exercise_id, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [id, profileId, sessionId, exerciseId, position, now, now]).ConfigureAwait(false);
+            "INSERT INTO session_exercises (id, profile_id, session_id, exercise_id, position, template_exercise_id, created_at, updated_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [id, profileId, sessionId, exerciseId, position, templateExerciseId, now, now]).ConfigureAwait(false);
 
         // Last time's completed sets, as entered, from the newest other session that has any.
         var last = await tx.GetAll<SetValues>(
