@@ -173,8 +173,8 @@ public sealed class SetSchemeValidator : AbstractValidator<SetScheme>
     {
         RuleFor(x => x.Sets).InclusiveBetween(1, 20).WithMessage("From 1 to 20 sets.");
         RuleFor(x => x.MinReps).InclusiveBetween(1, 100).WithMessage("At least 1 rep.");
-        RuleFor(x => x.MaxReps).GreaterThanOrEqualTo(x => x.MinReps).LessThanOrEqualTo(100)
-            .WithMessage("The top of the rep range can't be below the bottom.");
+        RuleFor(x => x.MaxReps).GreaterThanOrEqualTo(x => x.MinReps).WithMessage("The top of the rep range can't be below the bottom.")
+            .LessThanOrEqualTo(100).WithMessage("At most 100 reps.");
         RuleFor(x => x.Load).Must(l => l is null || (double.IsFinite(l.Value) && l.Value is >= 0 and <= 2000))
             .WithMessage("Enter a load of 0 or more.");
         RuleFor(x => x.LoadUnit)
@@ -183,5 +183,68 @@ public sealed class SetSchemeValidator : AbstractValidator<SetScheme>
     }
 }
 
-/// <summary>One exercise in a new template: which, its scheme and the rest between sets.</summary>
-public sealed record TemplateExerciseInput(string ExerciseId, SetScheme Scheme, int? RestSeconds = null);
+/// <summary>
+/// How a template exercise's load moves from session to session, stored as <c>template_exercises.progression</c>:
+/// <c>{"kind": "double", "increment": 2.5, "increment_unit": "kg", "deload_after": 3}</c>. <c>linear</c> aims for the
+/// top of the scheme's rep range on every set; <c>double</c> climbs through the range first
+/// (Health360.Domain/Training/Progression). <paramref name="DeloadAfter"/> misses in a row bring a deload; 0 turns
+/// deloads off.
+/// </summary>
+public sealed record ProgressionRule(string Kind, double Increment, string IncrementUnit, int DeloadAfter = 3)
+{
+    /// <summary><c>kind</c> values, in the order the template editor offers them.</summary>
+    public static IReadOnlyList<string> Kinds { get; } = ["double", "linear"];
+
+    public string ToJson() =>
+        new JsonObject { ["kind"] = Kind, ["increment"] = Increment, ["increment_unit"] = IncrementUnit, ["deload_after"] = DeloadAfter }
+            .ToJsonString();
+
+    /// <summary>The rule stored in a row, or null when there is none or it isn't one this app wrote.</summary>
+    public static ProgressionRule? Parse(string? json)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(json) || JsonNode.Parse(json) is not JsonObject o
+                || o["kind"]?.GetValueKind() != JsonValueKind.String || o["increment"]?.GetValueKind() != JsonValueKind.Number
+                || o["increment_unit"]?.GetValueKind() != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            var rule = new ProgressionRule(
+                o["kind"]!.GetValue<string>(),
+                o["increment"]!.GetValue<double>(),
+                o["increment_unit"]!.GetValue<string>(),
+                o["deload_after"]?.GetValueKind() == JsonValueKind.Number ? o["deload_after"]!.GetValue<int>() : 3);
+            return new ProgressionRuleValidator().Validate(rule).IsValid ? rule : null;
+        }
+        catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+}
+
+/// <summary>Limits for a rule: a known kind, an increment above 0 and up to 50 in kg or lb, 0–10 misses before a deload.</summary>
+public sealed class ProgressionRuleValidator : AbstractValidator<ProgressionRule>
+{
+    public ProgressionRuleValidator()
+    {
+        RuleFor(x => x.Kind).Must(ProgressionRule.Kinds.Contains).WithMessage("Choose linear or double progression.");
+        RuleFor(x => x.Increment).Must(i => double.IsFinite(i) && i > 0 && i <= 50).WithMessage("Enter an increment above 0, up to 50.");
+        RuleFor(x => x.IncrementUnit).Must(WorkoutCodes.LoadUnits.Contains).WithMessage("Choose kg or lb.");
+        RuleFor(x => x.DeloadAfter).InclusiveBetween(0, 10).WithMessage("Deload after 0 to 10 misses (0 for never).");
+    }
+}
+
+/// <summary>
+/// One exercise of a template as entered: which, its scheme, the rest between sets and how its load progresses (none
+/// when null). <paramref name="Id"/> is the <c>template_exercises</c> row it keeps when a template is edited; null for
+/// a new one.
+/// </summary>
+public sealed record TemplateExerciseInput(
+    string ExerciseId,
+    SetScheme Scheme,
+    int? RestSeconds = null,
+    ProgressionRule? Progression = null,
+    string? Id = null);

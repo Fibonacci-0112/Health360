@@ -5,6 +5,16 @@ namespace Health360.Domain.Training;
 /// <summary>One work set as performed. Load is in the lifting unit the increment is set in.</summary>
 public sealed record WorkSet(double Load, int Reps);
 
+/// <summary>Which rule a template exercise progresses by.</summary>
+public enum ProgressionKind
+{
+    /// <summary>One rep target (the top of the range); add the increment when every set reaches it.</summary>
+    LinearProgression,
+
+    /// <summary>Reps climb through a range at a fixed load, then the load goes up.</summary>
+    DoubleProgression,
+}
+
 public enum ProgressionAction
 {
     /// <summary>Every set met the target: add the increment.</summary>
@@ -18,8 +28,9 @@ public enum ProgressionAction
 }
 
 /// <summary>
-/// The next session's prescription. <see cref="ConsecutiveFailures"/> is stored with the exercise and passed
-/// back next time; it resets to 0 on any session that isn't a miss, and on a deload.
+/// The next session's prescription. <see cref="ConsecutiveFailures"/> is passed back for the session after;
+/// <see cref="Progression.Replay"/> does that over the history, so nothing is stored. It resets to 0 on any session
+/// that isn't a miss, and on a deload.
 /// </summary>
 public sealed record ProgressionSuggestion(
     double Load,
@@ -71,6 +82,61 @@ public static class Progression
         int consecutiveFailures,
         DeloadPolicy? deload = null) =>
         Next(prescribedLoad, minReps, maxReps, sets, increment, consecutiveFailures, deload);
+
+    /// <summary>
+    /// The suggestion for the next session, found by applying the rule to each past session in order, oldest first, so
+    /// the miss streak comes from the history itself and nothing needs storing. Each session is judged against the load
+    /// the previous one suggested; when nothing was suggested yet (no <paramref name="startLoad"/>), or every work set
+    /// was heavier than suggested, it is judged against its lightest work set, so a load chosen by hand is built on.
+    /// Linear progression targets <paramref name="maxReps"/>. Sessions without work sets, or at a load of 0, are skipped.
+    /// Null when no session counts: the caller plans the start load, if any.
+    /// </summary>
+    public static ProgressionSuggestion? Replay(
+        ProgressionKind kind,
+        int minReps,
+        int maxReps,
+        double increment,
+        double? startLoad,
+        IReadOnlyList<IReadOnlyList<WorkSet>> sessions,
+        DeloadPolicy? deload = null)
+    {
+        ArgumentNullException.ThrowIfNull(sessions);
+        Positive(increment, nameof(increment));
+        if (minReps < 1 || maxReps < minReps)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxReps), maxReps, "Reps need 1 ≤ min ≤ max");
+        }
+
+        if (startLoad is { } start && (!double.IsFinite(start) || start < 0))
+        {
+            throw new ArgumentOutOfRangeException(nameof(startLoad), startLoad, "Can't be negative");
+        }
+
+        var min = kind == ProgressionKind.LinearProgression ? maxReps : minReps;
+        double? prescribed = startLoad is > 0 ? startLoad : null;
+        var failures = 0;
+        ProgressionSuggestion? last = null;
+        foreach (var sets in sessions)
+        {
+            if (sets is null || sets.Count == 0)
+            {
+                continue;
+            }
+
+            var lightest = sets.Min(s => s.Load);
+            var load = prescribed is { } p && !(lightest > p && !Quantity.CanonicalEquals(lightest, p)) ? p : lightest;
+            if (!double.IsFinite(load) || load <= 0 || Quantity.CanonicalEquals(load, 0))
+            {
+                continue;
+            }
+
+            last = Next(load, min, maxReps, sets, increment, failures, deload);
+            prescribed = last.Load;
+            failures = last.ConsecutiveFailures;
+        }
+
+        return last;
+    }
 
     private static ProgressionSuggestion Next(
         double load,

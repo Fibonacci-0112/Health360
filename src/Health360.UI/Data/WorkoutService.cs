@@ -33,6 +33,22 @@ public sealed class WorkoutService(PowerSyncDatabase db, ProfileService profiles
 
     public Task<TemplateRow[]> TemplatesAsync() => WorkoutPlans.TemplatesAsync(db, RequireProfile());
 
+    public Task<TemplateRow?> TemplateAsync(string templateId) => WorkoutPlans.TemplateAsync(db, RequireProfile(), templateId);
+
+    public Task<TemplateExerciseRow[]> TemplateExercisesAsync(string templateId) => WorkoutPlans.TemplateExercisesAsync(db, RequireProfile(), templateId);
+
+    public Task<string> CreateTemplateAsync(string name, IReadOnlyList<TemplateExerciseInput> exercises) =>
+        WorkoutPlans.CreateTemplateAsync(db, RequireProfile(), name, exercises, clock);
+
+    public Task UpdateTemplateAsync(string templateId, string name, IReadOnlyList<TemplateExerciseInput> exercises) =>
+        WorkoutPlans.UpdateTemplateAsync(db, RequireProfile(), templateId, name, exercises, clock);
+
+    public Task DeleteTemplateAsync(string templateId) => WorkoutPlans.DeleteTemplateAsync(db, RequireProfile(), templateId, clock);
+
+    /// <summary>The progression suggestion for each exercise of a session, by session exercise id (<see cref="WorkoutProgression"/>).</summary>
+    public Task<IReadOnlyDictionary<string, ExerciseSuggestion>> SuggestionsAsync(string sessionId) =>
+        WorkoutProgression.ForSessionAsync(db, RequireProfile(), sessionId);
+
     public Task<IReadOnlyList<PlannedWorkout>> PlannedAsync(DateOnly from, DateOnly to) => WorkoutPlans.PlannedAsync(db, RequireProfile(), from, to);
 
     public Task<PersonalRecordRow[]> RecordsAsync() => WorkoutLog.RecordsAsync(db, RequireProfile());

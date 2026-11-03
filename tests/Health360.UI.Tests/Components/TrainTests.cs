@@ -357,4 +357,102 @@ public sealed class TrainTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Equal(3, cut.FindAll("tr.set").Count), Wait);
         Assert.Equal("80", cut.Find("input[aria-label='Barbell Squat set 3 weight in kg']").GetAttribute("value"));
     }
+
+    [Fact]
+    public async Task A_template_with_a_progression_rule_is_created_from_the_train_tab()
+    {
+        var cut = await TrainAsync();
+        await ClickAsync(cut, "#new-template");
+        cut.WaitForAssertion(() => cut.Find("#template-name"), Wait);
+
+        await TypeAsync(cut, "#template-name", "Legs");
+        await TypeAsync(cut, "#exercise-search", "squat");
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Add Barbell Squat']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Add Barbell Squat']");
+        cut.WaitForAssertion(() => cut.Find("#sets-0"), Wait);
+        await TypeAsync(cut, "#sets-0", "5");
+        await TypeAsync(cut, "#min-0", "5");
+        await TypeAsync(cut, "#max-0", "5");
+        await TypeAsync(cut, "#load-0", "100");
+        await ChangeAsync(cut, "#rule-0", "linear");
+        cut.WaitForAssertion(() => Assert.Equal("2.5", cut.Find("#inc-0").GetAttribute("value")), Wait);
+        Assert.Contains("When every set reaches 5 reps", cut.Markup, StringComparison.Ordinal);
+        await SubmitAsync(cut, "#save-template");
+
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Edit Legs']"), Wait);
+        var template = Assert.Single(await WorkoutPlans.TemplatesAsync(App.Database.Db, ProfileId));
+        var exercise = Assert.Single(await WorkoutPlans.TemplateExercisesAsync(App.Database.Db, ProfileId, template.Id));
+        Assert.Equal(new SetScheme(5, 5, 5, 100, "kg"), exercise.Scheme);
+        Assert.Equal(new ProgressionRule("linear", 2.5, "kg"), exercise.Rule);
+    }
+
+    [Fact]
+    public async Task A_template_that_doesnt_parse_says_what_is_wrong_and_saves_nothing()
+    {
+        var cut = await TrainAsync();
+        await ClickAsync(cut, "#new-template");
+        cut.WaitForAssertion(() => cut.Find("#template-name"), Wait);
+        await TypeAsync(cut, "#template-name", "Legs");
+        await TypeAsync(cut, "#exercise-search", "squat");
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Add Barbell Squat']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Add Barbell Squat']");
+        cut.WaitForAssertion(() => cut.Find("#sets-0"), Wait);
+
+        await TypeAsync(cut, "#min-0", "12");
+        await TypeAsync(cut, "#max-0", "8");
+        await SubmitAsync(cut, "#save-template");
+
+        cut.WaitForAssertion(() => Assert.Contains("can't be below the bottom", cut.Find("p.error").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(await WorkoutPlans.TemplatesAsync(App.Database.Db, ProfileId));
+    }
+
+    [Fact]
+    public async Task The_logger_plans_and_explains_the_next_load_of_a_template_with_a_rule()
+    {
+        string template = "";
+        var cut = await TrainAsync(seed: async () =>
+        {
+            var db = App.Database.Db;
+            template = await WorkoutPlans.CreateTemplateAsync(db, ProfileId, "Legs",
+                [new TemplateExerciseInput(Squat, new SetScheme(2, 5, 5, 100, "kg"), null, new ProgressionRule("linear", 2.5, "kg"))], App.Clock);
+            var session = await WorkoutLog.StartAsync(db, ProfileId, template, "kg", App.Clock);
+            foreach (var set in (await WorkoutLog.ExercisesAsync(db, ProfileId, session)).Single().Sets)
+            {
+                await WorkoutLog.CompleteSetAsync(db, ProfileId, set.Id, App.Clock);
+            }
+
+            await WorkoutLog.FinishAsync(db, ProfileId, session, App.Clock);
+            App.Clock.Now = App.Clock.Now.AddDays(2);
+        });
+
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Start Legs']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Start Legs']");
+
+        cut.WaitForAssertion(() => Assert.Contains("up 2.5 kg to 102.5 kg", cut.Find(".progression-note").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Equal("102.5", cut.Find("input[aria-label='Barbell Squat set 1 weight in kg']").GetAttribute("value"));
+        Assert.Equal("5", cut.Find("input[aria-label='Barbell Squat set 2 reps']").GetAttribute("value"));
+    }
+
+    [Fact]
+    public async Task A_template_is_renamed_and_deleted_from_its_editor()
+    {
+        var cut = await TrainAsync(seed: () => WorkoutPlans.CreateTemplateAsync(App.Database.Db, ProfileId, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(3, 8, 12))], App.Clock));
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Edit Legs']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Edit Legs']");
+        cut.WaitForAssertion(() => Assert.Equal("Legs", cut.Find("#template-name").GetAttribute("value")), Wait);
+        Assert.Equal("8", cut.Find("#min-0").GetAttribute("value"));
+
+        await TypeAsync(cut, "#template-name", "Lower");
+        await SubmitAsync(cut, "#save-template");
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Edit Lower']"), Wait);
+
+        await ClickAsync(cut, "button[aria-label='Edit Lower']");
+        cut.WaitForAssertion(() => cut.Find("#delete-template"), Wait);
+        await ClickAsync(cut, "#delete-template");
+        await ClickAsync(cut, "#delete-confirm");
+
+        cut.WaitForAssertion(() => Assert.Contains("None yet. A template lists", cut.Markup, StringComparison.Ordinal), Wait);
+        Assert.Empty(await WorkoutPlans.TemplatesAsync(App.Database.Db, ProfileId));
+    }
 }

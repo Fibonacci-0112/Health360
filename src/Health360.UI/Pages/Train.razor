@@ -7,7 +7,7 @@
 @inject TimeProvider Clock
 
 @* Train tab (FEATURES.md §1.4): the workout in progress, what's planned this week, starting a workout (empty or
-   from a template), recent workouts and personal records. *@
+   from a template), templates to create and edit, recent workouts and personal records. *@
 <div class="page">
     <div class="page-head">
         <h1>Train</h1>
@@ -44,24 +44,42 @@
                 <div class="inline">
                     <button type="button" class="primary" id="start-empty" disabled="@busy" @onclick="() => StartAsync(null, null)">Empty workout</button>
                 </div>
-                @if (templates.Length > 0)
-                {
-                    <ul class="measurement-list" aria-label="Templates">
-                        @foreach (var template in templates)
-                        {
-                            <li @key="template.Id" class="measurement">
-                                <div class="measurement-text">
-                                    <span class="strong">@template.Name</span>
-                                    <span class="muted small">@Exercises(template.ExerciseCount)</span>
-                                </div>
-                                <button type="button" class="secondary" disabled="@busy" aria-label="@($"Start {template.Name}")"
-                                        @onclick="() => StartAsync(template.Id, null)">Start</button>
-                            </li>
-                        }
-                    </ul>
-                }
             </section>
         }
+
+        <section class="card" aria-labelledby="templates-title">
+            <div class="page-head">
+                <h2 id="templates-title">Templates</h2>
+                <button type="button" class="secondary compact" id="new-template" @onclick="@(() => Navigation.NavigateTo("train/templates/new"))">New template</button>
+            </div>
+            @if (templates.Length == 0)
+            {
+                <p class="muted">None yet. A template lists exercises with their sets, reps and how the load progresses.</p>
+            }
+            else
+            {
+                <ul class="measurement-list" aria-label="Templates">
+                    @foreach (var template in templates)
+                    {
+                        <li @key="template.Id" class="measurement">
+                            <div class="measurement-text">
+                                <span class="strong">@template.Name</span>
+                                <span class="muted small">@Exercises(template.ExerciseCount)</span>
+                            </div>
+                            <div class="inline">
+                                <button type="button" class="secondary compact" aria-label="@($"Edit {template.Name}")"
+                                        @onclick="@(() => Navigation.NavigateTo($"train/templates/{template.Id}"))">Edit</button>
+                                @if (active is null)
+                                {
+                                    <button type="button" class="secondary" disabled="@busy" aria-label="@($"Start {template.Name}")"
+                                            @onclick="() => StartAsync(template.Id, null)">Start</button>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
 
         <section class="card" aria-labelledby="planned-title">
             <h2 id="planned-title">This week</h2>

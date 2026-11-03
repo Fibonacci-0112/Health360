@@ -41,6 +41,10 @@
                     <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Remove {exercise.Name}")"
                             @onclick="() => RunAsync(() => Workouts.RemoveExerciseAsync(exercise.Id))">Remove</button>
                 </div>
+                @if (suggestions.GetValueOrDefault(exercise.Id) is { } suggestion)
+                {
+                    <p class="muted small progression-note">@SuggestionText(suggestion)</p>
+                }
                 <div class="sets-scroll">
                     <table class="sets">
                         <thead>
@@ -210,6 +214,7 @@
     public string SessionId { get; set; } = "";
 
     private IReadOnlyList<LoggedExercise>? exercises;
+    private IReadOnlyDictionary<string, ExerciseSuggestion> suggestions = new Dictionary<string, ExerciseSuggestion>();
     private CancellationTokenSource? watch;
     private string? watchedSession;
     private string? watchedProfile;
@@ -242,6 +247,7 @@
         watch?.Dispose();
         watch = null;
         exercises = null;
+        suggestions = new Dictionary<string, ExerciseSuggestion>();
         results = [];
         query = null;
         drafts.Clear();
@@ -261,14 +267,34 @@
     {
         try
         {
+            string? suggestedFor = null;
+            IReadOnlyDictionary<string, ExerciseSuggestion> suggested = new Dictionary<string, ExerciseSuggestion>();
             await foreach (var batch in Workouts.Watch(sessionId, token))
             {
+                // Suggestions come from earlier sessions, so they change only when exercises are added or removed.
+                var key = string.Join(',', batch.Select(e => e.Id));
+                if (key != suggestedFor)
+                {
+                    suggestedFor = key;
+                    try
+                    {
+                        suggested = await Workouts.SuggestionsAsync(sessionId);
+                    }
+                    catch (Exception e) when (e is not OperationCanceledException and not ObjectDisposedException)
+                    {
+                        // The note is a help, not the plan: the planned sets are already in the table.
+                        suggested = new Dictionary<string, ExerciseSuggestion>();
+                    }
+                }
+
+                var shown = suggested;
                 await InvokeAsync(() =>
                 {
                     // A batch queued before the watch was replaced belongs to the old profile or session.
                     if (!token.IsCancellationRequested)
                     {
                         exercises = batch;
+                        suggestions = shown;
                         StateHasChanged();
                     }
                 });
@@ -300,6 +326,24 @@
         "failure" => "To failure",
         _ => code,
     };
+
+    /// <summary>Why the work sets are planned at their load (docs/calculations.md, Progression).</summary>
+    private static string SuggestionText(ExerciseSuggestion s)
+    {
+        var load = $"{Number(s.Load)} {s.Unit}";
+        var reps = s.MinReps == s.MaxReps ? $"{s.MaxReps}" : $"{s.MinReps}–{s.MaxReps}";
+        var misses = s.ConsecutiveFailures == 1 ? "1 session" : $"{s.ConsecutiveFailures} sessions";
+        return s.Action switch
+        {
+            null => $"Progression: {s.Sets} × {reps} at {load}, the template's starting load.",
+            ProgressionAction.Increase => $"Progression: up {Number(s.Rule.Increment)} {s.Unit} to {load}. Every set reached {s.MaxReps} reps last time.",
+            ProgressionAction.Deload => $"Progression: deload to {load} after {s.Rule.DeloadAfter} missed sessions in a row.",
+            _ when s.ConsecutiveFailures == 0 => $"Progression: stay at {load} and aim for {s.MaxReps} reps on every set.",
+            _ when s.Rule.DeloadAfter > 0 =>
+                $"Progression: stay at {load}. Target missed {misses} in a row; the load drops after {s.Rule.DeloadAfter}.",
+            _ => $"Progression: stay at {load}. Target missed {misses} in a row.",
+        };
+    }
 
     private string Unit(LoggedSet set) => set.WeightUnit ?? Workouts.LoadUnit;
 
