@@ -155,8 +155,8 @@
     private void ProfileChanged() => _ = InvokeAsync(Follow);
 
     /// <summary>
-    /// Watches the workout in progress; every change to it (a set ticked off, a workout started, finished or discarded
-    /// here or on another device) reloads the tab.
+    /// Watches everything the tab shows; every change (a set ticked off, a workout started or finished, a schedule or
+    /// record synced from another device) reloads it.
     /// </summary>
     private void Follow()
     {
@@ -191,7 +191,7 @@
     {
         try
         {
-            await foreach (var _ in Workouts.WatchActiveSession(token))
+            await foreach (var _ in Workouts.WatchTrainChanges(token))
             {
                 await InvokeAsync(async () =>
                 {

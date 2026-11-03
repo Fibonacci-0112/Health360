@@ -311,6 +311,44 @@ public class WorkoutLogTests
     }
 
     [Fact]
+    public async Task A_completed_timed_set_keeps_its_time()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, null, "kg", clock);
+        await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Hold, "kg", clock);
+        var hold = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session)).Single().Sets.Single().Id;
+        await WorkoutLog.ChangeSetAsync(t.Db, Profile, hold, e => e with { DurationSeconds = 60 }, clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, hold, clock);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            WorkoutLog.ChangeSetAsync(t.Db, Profile, hold, e => e with { DurationSeconds = null }, clock));
+
+        Assert.Equal(60.0, (await WorkoutLog.ExercisesAsync(t.Db, Profile, session)).Single().Sets.Single().DurationSeconds);
+    }
+
+    [Fact]
+    public async Task A_records_id_comes_from_its_set_and_kind_so_two_devices_write_one_row()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        await LogSessionAsync(t, clock, (100, "kg", 5, "working"));
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, null, "kg", clock);
+        await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Squat, "kg", clock);
+        var set = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session)).Single().Sets.Single().Id;
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, set, new SetEntry(5, 110, "kg"), clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, set, clock);
+        var before = (await WorkoutLog.RecordsAsync(t.Db, Profile)).Select(r => r.Id).Order().ToList();
+
+        // Re-evaluating (an edit) writes the same ids again, as another device re-evaluating offline would.
+        await WorkoutLog.ChangeSetAsync(t.Db, Profile, set, e => e with { Rpe = 9 }, clock);
+
+        var after = await WorkoutLog.RecordsAsync(t.Db, Profile);
+        Assert.Equal(before, after.Select(r => r.Id).Order());
+        Assert.All(after, r => Assert.Equal(WorkoutLog.RecordIdFor(set, Enum.Parse<RecordKind>(r.Kind, ignoreCase: true)), r.Id));
+    }
+
+    [Fact]
     public async Task Only_one_session_is_in_progress()
     {
         await using var t = await OpenAsync();

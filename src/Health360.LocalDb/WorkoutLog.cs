@@ -153,6 +153,27 @@ public static class WorkoutLog
         return db.Watch<SessionRow>(ActiveSql, [profileId], new SQLWatchOptions { Signal = cancellationToken, TriggerImmediately = true });
     }
 
+    /// <summary>
+    /// Fires now and after every change to anything the Train tab shows: sessions and their sets, templates, programs,
+    /// the schedule, records and the exercise library, whether written here or synced from another device. It reads
+    /// one row of counts; the caller reloads what it shows.
+    /// </summary>
+    public static IAsyncEnumerable<ChangeStamp[]> WatchTrainChanges(PowerSyncDatabase db, string profileId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        return db.Watch<ChangeStamp>(
+            "SELECT (SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM workout_sessions WHERE profile_id = ?) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM set_logs WHERE profile_id = ?) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM workout_templates WHERE profile_id = ?) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM template_exercises WHERE profile_id = ?) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM programs WHERE profile_id = ?) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM scheduled_workouts WHERE profile_id = ?) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM personal_records WHERE profile_id = ?) || " +
+            "(SELECT count(*) FROM exercises) AS Stamp",
+            [profileId, profileId, profileId, profileId, profileId, profileId, profileId],
+            new SQLWatchOptions { Signal = cancellationToken, TriggerImmediately = true });
+    }
+
     /// <summary>The profile's finished sessions, newest first.</summary>
     public static async Task<SessionRow[]> RecentSessionsAsync(IPowerSyncDatabase db, string profileId, int limit = 20)
     {
@@ -328,7 +349,7 @@ public static class WorkoutLog
         IReadOnlyList<NewRecord> records = [];
         await db.WriteTransaction(async tx =>
         {
-            _ = await RequireSetAsync(tx, profileId, setId).ConfigureAwait(false);
+            var state = await RequireSetAsync(tx, profileId, setId).ConfigureAwait(false);
             var current = await tx.Get<StoredSet>(
                 $"SELECT {SetValueColumns}, rpe AS Rpe, rir AS Rir, completed_at AS CompletedAt FROM set_logs WHERE id = ? AND profile_id = ?",
                 [setId, profileId]).ConfigureAwait(false);
@@ -343,6 +364,12 @@ public static class WorkoutLog
                 current.Distance,
                 current.DistanceUnit));
             new SetEntryValidator().ValidateAndThrow(entry);
+            if (current.CompletedAt is not null)
+            {
+                // A completed set keeps what defines it: clearing a hold's time would leave a done set that says nothing.
+                RequireMeasure(state.TrackingType, entry.DurationSeconds, entry.Distance);
+            }
+
             var weight = entry.Weight;
             double? weightKg = weight is { } w ? UnitCodes.Convert(w, entry.WeightUnit, "kg") : null;
             var distanceUnit = entry.Distance is null ? null : entry.DistanceUnit;
@@ -374,18 +401,7 @@ public static class WorkoutLog
         await db.WriteTransaction(async tx =>
         {
             var set = await RequireSetAsync(tx, profileId, setId).ConfigureAwait(false);
-            // A timed exercise's set is defined by its time (or, for distance and time, either one): ticking it off
-            // without one would keep a set that says nothing.
-            if (set.TrackingType == "duration" && set.DurationSeconds is null)
-            {
-                throw new InvalidOperationException("Enter the time first.");
-            }
-
-            if (set.TrackingType == "distance_duration" && set.DurationSeconds is null && set.Distance is null)
-            {
-                throw new InvalidOperationException("Enter the distance or the time first.");
-            }
-
+            RequireMeasure(set.TrackingType, set.DurationSeconds, set.Distance);
             records = await EvaluateAsync(tx, profileId, setId, set.CompletedAt ?? Timestamps.UtcNow(clock), formula, clock).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return records;
@@ -513,6 +529,14 @@ public static class WorkoutLog
             ? OneRepMax.Estimate(kg, reps.Value, formula)
             : null;
 
+    /// <summary>
+    /// The <c>personal_records</c> row id for a set's record of one kind: a UUIDv8 derived from the set and the kind, like
+    /// <see cref="MetricPins.IdFor"/>, so the same record re-evaluated on two devices offline ends as one row (the
+    /// upload is an upsert by id), never two.
+    /// </summary>
+    public static string RecordIdFor(string setId, RecordKind kind) =>
+        Domain.Ids.UuidV8.FromName($"health360/personal_records/{Guid.Parse(setId):D}/{KindCode(kind)}").ToString("D");
+
     /// <summary>The <c>personal_records.kind</c> code of a record.</summary>
     public static string KindCode(RecordKind kind) => kind switch
     {
@@ -570,7 +594,7 @@ public static class WorkoutLog
                 "INSERT INTO personal_records (id, profile_id, exercise_id, kind, value, weight_kg, reps, e1rm_formula, set_log_id, " +
                 "achieved_at, local_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    ExerciseLibrary.NewId(clock), profileId, set.ExerciseId, KindCode(record.Kind), record.Value, set.WeightKg, reps,
+                    RecordIdFor(setId, record.Kind), profileId, set.ExerciseId, KindCode(record.Kind), record.Value, set.WeightKg, reps,
                     record.Kind == RecordKind.E1rm ? FormulaCode(formula) : null, setId, completedAt, set.LocalDate, now, now,
                 ]).ConfigureAwait(false);
         }
@@ -581,6 +605,23 @@ public static class WorkoutLog
 
         // What's new: a record the set already held with the same value isn't news when the set is edited.
         return [.. records.Where(r => !held.Any(h => h.Kind == KindCode(r.Kind) && Quantity.CanonicalEquals(h.Value, r.Value)))];
+    }
+
+    /// <summary>
+    /// A timed exercise's set is defined by its time (or, for distance and time, either one): a done set without one
+    /// would say nothing.
+    /// </summary>
+    private static void RequireMeasure(string? trackingType, double? durationSeconds, double? distance)
+    {
+        if (trackingType == "duration" && durationSeconds is null)
+        {
+            throw new InvalidOperationException("Enter the time first.");
+        }
+
+        if (trackingType == "distance_duration" && durationSeconds is null && distance is null)
+        {
+            throw new InvalidOperationException("Enter the distance or the time first.");
+        }
     }
 
     private static async Task<string> AddExerciseAsync(
@@ -697,6 +738,12 @@ public static class WorkoutLog
         }
 
         return exercises;
+    }
+
+    /// <summary>A summary of the Train tab's tables; only its changing matters.</summary>
+    public sealed class ChangeStamp
+    {
+        public string? Stamp { get; set; }
     }
 
     internal sealed class FlatSetRow

@@ -25,9 +25,9 @@ public sealed class WorkoutService(PowerSyncDatabase db, ProfileService profiles
 
     public Task<SessionRow?> ActiveSessionAsync() => WorkoutLog.ActiveSessionAsync(db, RequireProfile());
 
-    /// <summary>The workout in progress, now and after every change to the workout tables it reads.</summary>
-    public IAsyncEnumerable<SessionRow[]> WatchActiveSession(CancellationToken cancellationToken) =>
-        WorkoutLog.WatchActiveSession(db, RequireProfile(), cancellationToken);
+    /// <summary>Fires now and after every change to anything the Train tab shows (<see cref="WorkoutLog.WatchTrainChanges"/>).</summary>
+    public IAsyncEnumerable<WorkoutLog.ChangeStamp[]> WatchTrainChanges(CancellationToken cancellationToken) =>
+        WorkoutLog.WatchTrainChanges(db, RequireProfile(), cancellationToken);
 
     public Task<SessionRow[]> RecentSessionsAsync(int limit = 5) => WorkoutLog.RecentSessionsAsync(db, RequireProfile(), limit);
 

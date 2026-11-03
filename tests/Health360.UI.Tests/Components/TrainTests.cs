@@ -136,6 +136,18 @@ public sealed class TrainTests : AppTestContext
     }
 
     [Fact]
+    public async Task A_schedule_that_arrives_after_the_tab_opened_shows_up()
+    {
+        var cut = await TrainAsync();
+        Assert.Contains("Nothing planned for the next 7 days.", cut.Markup, StringComparison.Ordinal);
+
+        var legs = await WorkoutPlans.CreateTemplateAsync(App.Database.Db, ProfileId, "Legs", [], App.Clock);
+        await WorkoutPlans.ScheduleOnAsync(App.Database.Db, ProfileId, legs, DateOnly.FromDateTime(App.Clock.Now.UtcDateTime), App.Clock);
+
+        cut.WaitForAssertion(() => Assert.Contains("Legs", cut.Find("[aria-labelledby=planned-title]").TextContent, StringComparison.Ordinal), Wait);
+    }
+
+    [Fact]
     public async Task An_invalid_weight_says_why_and_saves_nothing()
     {
         var cut = await TrainAsync();

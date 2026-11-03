@@ -35,9 +35,9 @@ public static partial class FreeExerciseDb
 
     /// <summary>
     /// Reads the dataset. Equipment and muscle names become codes (<c>"e-z curl bar"</c> → <c>e_z_curl_bar</c>), the
-    /// format <c>private.is_code_array</c> accepts. The tracking type follows the category and equipment:
-    /// <c>cardio</c> is distance and time, <c>stretching</c> is time, body-weight exercises are reps, and the rest
-    /// weight and reps. An entry the table would reject, or a repeated id, is skipped and reported.
+    /// format <c>private.is_code_array</c> accepts. The tracking type follows the category, force and equipment:
+    /// <c>cardio</c> is distance and time, <c>stretching</c> and static holds (<c>force</c> <c>static</c>) are time,
+    /// body-weight exercises are reps, and the rest weight and reps. An entry the table would reject, or a repeated id, is skipped and reported.
     /// </summary>
     /// <exception cref="JsonException">The file isn't a JSON array.</exception>
     public static ParsedDataset Parse(Stream json)
@@ -125,10 +125,13 @@ public static partial class FreeExerciseDb
         }
 
         var category = ToCode(Text(entry, "category"));
+        var force = ToCode(Text(entry, "force"));
         var trackingType = category switch
         {
             "cardio" => "distance_duration",
             "stretching" => "duration",
+            // A static hold (a plank, a wall sit) is done for time, whatever it is held with.
+            _ when force == "static" => "duration",
             _ when equipment.Count == 0 || equipment[0] == "body_only" => "reps",
             _ => "weight_reps",
         };

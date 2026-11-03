@@ -14,8 +14,10 @@ public class FreeExerciseDbTests
            "instructions": ["Stand."], "images": ["Barbell_Squat/0.jpg"]},
           {"id": "Pushups", "name": "Pushups", "category": "strength", "equipment": "body only",
            "primaryMuscles": ["chest"], "secondaryMuscles": ["shoulders", "triceps"]},
-          {"id": "Plank", "name": "Plank", "category": "strength", "equipment": null,
-           "primaryMuscles": ["abdominals"], "secondaryMuscles": []},
+          {"id": "Plank", "name": "Plank", "force": "static", "level": "beginner", "mechanic": "isolation",
+           "category": "strength", "equipment": "body only", "primaryMuscles": ["abdominals"], "secondaryMuscles": []},
+          {"id": "Ab_Roller", "name": "Ab Roller", "force": "pull", "category": "strength", "equipment": null,
+           "primaryMuscles": ["abdominals"], "secondaryMuscles": ["shoulders"]},
           {"id": "Jogging_Treadmill", "name": "Jogging, Treadmill", "category": "cardio", "equipment": "machine",
            "primaryMuscles": ["quadriceps"], "secondaryMuscles": ["calves", "glutes", "hamstrings"]},
           {"id": "Hamstring_Stretch", "name": "Hamstring Stretch", "category": "stretching", "equipment": "body only",
@@ -46,7 +48,8 @@ public class FreeExerciseDbTests
         var types = ParseText(Sample).Exercises.ToDictionary(e => e.ExternalId, e => e.TrackingType);
 
         Assert.Equal("reps", types["Pushups"]);
-        Assert.Equal("reps", types["Plank"]);
+        Assert.Equal("duration", types["Plank"]);
+        Assert.Equal("reps", types["Ab_Roller"]);
         Assert.Equal("distance_duration", types["Jogging_Treadmill"]);
         Assert.Equal("duration", types["Hamstring_Stretch"]);
         Assert.Equal("weight_reps", types["EZ-Bar_Curl"]);
@@ -59,7 +62,7 @@ public class FreeExerciseDbTests
 
         Assert.Equal(["e_z_curl_bar"], curl.Equipment);
         Assert.Equal(["forearms"], curl.SecondaryMuscles);
-        Assert.Empty(ParseText(Sample).Exercises.Single(e => e.ExternalId == "Plank").Equipment);
+        Assert.Empty(ParseText(Sample).Exercises.Single(e => e.ExternalId == "Ab_Roller").Equipment);
     }
 
     [Theory]
