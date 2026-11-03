@@ -725,13 +725,15 @@ button.compact {
     max-height: 70vh;
 }
 
+/* Cover, not contain: a newer photo of another shape fills the older one's box (its edges cropped), so the line and
+   the clip always run through the photo itself, never through letterbox margins. Same-shape photos fit exactly. */
 .photo-slider .photo-slider-newer {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
     max-height: none;
-    object-fit: contain;
+    object-fit: cover;
 }
 
 .photo-slider-line {
