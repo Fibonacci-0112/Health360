@@ -194,6 +194,21 @@ public sealed class TrainTests : AppTestContext
     }
 
     [Fact]
+    public async Task Done_right_after_typing_waits_for_the_typed_reps()
+    {
+        var cut = await TrainAsync();
+        await ClickAsync(cut, "#start-empty");
+        await AddSquatAsync(cut);
+
+        // No wait between typing and the tap: completion must see the reps just typed.
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 reps']", "5");
+        await ClickAsync(cut, "button[aria-label='Barbell Squat set 1 done']");
+
+        cut.WaitForAssertion(() => Assert.Equal("true", cut.Find("button[aria-label='Barbell Squat set 1 done']").GetAttribute("aria-pressed")), Wait);
+        Assert.Empty(cut.FindAll("[role=alert]"));
+    }
+
+    [Fact]
     public async Task A_set_without_reps_cannot_be_ticked_off()
     {
         var cut = await TrainAsync();

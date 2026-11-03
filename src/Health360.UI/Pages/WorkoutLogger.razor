@@ -357,6 +357,10 @@
             {
                 // Out of range or not allowed yet: it's reported when focus leaves the field.
             }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                error = "Couldn't save that on this device. Try again.";
+            }
         });
     }
 
@@ -502,10 +506,39 @@
         }
     }
 
+    /// <summary>
+    /// Ticks a set off or on, after any save still running for its fields: a value typed a moment ago must be in the
+    /// database before completion checks it.
+    /// </summary>
     private Task ToggleAsync(LoggedExercise exercise, LoggedSet set) =>
-        set.Completed
-            ? RunAsync(() => Workouts.UncompleteSetAsync(set.Id))
-            : RunAsync(async () => Celebrate(await Workouts.CompleteSetAsync(set.Id), exercise.Name));
+        RunAsync(async () =>
+        {
+            await FieldSavesOfAsync(set);
+            if (set.Completed)
+            {
+                await Workouts.UncompleteSetAsync(set.Id);
+            }
+            else
+            {
+                Celebrate(await Workouts.CompleteSetAsync(set.Id), exercise.Name);
+            }
+        });
+
+    /// <summary>Waits for every field save of the set queued so far; each reports its own failure.</summary>
+    private async Task FieldSavesOfAsync(LoggedSet set)
+    {
+        var prefix = set.Id + "/";
+        foreach (var save in fieldSaves.Where(p => p.Key.StartsWith(prefix, StringComparison.Ordinal)).Select(p => p.Value).ToList())
+        {
+            try
+            {
+                await save;
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+            }
+        }
+    }
 
     private void Celebrate(IReadOnlyList<NewRecord> records, string? exercise = null)
     {
