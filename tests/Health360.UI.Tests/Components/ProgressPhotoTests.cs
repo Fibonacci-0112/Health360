@@ -420,7 +420,12 @@ public sealed class ProgressPhotoTests : AppTestContext
         // Offline: the photo on this device shows, the uploaded one can't be fetched, so the slider can't be drawn yet.
         await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
         await ChangeAsync(cut, "input[aria-label='Compare the Back photo from 2026-10-01']", "on");
-        cut.WaitForAssertion(() => cut.Find("#photo-compare-retry"), Wait);
+        // Each side loads on its own, so wait for both: the failed one (Try again) and the one on this device.
+        cut.WaitForAssertion(() =>
+        {
+            cut.Find("#photo-compare-retry");
+            Assert.Single(cut.FindAll(".photo-compare-grid img"));
+        }, Wait);
         await ClickAsync(cut, "#photo-compare-slider");
         Assert.Empty(cut.FindAll(".photo-slider"));
         Assert.Contains("The slider needs both photos", cut.Find(".photo-compare").TextContent, StringComparison.Ordinal);
