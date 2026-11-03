@@ -602,6 +602,21 @@
 
     private Task FinishAsync() => RunAsync(async () =>
     {
+        // Every field still being edited is saved first, and one that can't be stops the finish: a finished workout
+        // can't be changed, so it would keep the value stored before, not the one on screen.
+        foreach (var set in (exercises ?? []).SelectMany(e => e.Sets).ToList())
+        {
+            await FieldSavesOfAsync(set);
+            var prefix = set.Id + "/";
+            foreach (var (key, text) in drafts.Where(d => d.Key.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            {
+                if (!await CommitAsync(set, key[prefix.Length..], text))
+                {
+                    return;
+                }
+            }
+        }
+
         await Workouts.FinishAsync(SessionId);
         Navigation.NavigateTo("train");
     });

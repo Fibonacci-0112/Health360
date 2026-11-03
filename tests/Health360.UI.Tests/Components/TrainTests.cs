@@ -228,6 +228,26 @@ public sealed class TrainTests : AppTestContext
     }
 
     [Fact]
+    public async Task Finish_is_refused_while_a_field_holds_a_value_that_was_not_saved()
+    {
+        var cut = await TrainAsync();
+        await ClickAsync(cut, "#start-empty");
+        await AddSquatAsync(cut);
+        await ChangeAsync(cut, "input[aria-label='Barbell Squat set 1 reps']", "5");
+        await ChangeAsync(cut, "input[aria-label='Barbell Squat set 1 RPE']", "8");
+        await ClickAsync(cut, "button[aria-label='Barbell Squat set 1 done']");
+        cut.WaitForAssertion(() => Assert.Equal("true", cut.Find("button[aria-label='Barbell Squat set 1 done']").GetAttribute("aria-pressed")), Wait);
+        var session = (await WorkoutLog.ActiveSessionAsync(App.Database.Db, ProfileId))!;
+
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 RPE']", "81");
+        await ClickAsync(cut, "#finish");
+
+        cut.WaitForAssertion(() => Assert.Equal("RPE runs from 0 to 10.", cut.Find("[role=alert]").TextContent), Wait);
+        Assert.NotNull(await WorkoutLog.ActiveSessionAsync(App.Database.Db, ProfileId));
+        Assert.Equal(8, (await WorkoutLog.ExercisesAsync(App.Database.Db, ProfileId, session.Id)).Single().Sets.Single().Rpe);
+    }
+
+    [Fact]
     public async Task A_set_without_reps_cannot_be_ticked_off()
     {
         var cut = await TrainAsync();
