@@ -25,7 +25,7 @@ The **.NET solution** (Phase 0b, [ADR 0002](docs/adr/0002-dotnet-maui-blazor.md)
 | `tests/` | xUnit and bUnit tests for the .NET projects, including the two-client sync tests (`tests/Health360.Sync.Tests`) |
 | `supabase` | Migrations, RLS, pgTAP tests, Auth config |
 | `powersync` | Sync Streams and local PowerSync config |
-| `tools` | Schema drift check (`tools/drift`), local DB test runner (`tools/db`), cloud environment setup (`tools/cloud`) |
+| `tools` | Schema drift check (`tools/drift`), reference-data importers (`tools/importers`: free-exercise-db), local DB test runner (`tools/db`), cloud environment setup (`tools/cloud`) |
 
 ## Quick start
 

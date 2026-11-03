@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Reference-data importers (PLAN.md §2.2): read a published dataset from a local file and upsert its rows as
+    system (G) rows, keyed by source + external_id so a re-import never duplicates. Runs with a privileged
+    database connection, since clients can't write G rows; it touches reference tables only, never user data.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+
+</Project>

@@ -1,3 +1,310 @@
 @page "/train"
+@using Health360.Domain.Training
+@implements IDisposable
+@inject WorkoutService Workouts
+@inject ProfileService Profiles
+@inject NavigationManager Navigation
+@inject TimeProvider Clock
 
-<ComingSoon Title="Train" Section="1.4" />
+@* Train tab (FEATURES.md §1.4): the workout in progress, what's planned this week, starting a workout (empty or
+   from a template), recent workouts and personal records. *@
+<div class="page">
+    <div class="page-head">
+        <h1>Train</h1>
+    </div>
+
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+
+    @if (!loaded)
+    {
+        <p class="muted" role="status">Loading workouts</p>
+    }
+    else
+    {
+        @if (active is not null)
+        {
+            <section class="card" aria-labelledby="active-title">
+                <h2 id="active-title">Workout in progress</h2>
+                <p>
+                    <span class="strong">@(active.TemplateName ?? "Workout")</span>
+                    <span class="muted"> · started @StartedAt(active) · @Sets(active.CompletedSets) done</span>
+                </p>
+                <div class="inline">
+                    <button type="button" class="primary" id="resume" @onclick="@(() => Navigation.NavigateTo($"train/workout/{active.Id}"))">Resume</button>
+                </div>
+            </section>
+        }
+        else
+        {
+            <section class="card" aria-labelledby="start-title">
+                <h2 id="start-title">Start a workout</h2>
+                <div class="inline">
+                    <button type="button" class="primary" id="start-empty" disabled="@busy" @onclick="() => StartAsync(null, null)">Empty workout</button>
+                </div>
+                @if (templates.Length > 0)
+                {
+                    <ul class="measurement-list" aria-label="Templates">
+                        @foreach (var template in templates)
+                        {
+                            <li @key="template.Id" class="measurement">
+                                <div class="measurement-text">
+                                    <span class="strong">@template.Name</span>
+                                    <span class="muted small">@Exercises(template.ExerciseCount)</span>
+                                </div>
+                                <button type="button" class="secondary" disabled="@busy" aria-label="@($"Start {template.Name}")"
+                                        @onclick="() => StartAsync(template.Id, null)">Start</button>
+                            </li>
+                        }
+                    </ul>
+                }
+            </section>
+        }
+
+        <section class="card" aria-labelledby="planned-title">
+            <h2 id="planned-title">This week</h2>
+            @if (planned.Count == 0)
+            {
+                <p class="muted">Nothing planned for the next 7 days.</p>
+            }
+            else
+            {
+                <ul class="measurement-list">
+                    @foreach (var plan in planned)
+                    {
+                        <li @key="@($"{plan.ScheduledId}-{plan.Date}")" class="measurement">
+                            <div class="measurement-text">
+                                <span class="strong">@plan.TemplateName</span>
+                                <span class="muted small">@Day(plan.Date)@(plan.SessionId is null ? "" : " · done")</span>
+                            </div>
+                            @if (active is null && plan.SessionId is null && plan.Date == Workouts.Today)
+                            {
+                                <button type="button" class="secondary" disabled="@busy" aria-label="@($"Start {plan.TemplateName}")"
+                                        @onclick="() => StartAsync(plan.TemplateId, plan.ScheduledId)">Start</button>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+
+        <section class="card" aria-labelledby="records-title">
+            <h2 id="records-title">Personal records</h2>
+            @if (records.Length == 0)
+            {
+                <p class="muted">None yet. A set that beats your earlier best for an exercise shows up here.</p>
+            }
+            else
+            {
+                <ul class="measurement-list">
+                    @foreach (var record in records.Take(10))
+                    {
+                        <li @key="record.Id" class="measurement">
+                            <div class="measurement-text">
+                                <span class="strong">@record.ExerciseName</span>
+                                <span>@RecordText(record)</span>
+                                <span class="muted small">@record.LocalDate</span>
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+
+        @if (recent.Length > 0)
+        {
+            <section class="card" aria-labelledby="recent-title">
+                <h2 id="recent-title">Recent workouts</h2>
+                <ul class="measurement-list">
+                    @foreach (var session in recent)
+                    {
+                        <li @key="session.Id" class="measurement">
+                            <div class="measurement-text">
+                                <span class="strong">@(session.TemplateName ?? "Workout")</span>
+                                <span class="muted small">@session.LocalDate · @Sets(session.CompletedSets)</span>
+                            </div>
+                        </li>
+                    }
+                </ul>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private bool loaded;
+    private bool busy;
+    private string? error;
+    private SessionRow? active;
+    private TemplateRow[] templates = [];
+    private IReadOnlyList<PlannedWorkout> planned = [];
+    private PersonalRecordRow[] records = [];
+    private SessionRow[] recent = [];
+
+    private CancellationTokenSource? watch;
+    private string? watchedProfile;
+
+    protected override void OnInitialized()
+    {
+        Profiles.Changed += ProfileChanged;
+        Follow();
+    }
+
+    private void ProfileChanged() => _ = InvokeAsync(Follow);
+
+    /// <summary>
+    /// Watches everything the tab shows; every change (a set ticked off, a workout started or finished, a schedule or
+    /// record synced from another device) reloads it.
+    /// </summary>
+    private void Follow()
+    {
+        var profileId = Workouts.ProfileId;
+        if (profileId == watchedProfile)
+        {
+            return;
+        }
+
+        // Another profile (or none): nothing of the previous one's stays on screen.
+        watch?.Cancel();
+        watch?.Dispose();
+        watch = null;
+        watchedProfile = profileId;
+        loaded = false;
+        active = null;
+        templates = [];
+        planned = [];
+        records = [];
+        recent = [];
+        if (profileId is null)
+        {
+            return;
+        }
+
+        watch = new CancellationTokenSource();
+        var token = watch.Token;
+        _ = Task.Run(() => WatchAsync(token), CancellationToken.None);
+    }
+
+    private async Task WatchAsync(CancellationToken token)
+    {
+        try
+        {
+            await foreach (var _ in Workouts.WatchTrainChanges(token))
+            {
+                await InvokeAsync(async () =>
+                {
+                    if (!token.IsCancellationRequested)
+                    {
+                        await LoadAsync(token);
+                        StateHasChanged();
+                    }
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception e) when (e is not ObjectDisposedException)
+        {
+            await InvokeAsync(() =>
+            {
+                if (!token.IsCancellationRequested)
+                {
+                    error = "Couldn't read your workouts on this device. Leave this tab and come back to try again.";
+                    watchedProfile = null;
+                    StateHasChanged();
+                }
+            });
+        }
+    }
+
+    /// <summary>
+    /// Reads everything the tab shows, then publishes it only if the watch that asked is still current: a load that
+    /// spans a profile change must not put the previous profile's workouts back on screen.
+    /// </summary>
+    private async Task LoadAsync(CancellationToken token)
+    {
+        if (Workouts.ProfileId is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var newActive = await Workouts.ActiveSessionAsync();
+            var newTemplates = await Workouts.TemplatesAsync();
+            var newPlanned = await Workouts.PlannedAsync(Workouts.Today, Workouts.Today.AddDays(6));
+            var newRecords = await Workouts.RecordsAsync();
+            var newRecent = await Workouts.RecentSessionsAsync();
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            (active, templates, planned, records, recent) = (newActive, newTemplates, newPlanned, newRecords, newRecent);
+            loaded = true;
+            error = null;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                error = "Couldn't read your workouts on this device. Leave this tab and come back to try again.";
+            }
+        }
+    }
+
+    private async Task StartAsync(string? templateId, string? scheduledId)
+    {
+        busy = true;
+        error = null;
+        try
+        {
+            var id = await Workouts.StartAsync(templateId, scheduledId);
+            Navigation.NavigateTo($"train/workout/{id}");
+        }
+        catch (InvalidOperationException e)
+        {
+            error = e.Message;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            error = "Couldn't start the workout on this device. Try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private string RecordText(PersonalRecordRow record) => record.Kind switch
+    {
+        "e1rm" => $"Estimated 1RM {Workouts.Load(record.Value)} ({Workouts.Load(record.WeightKg)} × {record.Reps}, {Formula(record.E1rmFormula)})",
+        "weight" => $"Heaviest {Workouts.Load(record.Value)} × {record.Reps}",
+        "reps" => $"{record.Reps} reps at {Workouts.Load(record.WeightKg)}",
+        "volume" => $"Set volume {Workouts.Load(record.Value)} ({Workouts.Load(record.WeightKg)} × {record.Reps})",
+        _ => record.Kind,
+    };
+
+    private static string Formula(string? code) => code == "brzycki" ? "Brzycki" : "Epley";
+
+    private static string Sets(long count) => count == 1 ? "1 set" : $"{count} sets";
+
+    private static string Exercises(long count) => count == 1 ? "1 exercise" : $"{count} exercises";
+
+    private static string Day(DateOnly date) => date.ToString("ddd d MMM", System.Globalization.CultureInfo.InvariantCulture);
+
+    private string StartedAt(SessionRow session) =>
+        DateTimeOffset.TryParse(session.StartedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var at)
+            ? TimeZoneInfo.ConvertTime(at, Clock.LocalTimeZone).ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture)
+            : session.LocalDate;
+
+    public void Dispose()
+    {
+        Profiles.Changed -= ProfileChanged;
+        watch?.Cancel();
+        watch?.Dispose();
+    }
+}

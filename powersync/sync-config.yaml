@@ -33,6 +33,9 @@ streams:
       - SELECT * FROM workout_sessions WHERE profile_id IN my_profiles
       - SELECT * FROM session_exercises WHERE profile_id IN my_profiles
       - SELECT * FROM set_logs WHERE profile_id IN my_profiles
+      - SELECT * FROM programs WHERE profile_id IN my_profiles
+      - SELECT * FROM scheduled_workouts WHERE profile_id IN my_profiles
+      - SELECT * FROM personal_records WHERE profile_id IN my_profiles
 
   # H tables for every household the user belongs to.
   household:
@@ -44,6 +47,7 @@ streams:
       - SELECT * FROM household_members WHERE household_id IN my_households
       # Custom exercises. System exercises (household_id null) arrive with reference.
       - SELECT * FROM exercises WHERE household_id IN my_households
+      - SELECT * FROM training_locations WHERE household_id IN my_households
 
   # G tables: global reference data, the same for everyone signed in.
   reference:

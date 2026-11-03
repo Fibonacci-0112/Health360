@@ -1,3 +1,4 @@
+using Health360.Domain.Training;
 using Health360.Domain.Units;
 using Npgsql;
 
@@ -160,6 +161,50 @@ public sealed class CanonicalUnitParityTests
                 Expected: UnitCodes.Convert(value, pair.Unit, pair.Canonical) ?? double.NaN)).ToList();
 
         await AssertSameAsync(cases);
+    }
+
+    /// <summary>
+    /// <c>set_logs.e1rm_kg</c> comes from <c>private.e1rm_kg</c>; the logger computes it with <see cref="OneRepMax.Estimate"/>
+    /// from the same canonical kg. They must agree bit for bit, or a set's estimate would change when it syncs back.
+    /// </summary>
+    [Fact]
+    public async Task E1rmIsEstimatedExactlyAsDomainDoes()
+    {
+        Assert.SkipUnless(ConnectionString is { Length: > 0 }, $"Set {EnvironmentVariable} to run the database tests.");
+
+        var loadsKg = Values().Where(v => v > 0).SelectMany(v => new[] { v, Conversion.Convert(v, Unit.Pound, Unit.Kilogram) });
+        var cases = (
+            from kg in loadsKg
+            from reps in Enumerable.Range(1, OneRepMax.MaxReps + 2)
+            from formula in new[] { OneRepMaxFormula.Epley, OneRepMaxFormula.Brzycki }
+            select (Kg: kg, Reps: reps, Formula: formula.ToString().ToLowerInvariant(),
+                Expected: OneRepMax.Estimate(kg, reps, formula) ?? double.NaN)).ToList();
+
+        await using var connection = await OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            select private.e1rm_kg(c.kg, c.reps, c.formula)
+            from unnest($1::double precision[], $2::integer[], $3::text[]) with ordinality as c (kg, reps, formula, n)
+            order by c.n
+            """,
+            connection);
+        command.Parameters.Add(new NpgsqlParameter { Value = cases.Select(c => c.Kg).ToArray() });
+        command.Parameters.Add(new NpgsqlParameter { Value = cases.Select(c => c.Reps).ToArray() });
+        command.Parameters.Add(new NpgsqlParameter { Value = cases.Select(c => c.Formula).ToArray() });
+
+        var mismatches = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(Ct);
+        foreach (var c in cases)
+        {
+            Assert.True(await reader.ReadAsync(Ct));
+            var actual = reader.IsDBNull(0) ? double.NaN : reader.GetDouble(0);
+            if (BitConverter.DoubleToInt64Bits(actual) != BitConverter.DoubleToInt64Bits(c.Expected))
+            {
+                mismatches.Add($"{c.Kg:R} kg × {c.Reps} ({c.Formula}): database {actual:R}, Domain {c.Expected:R}");
+            }
+        }
+
+        Assert.True(mismatches.Count == 0, string.Join("\n", mismatches.Take(20)));
     }
 
     private static async Task AssertSameAsync(

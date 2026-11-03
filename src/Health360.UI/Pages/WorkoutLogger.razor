@@ -1,0 +1,664 @@
+@page "/train/workout/{SessionId}"
+@using Health360.Contracts.Body
+@using Health360.Contracts.Training
+@using Health360.Domain.Training
+@implements IDisposable
+@inject WorkoutService Workouts
+@inject ProfileService Profiles
+@inject NavigationManager Navigation
+
+@* The live logger (FEATURES.md §1.4). Planned sets come pre-filled from last time, so accepting one is a single tap
+   on Done. Every change is saved to the local database at once: the workout survives the app being killed and
+   works offline. Loads stay as entered; e1RM and PRs use canonical kg. *@
+<div class="page">
+    <div class="page-head">
+        <h1>Workout</h1>
+        <NavLink class="top-link" href="train">Train</NavLink>
+    </div>
+
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+    <p class="pr-status" role="status" aria-live="polite">@status</p>
+
+    @if (exercises is null)
+    {
+        <p class="muted" role="status">Loading workout</p>
+    }
+    else
+    {
+        @if (exercises.Count == 0)
+        {
+            <p class="muted">No exercises yet. Add one below.</p>
+        }
+
+        @foreach (var exercise in exercises)
+        {
+            <section @key="exercise.Id" class="card logger-exercise" aria-labelledby="@($"ex-{exercise.Id}")">
+                <div class="page-head">
+                    <h2 id="@($"ex-{exercise.Id}")">@exercise.Name</h2>
+                    <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Remove {exercise.Name}")"
+                            @onclick="() => RunAsync(() => Workouts.RemoveExerciseAsync(exercise.Id))">Remove</button>
+                </div>
+                <div class="sets-scroll">
+                    <table class="sets">
+                        <thead>
+                            <tr>
+                                <th scope="col">Set</th>
+                                <th scope="col">Type</th>
+                                @if (exercise.TracksLoad)
+                                {
+                                    <th scope="col">Weight</th>
+                                }
+                                @if (exercise.TracksDistance)
+                                {
+                                    <th scope="col">Distance</th>
+                                }
+                                @if (exercise.TracksTime)
+                                {
+                                    <th scope="col">Time</th>
+                                }
+                                @if (exercise.TracksReps)
+                                {
+                                    <th scope="col">Reps</th>
+                                }
+                                <th scope="col">RPE</th>
+                                <th scope="col"><span class="visually-hidden">Done</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @for (var i = 0; i < exercise.Sets.Count; i++)
+                            {
+                                var set = exercise.Sets[i];
+                                var number = i + 1;
+                                var label = $"{exercise.Name} set {number}";
+                                <tr @key="set.Id" class="@(set.Completed ? "set done" : "set")">
+                                    <th scope="row">
+                                        @number
+                                        @if (set.IsPr)
+                                        {
+                                            <span class="badge-pr" title="Personal record">PR</span>
+                                        }
+                                    </th>
+                                    <td>
+                                        <select aria-label="@($"{label} type")" value="@set.SetType" disabled="@busy"
+                                                @onchange="e => SaveTypeAsync(set, e.Value as string)">
+                                            @foreach (var type in WorkoutCodes.SetTypes)
+                                            {
+                                                <option value="@type">@TypeName(type)</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    @if (exercise.TracksLoad)
+                                    {
+                                        <td>
+                                            <span class="inline">
+                                                <input class="set-input" inputmode="decimal" aria-label="@($"{label} weight in {Unit(set)}")"
+                                                       value="@Shown(set, WeightField, Number(set.Weight))" disabled="@busy"
+                                                       @oninput="e => TypeAsync(set, WeightField, e.Value as string)"
+                                                       @onchange="e => CommitAsync(set, WeightField, e.Value as string)" />
+                                                <span class="muted small">@Unit(set)</span>
+                                            </span>
+                                        </td>
+                                    }
+                                    @if (exercise.TracksDistance)
+                                    {
+                                        <td>
+                                            <span class="inline">
+                                                <input class="set-input" inputmode="decimal" aria-label="@($"{label} distance in {DistanceUnit(set)}")"
+                                                       value="@Shown(set, DistanceField, Number(set.Distance))" disabled="@busy"
+                                                       @oninput="e => TypeAsync(set, DistanceField, e.Value as string)"
+                                                       @onchange="e => CommitAsync(set, DistanceField, e.Value as string)" />
+                                                <span class="muted small">@DistanceUnit(set)</span>
+                                            </span>
+                                        </td>
+                                    }
+                                    @if (exercise.TracksTime)
+                                    {
+                                        <td>
+                                            <input class="set-input" inputmode="decimal" placeholder="m:ss" aria-label="@($"{label} time")"
+                                                   value="@Shown(set, TimeField, Time(set.DurationSeconds))" disabled="@busy"
+                                                   @oninput="e => TypeAsync(set, TimeField, e.Value as string)"
+                                                   @onchange="e => CommitAsync(set, TimeField, e.Value as string)" />
+                                        </td>
+                                    }
+                                    @if (exercise.TracksReps)
+                                    {
+                                        <td>
+                                            <input class="set-input" inputmode="numeric" aria-label="@($"{label} reps")"
+                                                   value="@Shown(set, RepsField, set.Reps?.ToString(System.Globalization.CultureInfo.InvariantCulture))" disabled="@busy"
+                                                   @oninput="e => TypeAsync(set, RepsField, e.Value as string)"
+                                                   @onchange="e => CommitAsync(set, RepsField, e.Value as string)" />
+                                        </td>
+                                    }
+                                    <td>
+                                        <input class="set-input" inputmode="decimal" aria-label="@($"{label} RPE")"
+                                               value="@Shown(set, RpeField, Number(set.Rpe))" disabled="@busy"
+                                               @oninput="e => TypeAsync(set, RpeField, e.Value as string)"
+                                               @onchange="e => CommitAsync(set, RpeField, e.Value as string)" />
+                                    </td>
+                                    <td>
+                                        <button type="button" class="@(set.Completed ? "primary compact" : "secondary compact")" disabled="@busy"
+                                                aria-pressed="@(set.Completed ? "true" : "false")" aria-label="@($"{label} done")"
+                                                @onclick="() => ToggleAsync(exercise, set)">✓</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="inline">
+                    <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Add a set to {exercise.Name}")"
+                            @onclick="() => RunAsync(() => Workouts.AddSetAsync(exercise.Id))">Add set</button>
+                    @if (exercise.Sets.Count > 0 && !exercise.Sets[^1].Completed)
+                    {
+                        <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Delete the last set of {exercise.Name}")"
+                                @onclick="() => RunAsync(() => Workouts.DeleteSetAsync(exercise.Sets[^1].Id))">Delete last set</button>
+                    }
+                </div>
+            </section>
+        }
+
+        <section class="card" aria-labelledby="add-exercise-title">
+            <h2 id="add-exercise-title">Add an exercise</h2>
+            <div class="field">
+                <label for="exercise-search" class="label">Search exercises</label>
+                <input id="exercise-search" value="@query" @oninput="SearchAsync" autocomplete="off" />
+            </div>
+            @if (results.Length > 0)
+            {
+                <ul class="measurement-list" aria-label="Matching exercises">
+                    @foreach (var result in results)
+                    {
+                        <li @key="result.Id" class="measurement">
+                            <span>@result.Name</span>
+                            <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Add {result.Name}")"
+                                    @onclick="() => AddExerciseAsync(result.Id)">Add</button>
+                        </li>
+                    }
+                </ul>
+            }
+            else if (!string.IsNullOrWhiteSpace(query))
+            {
+                <p class="muted">No exercise matches. The library arrives with the first sync.</p>
+            }
+        </section>
+
+        <div class="inline">
+            <button type="button" class="primary" id="finish" disabled="@busy" @onclick="FinishAsync">Finish workout</button>
+            @if (confirmingDiscard)
+            {
+                <div class="confirm" role="alertdialog" aria-labelledby="discard-question">
+                    <p id="discard-question">Discard this workout and everything logged in it?</p>
+                    <div class="inline">
+                        <button type="button" class="danger" id="discard-confirm" disabled="@busy" @onclick="DiscardAsync">Discard</button>
+                        <button type="button" class="secondary" disabled="@busy" @onclick="() => confirmingDiscard = false">Keep</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <button type="button" class="secondary" id="discard" disabled="@busy" @onclick="() => confirmingDiscard = true">Discard</button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public string SessionId { get; set; } = "";
+
+    private IReadOnlyList<LoggedExercise>? exercises;
+    private CancellationTokenSource? watch;
+    private string? watchedSession;
+    private string? watchedProfile;
+    private bool busy;
+    private bool confirmingDiscard;
+    private string? error;
+    private string? status;
+    private string? query;
+    private ExerciseRow[] results = [];
+
+    protected override void OnInitialized() => Profiles.Changed += ProfileChanged;
+
+    private void ProfileChanged() => _ = InvokeAsync(Follow);
+
+    protected override void OnParametersSet() => Follow();
+
+    /// <summary>
+    /// Watches this session for the signed-in profile. Another profile (or none) stops the old watch and clears what
+    /// it showed, so one profile's workout never stays on screen for the next.
+    /// </summary>
+    private void Follow()
+    {
+        var profileId = Workouts.ProfileId;
+        if (profileId == watchedProfile && SessionId == watchedSession)
+        {
+            return;
+        }
+
+        watch?.Cancel();
+        watch?.Dispose();
+        watch = null;
+        exercises = null;
+        results = [];
+        query = null;
+        drafts.Clear();
+        watchedProfile = profileId;
+        watchedSession = SessionId;
+        if (profileId is null)
+        {
+            return;
+        }
+
+        watch = new CancellationTokenSource();
+        var token = watch.Token;
+        _ = Task.Run(() => WatchAsync(SessionId, token), CancellationToken.None);
+    }
+
+    private async Task WatchAsync(string sessionId, CancellationToken token)
+    {
+        try
+        {
+            await foreach (var batch in Workouts.Watch(sessionId, token))
+            {
+                await InvokeAsync(() =>
+                {
+                    // A batch queued before the watch was replaced belongs to the old profile or session.
+                    if (!token.IsCancellationRequested)
+                    {
+                        exercises = batch;
+                        StateHasChanged();
+                    }
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception e) when (e is not ObjectDisposedException)
+        {
+            await InvokeAsync(() =>
+            {
+                if (!token.IsCancellationRequested)
+                {
+                    error = "Couldn't read this workout on this device. Leave and come back to try again.";
+                    watchedSession = null;
+                    StateHasChanged();
+                }
+            });
+        }
+    }
+
+    private static string TypeName(string code) => code switch
+    {
+        "working" => "Working",
+        "warmup" => "Warm-up",
+        "drop" => "Drop",
+        "backoff" => "Back-off",
+        "failure" => "To failure",
+        _ => code,
+    };
+
+    private string Unit(LoggedSet set) => set.WeightUnit ?? Workouts.LoadUnit;
+
+    private string DistanceUnit(LoggedSet set) => set.DistanceUnit ?? Workouts.DistanceUnit;
+
+    private static string? Time(double? seconds) => seconds is { } s ? PaceText.Format(s) : null;
+
+    private static string? Number(double? value) =>
+        value?.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+
+    private Task SaveAsync(LoggedSet set, Func<SetEntry, SetEntry> change) =>
+        RunAsync(async () => Celebrate(await Workouts.ChangeSetAsync(set.Id, change)));
+
+    private Task SaveTypeAsync(LoggedSet set, string? type) =>
+        type is null ? Task.CompletedTask : SaveAsync(set, e => e with { SetType = type });
+
+    private const string WeightField = "weight";
+    private const string RepsField = "reps";
+    private const string RpeField = "rpe";
+    private const string TimeField = "time";
+    private const string DistanceField = "distance";
+
+    /// <summary>What each field shows while it is being edited: the text as typed, until focus leaves it.</summary>
+    private readonly Dictionary<string, string?> drafts = new(StringComparer.Ordinal);
+
+    /// <summary>The last save of each field, so a field's saves land in the order they were typed.</summary>
+    private readonly Dictionary<string, Task> fieldSaves = new(StringComparer.Ordinal);
+
+    private static string FieldKey(LoggedSet set, string field) => $"{set.Id}/{field}";
+
+    private string? Shown(LoggedSet set, string field, string? stored) =>
+        drafts.TryGetValue(FieldKey(set, field), out var typed) ? typed : stored;
+
+    /// <summary>
+    /// While typing: the field keeps the text exactly as typed, and each value that is complete and valid is saved at
+    /// once, so killing the app mid-edit keeps the latest one. Clearing a field saves too (a required one stays as it is
+    /// until it's filled again). Half-typed text ("1:") waits; nothing is
+    /// reported until focus leaves the field.
+    /// </summary>
+    private Task TypeAsync(LoggedSet set, string field, string? text)
+    {
+        var key = FieldKey(set, field);
+        drafts[key] = text;
+        if (Change(set, field, text, out _) is not { } change)
+        {
+            return Task.CompletedTask;
+        }
+
+        return QueueAsync(key, async () =>
+        {
+            try
+            {
+                Celebrate(await Workouts.ChangeSetAsync(set.Id, change));
+            }
+            catch (Exception e) when (e is FluentValidation.ValidationException or InvalidOperationException)
+            {
+                // Out of range or not allowed yet: it's reported when focus leaves the field.
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                error = "Couldn't save that on this device. Try again.";
+            }
+        });
+    }
+
+    /// <summary>When focus leaves the field: saves what it holds (blank clears it) and says what's wrong, if anything.</summary>
+    /// <returns>Whether the field's text is now what the database holds.</returns>
+    private async Task<bool> CommitAsync(LoggedSet set, string field, string? text)
+    {
+        var key = FieldKey(set, field);
+        drafts[key] = text;
+        if (Change(set, field, text, out var problem) is not { } change)
+        {
+            error = problem;
+            return false;
+        }
+
+        var saved = false;
+        await QueueAsync(key, async () =>
+        {
+            error = null;
+            try
+            {
+                Celebrate(await Workouts.ChangeSetAsync(set.Id, change), null);
+                saved = true;
+            }
+            catch (FluentValidation.ValidationException e)
+            {
+                error = e.Errors.FirstOrDefault()?.ErrorMessage ?? "That entry isn't valid.";
+            }
+            catch (InvalidOperationException e)
+            {
+                error = e.Message;
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                error = "Couldn't save that on this device. Try again.";
+            }
+        });
+
+        // Saved: show the stored value again. Refused: keep the text, so it can be corrected.
+        if (saved && drafts.TryGetValue(key, out var shown) && shown == text)
+        {
+            drafts.Remove(key);
+        }
+
+        return saved;
+    }
+
+    private Task QueueAsync(string key, Func<Task> save)
+    {
+        var previous = fieldSaves.GetValueOrDefault(key) ?? Task.CompletedTask;
+        var next = AfterAsync(previous, save);
+        fieldSaves[key] = next;
+        return next;
+    }
+
+    private static async Task AfterAsync(Task previous, Func<Task> save)
+    {
+        try
+        {
+            await previous;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // The earlier save reported its own failure.
+        }
+
+        await save();
+    }
+
+    /// <summary>The change a field's text makes, or null with the problem when the text isn't a value for it.</summary>
+    private Func<SetEntry, SetEntry>? Change(LoggedSet set, string field, string? text, out string? problem)
+    {
+        problem = null;
+        var blank = string.IsNullOrWhiteSpace(text);
+        switch (field)
+        {
+            case WeightField:
+                var unit = Unit(set);
+                if (blank)
+                {
+                    return e => e with { Weight = null, WeightUnit = unit };
+                }
+
+                if (NumberText.Parse(text) is { } weight)
+                {
+                    return e => e with { Weight = weight, WeightUnit = unit };
+                }
+
+                problem = "Enter the weight as a number.";
+                return null;
+            case RepsField:
+                if (blank)
+                {
+                    return e => e with { Reps = null };
+                }
+
+                if (int.TryParse(text!.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var reps))
+                {
+                    return e => e with { Reps = reps };
+                }
+
+                problem = "Enter the reps as a whole number.";
+                return null;
+            case RpeField:
+                if (blank)
+                {
+                    return e => e with { Rpe = null };
+                }
+
+                if (NumberText.Parse(text) is { } rpe)
+                {
+                    return e => e with { Rpe = rpe };
+                }
+
+                problem = "Enter RPE as a number from 0 to 10.";
+                return null;
+            case TimeField:
+                if (blank)
+                {
+                    return e => e with { DurationSeconds = null };
+                }
+
+                if (PaceText.ParseSeconds(text) is { } seconds)
+                {
+                    return e => e with { DurationSeconds = seconds };
+                }
+
+                problem = "Enter the time as minutes and seconds, like 1:30.";
+                return null;
+            case DistanceField:
+                var distanceUnit = DistanceUnit(set);
+                if (blank)
+                {
+                    return e => e with { Distance = null, DistanceUnit = null };
+                }
+
+                if (NumberText.Parse(text) is { } distance)
+                {
+                    return e => e with { Distance = distance, DistanceUnit = distanceUnit };
+                }
+
+                problem = "Enter the distance as a number.";
+                return null;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown field");
+        }
+    }
+
+    /// <summary>
+    /// Ticks a set off or on, after any save still running for its fields: a value typed a moment ago must be in the
+    /// database before completion checks it.
+    /// </summary>
+    private Task ToggleAsync(LoggedExercise exercise, LoggedSet set) =>
+        RunAsync(async () =>
+        {
+            await FieldSavesOfAsync(set);
+            // Each field still being edited is saved first, and its failure stops the tap: completing would otherwise
+            // record the value stored before, not the one on screen.
+            var prefix = set.Id + "/";
+            foreach (var (key, text) in drafts.Where(d => d.Key.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            {
+                if (!await CommitAsync(set, key[prefix.Length..], text))
+                {
+                    return;
+                }
+            }
+
+            if (set.Completed)
+            {
+                await Workouts.UncompleteSetAsync(set.Id);
+            }
+            else
+            {
+                Celebrate(await Workouts.CompleteSetAsync(set.Id), exercise.Name);
+            }
+        });
+
+    /// <summary>Waits for every field save of the set queued so far; each reports its own failure.</summary>
+    private async Task FieldSavesOfAsync(LoggedSet set)
+    {
+        var prefix = set.Id + "/";
+        foreach (var save in fieldSaves.Where(p => p.Key.StartsWith(prefix, StringComparison.Ordinal)).Select(p => p.Value).ToList())
+        {
+            try
+            {
+                await save;
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+            }
+        }
+    }
+
+    private void Celebrate(IReadOnlyList<NewRecord> records, string? exercise = null)
+    {
+        if (records.Count == 0)
+        {
+            return;
+        }
+
+        var kinds = string.Join(", ", records.Select(r => r.Kind switch
+        {
+            RecordKind.E1rm => $"estimated 1RM {Workouts.Load(r.Value)}",
+            RecordKind.Weight => $"heaviest weight {Workouts.Load(r.Value)}",
+            RecordKind.Reps => $"most reps at this weight ({r.Value:0})",
+            RecordKind.Volume => $"set volume {Workouts.Load(r.Value)}",
+            _ => "",
+        }));
+        status = exercise is null ? $"New PR: {kinds}." : $"New PR on {exercise}: {kinds}.";
+    }
+
+    private async Task SearchAsync(ChangeEventArgs e)
+    {
+        var typed = e.Value as string;
+        var profile = watchedProfile;
+        query = typed;
+        try
+        {
+            var found = string.IsNullOrWhiteSpace(typed) ? [] : await Workouts.SearchExercisesAsync(typed);
+            // A slower search for earlier text, or one started before a profile change, must not replace what's
+            // shown for the text in the box now.
+            if (query == typed && watchedProfile == profile)
+            {
+                results = found;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            error = "Couldn't search the exercise library on this device.";
+        }
+    }
+
+    private Task AddExerciseAsync(string exerciseId) => RunAsync(async () =>
+    {
+        await Workouts.AddExerciseAsync(SessionId, exerciseId);
+        query = null;
+        results = [];
+    });
+
+    private Task FinishAsync() => RunAsync(async () =>
+    {
+        // Every field still being edited is saved first, and one that can't be stops the finish: a finished workout
+        // can't be changed, so it would keep the value stored before, not the one on screen.
+        foreach (var set in (exercises ?? []).SelectMany(e => e.Sets).ToList())
+        {
+            await FieldSavesOfAsync(set);
+            var prefix = set.Id + "/";
+            foreach (var (key, text) in drafts.Where(d => d.Key.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            {
+                if (!await CommitAsync(set, key[prefix.Length..], text))
+                {
+                    return;
+                }
+            }
+        }
+
+        await Workouts.FinishAsync(SessionId);
+        Navigation.NavigateTo("train");
+    });
+
+    private Task DiscardAsync() => RunAsync(async () =>
+    {
+        await Workouts.DiscardAsync(SessionId);
+        Navigation.NavigateTo("train");
+    });
+
+    /// <summary>Runs one change; a failure is shown, never thrown into the renderer.</summary>
+    private async Task RunAsync(Func<Task> change)
+    {
+        busy = true;
+        error = null;
+        try
+        {
+            await change();
+        }
+        catch (FluentValidation.ValidationException e)
+        {
+            error = e.Errors.FirstOrDefault()?.ErrorMessage ?? "That entry isn't valid.";
+        }
+        catch (InvalidOperationException e)
+        {
+            error = e.Message;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            error = "Couldn't save that on this device. Try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        Profiles.Changed -= ProfileChanged;
+        watch?.Cancel();
+        watch?.Dispose();
+    }
+}
