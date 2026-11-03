@@ -134,6 +134,18 @@ public class ProgressionTests
     }
 
     [Fact]
+    public void A_half_increment_deload_rounds_alike_in_lb_and_kg()
+    {
+        // 175 lb × 10% / 5 lb = 3.5 increments, rounded to 4: 155 lb. In kg the ratio comes out 3.4999999999999996.
+        var kg = Conversion.Convert(175, Unit.Pound, Unit.Kilogram);
+        var incKg = Conversion.Convert(5, Unit.Pound, Unit.Kilogram);
+
+        Assert.Equal(155, Progression.LinearProgression(175, 5, Sets(175, 4), 5, 2).Load);
+        var inKg = Progression.LinearProgression(kg, 5, Sets(kg, 4), incKg, 2);
+        Assert.True(Quantity.CanonicalEquals(Conversion.Convert(155, Unit.Pound, Unit.Kilogram), inKg.Load), $"{inKg.Load}");
+    }
+
+    [Fact]
     public void Suggestions_stay_positive_and_on_the_increment_grid()
     {
         Holds(Gen.Zip(Int(1, 200), Gen.Zip(Gen.Elements(1.0, 2.5, 5.0), Gen.Zip(Int(0, 7), Int(0, 5)))), t =>
