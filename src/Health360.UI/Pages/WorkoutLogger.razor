@@ -1,0 +1,383 @@
+@page "/train/workout/{SessionId}"
+@using Health360.Contracts.Body
+@using Health360.Contracts.Training
+@using Health360.Domain.Training
+@implements IDisposable
+@inject WorkoutService Workouts
+@inject ProfileService Profiles
+@inject NavigationManager Navigation
+
+@* The live logger (FEATURES.md §1.4). Planned sets come pre-filled from last time, so accepting one is a single tap
+   on Done. Every change is saved to the local database at once: the workout survives the app being killed and
+   works offline. Loads stay as entered; e1RM and PRs use canonical kg. *@
+<div class="page">
+    <div class="page-head">
+        <h1>Workout</h1>
+        <NavLink class="top-link" href="train">Train</NavLink>
+    </div>
+
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+    <p class="pr-status" role="status" aria-live="polite">@status</p>
+
+    @if (exercises is null)
+    {
+        <p class="muted" role="status">Loading workout</p>
+    }
+    else
+    {
+        @if (exercises.Count == 0)
+        {
+            <p class="muted">No exercises yet. Add one below.</p>
+        }
+
+        @foreach (var exercise in exercises)
+        {
+            <section @key="exercise.Id" class="card logger-exercise" aria-labelledby="@($"ex-{exercise.Id}")">
+                <div class="page-head">
+                    <h2 id="@($"ex-{exercise.Id}")">@exercise.Name</h2>
+                    <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Remove {exercise.Name}")"
+                            @onclick="() => RunAsync(() => Workouts.RemoveExerciseAsync(exercise.Id))">Remove</button>
+                </div>
+                <div class="sets-scroll">
+                    <table class="sets">
+                        <thead>
+                            <tr>
+                                <th scope="col">Set</th>
+                                <th scope="col">Type</th>
+                                @if (exercise.TracksLoad)
+                                {
+                                    <th scope="col">Weight</th>
+                                }
+                                <th scope="col">Reps</th>
+                                <th scope="col">RPE</th>
+                                <th scope="col"><span class="visually-hidden">Done</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @for (var i = 0; i < exercise.Sets.Count; i++)
+                            {
+                                var set = exercise.Sets[i];
+                                var number = i + 1;
+                                var label = $"{exercise.Name} set {number}";
+                                <tr @key="set.Id" class="@(set.Completed ? "set done" : "set")">
+                                    <th scope="row">
+                                        @number
+                                        @if (set.IsPr)
+                                        {
+                                            <span class="badge-pr" title="Personal record">PR</span>
+                                        }
+                                    </th>
+                                    <td>
+                                        <select aria-label="@($"{label} type")" value="@set.SetType" disabled="@busy"
+                                                @onchange="e => SaveTypeAsync(set, e.Value as string)">
+                                            @foreach (var type in WorkoutCodes.SetTypes)
+                                            {
+                                                <option value="@type">@TypeName(type)</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    @if (exercise.TracksLoad)
+                                    {
+                                        <td>
+                                            <span class="inline">
+                                                <input class="set-input" inputmode="decimal" aria-label="@($"{label} weight in {Unit(set)}")"
+                                                       value="@Number(set.Weight)" disabled="@busy"
+                                                       @onchange="e => SaveWeightAsync(set, e.Value as string)" />
+                                                <span class="muted small">@Unit(set)</span>
+                                            </span>
+                                        </td>
+                                    }
+                                    <td>
+                                        <input class="set-input" inputmode="numeric" aria-label="@($"{label} reps")" value="@set.Reps" disabled="@busy"
+                                               @onchange="e => SaveRepsAsync(set, e.Value as string)" />
+                                    </td>
+                                    <td>
+                                        <input class="set-input" inputmode="decimal" aria-label="@($"{label} RPE")" value="@Number(set.Rpe)" disabled="@busy"
+                                               @onchange="e => SaveRpeAsync(set, e.Value as string)" />
+                                    </td>
+                                    <td>
+                                        <button type="button" class="@(set.Completed ? "primary compact" : "secondary compact")" disabled="@busy"
+                                                aria-pressed="@(set.Completed ? "true" : "false")" aria-label="@($"{label} done")"
+                                                @onclick="() => ToggleAsync(exercise, set)">✓</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="inline">
+                    <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Add a set to {exercise.Name}")"
+                            @onclick="() => RunAsync(() => Workouts.AddSetAsync(exercise.Id))">Add set</button>
+                    @if (exercise.Sets.Count > 0 && !exercise.Sets[^1].Completed)
+                    {
+                        <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Delete the last set of {exercise.Name}")"
+                                @onclick="() => RunAsync(() => Workouts.DeleteSetAsync(exercise.Sets[^1].Id))">Delete last set</button>
+                    }
+                </div>
+            </section>
+        }
+
+        <section class="card" aria-labelledby="add-exercise-title">
+            <h2 id="add-exercise-title">Add an exercise</h2>
+            <div class="field">
+                <label for="exercise-search" class="label">Search exercises</label>
+                <input id="exercise-search" value="@query" @oninput="SearchAsync" autocomplete="off" />
+            </div>
+            @if (results.Length > 0)
+            {
+                <ul class="measurement-list" aria-label="Matching exercises">
+                    @foreach (var result in results)
+                    {
+                        <li @key="result.Id" class="measurement">
+                            <span>@result.Name</span>
+                            <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Add {result.Name}")"
+                                    @onclick="() => AddExerciseAsync(result.Id)">Add</button>
+                        </li>
+                    }
+                </ul>
+            }
+            else if (!string.IsNullOrWhiteSpace(query))
+            {
+                <p class="muted">No exercise matches. The library arrives with the first sync.</p>
+            }
+        </section>
+
+        <div class="inline">
+            <button type="button" class="primary" id="finish" disabled="@busy" @onclick="FinishAsync">Finish workout</button>
+            @if (confirmingDiscard)
+            {
+                <div class="confirm" role="alertdialog" aria-labelledby="discard-question">
+                    <p id="discard-question">Discard this workout and everything logged in it?</p>
+                    <div class="inline">
+                        <button type="button" class="danger" id="discard-confirm" disabled="@busy" @onclick="DiscardAsync">Discard</button>
+                        <button type="button" class="secondary" disabled="@busy" @onclick="() => confirmingDiscard = false">Keep</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <button type="button" class="secondary" id="discard" disabled="@busy" @onclick="() => confirmingDiscard = true">Discard</button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public string SessionId { get; set; } = "";
+
+    private IReadOnlyList<LoggedExercise>? exercises;
+    private CancellationTokenSource? watch;
+    private string? watchedSession;
+    private bool busy;
+    private bool confirmingDiscard;
+    private string? error;
+    private string? status;
+    private string? query;
+    private ExerciseRow[] results = [];
+
+    protected override void OnInitialized() => Profiles.Changed += ProfileChanged;
+
+    private void ProfileChanged() => _ = InvokeAsync(Follow);
+
+    protected override void OnParametersSet() => Follow();
+
+    private void Follow()
+    {
+        if (Workouts.ProfileId is null || watchedSession == SessionId)
+        {
+            return;
+        }
+
+        watch?.Cancel();
+        watch?.Dispose();
+        watch = new CancellationTokenSource();
+        watchedSession = SessionId;
+        exercises = null;
+        var token = watch.Token;
+        _ = Task.Run(() => WatchAsync(SessionId, token), CancellationToken.None);
+    }
+
+    private async Task WatchAsync(string sessionId, CancellationToken token)
+    {
+        try
+        {
+            await foreach (var batch in Workouts.Watch(sessionId, token))
+            {
+                await InvokeAsync(() =>
+                {
+                    exercises = batch;
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception e) when (e is not ObjectDisposedException)
+        {
+            await InvokeAsync(() =>
+            {
+                error = "Couldn't read this workout on this device. Leave and come back to try again.";
+                watchedSession = null;
+                StateHasChanged();
+            });
+        }
+    }
+
+    private static string TypeName(string code) => code switch
+    {
+        "working" => "Working",
+        "warmup" => "Warm-up",
+        "drop" => "Drop",
+        "backoff" => "Back-off",
+        "failure" => "To failure",
+        _ => code,
+    };
+
+    private string Unit(LoggedSet set) => set.WeightUnit ?? Workouts.LoadUnit;
+
+    private static string? Number(double? value) =>
+        value?.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+
+    private Task SaveAsync(LoggedSet set, Func<SetEntry, SetEntry> change) =>
+        RunAsync(async () => Celebrate(await Workouts.ChangeSetAsync(set.Id, change)));
+
+    private Task SaveTypeAsync(LoggedSet set, string? type) =>
+        type is null ? Task.CompletedTask : SaveAsync(set, e => e with { SetType = type });
+
+    private Task SaveWeightAsync(LoggedSet set, string? text)
+    {
+        var unit = Unit(set);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return SaveAsync(set, e => e with { Weight = null, WeightUnit = unit });
+        }
+
+        return NumberText.Parse(text) is { } weight
+            ? SaveAsync(set, e => e with { Weight = weight, WeightUnit = unit })
+            : Fail("Enter the weight as a number.");
+    }
+
+    private Task SaveRepsAsync(LoggedSet set, string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return SaveAsync(set, e => e with { Reps = null });
+        }
+
+        return int.TryParse(text.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var reps)
+            ? SaveAsync(set, e => e with { Reps = reps })
+            : Fail("Enter the reps as a whole number.");
+    }
+
+    private Task SaveRpeAsync(LoggedSet set, string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return SaveAsync(set, e => e with { Rpe = null });
+        }
+
+        return NumberText.Parse(text) is { } rpe
+            ? SaveAsync(set, e => e with { Rpe = rpe })
+            : Fail("Enter RPE as a number from 0 to 10.");
+    }
+
+    private Task ToggleAsync(LoggedExercise exercise, LoggedSet set) =>
+        set.Completed
+            ? RunAsync(() => Workouts.UncompleteSetAsync(set.Id))
+            : RunAsync(async () => Celebrate(await Workouts.CompleteSetAsync(set.Id), exercise.Name));
+
+    private void Celebrate(IReadOnlyList<NewRecord> records, string? exercise = null)
+    {
+        if (records.Count == 0)
+        {
+            return;
+        }
+
+        var kinds = string.Join(", ", records.Select(r => r.Kind switch
+        {
+            RecordKind.E1rm => $"estimated 1RM {Workouts.Load(r.Value)}",
+            RecordKind.Weight => $"heaviest weight {Workouts.Load(r.Value)}",
+            RecordKind.Reps => $"most reps at this weight ({r.Value:0})",
+            RecordKind.Volume => $"set volume {Workouts.Load(r.Value)}",
+            _ => "",
+        }));
+        status = exercise is null ? $"New PR: {kinds}." : $"New PR on {exercise}: {kinds}.";
+    }
+
+    private async Task SearchAsync(ChangeEventArgs e)
+    {
+        query = e.Value as string;
+        try
+        {
+            results = string.IsNullOrWhiteSpace(query) ? [] : await Workouts.SearchExercisesAsync(query);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            error = "Couldn't search the exercise library on this device.";
+        }
+    }
+
+    private Task AddExerciseAsync(string exerciseId) => RunAsync(async () =>
+    {
+        await Workouts.AddExerciseAsync(SessionId, exerciseId);
+        query = null;
+        results = [];
+    });
+
+    private Task FinishAsync() => RunAsync(async () =>
+    {
+        await Workouts.FinishAsync(SessionId);
+        Navigation.NavigateTo("train");
+    });
+
+    private Task DiscardAsync() => RunAsync(async () =>
+    {
+        await Workouts.DiscardAsync(SessionId);
+        Navigation.NavigateTo("train");
+    });
+
+    private Task Fail(string message)
+    {
+        error = message;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Runs one change; a failure is shown, never thrown into the renderer.</summary>
+    private async Task RunAsync(Func<Task> change)
+    {
+        busy = true;
+        error = null;
+        try
+        {
+            await change();
+        }
+        catch (FluentValidation.ValidationException e)
+        {
+            error = e.Errors.FirstOrDefault()?.ErrorMessage ?? "That entry isn't valid.";
+        }
+        catch (InvalidOperationException e)
+        {
+            error = e.Message;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            error = "Couldn't save that on this device. Try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        Profiles.Changed -= ProfileChanged;
+        watch?.Cancel();
+        watch?.Dispose();
+    }
+}

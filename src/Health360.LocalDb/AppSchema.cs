@@ -192,8 +192,9 @@ public static class AppSchema
         ("position", ColumnType.Integer));
 
     /// <summary>
-    /// U: one set as entered. The server recomputes <c>weight_kg</c> and <c>distance_m</c> from the entered value and
-    /// unit, whatever the client sends.
+    /// U: one set as entered. The server recomputes <c>weight_kg</c>, <c>distance_m</c> and <c>e1rm_kg</c> (for a completed
+    /// set that isn't a warm-up, with the formula the client named) whatever the client sends; the client computes
+    /// them the same way. <c>is_pr</c> is 1 when the set made a <c>personal_records</c> row.
     /// </summary>
     public static Table SetLogs { get; } = Synced("set_logs",
         ("profile_id", ColumnType.Text),
@@ -210,7 +211,59 @@ public static class AppSchema
         ("distance", ColumnType.Real),
         ("distance_unit", ColumnType.Text),
         ("distance_m", ColumnType.Real),
-        ("completed_at", ColumnType.Text));
+        ("completed_at", ColumnType.Text),
+        ("e1rm_formula", ColumnType.Text),
+        ("e1rm_kg", ColumnType.Real),
+        ("is_pr", ColumnType.Integer));
+
+    /// <summary>
+    /// H: a gym or home setup: equipment codes, the plates it has (a JSON array of <c>{"weight", "unit", "count"}</c>,
+    /// each plate in its own unit) and the bar as entered. The server recomputes <c>bar_weight_kg</c>.
+    /// </summary>
+    public static Table TrainingLocations { get; } = Synced("training_locations",
+        ("household_id", ColumnType.Text),
+        ("name", ColumnType.Text),
+        ("equipment", ColumnType.Text),
+        ("plate_inventory", ColumnType.Text),
+        ("bar_weight", ColumnType.Real),
+        ("bar_unit", ColumnType.Text),
+        ("bar_weight_kg", ColumnType.Real));
+
+    /// <summary>U: a dated block of training, optionally at one location.</summary>
+    public static Table Programs { get; } = Synced("programs",
+        ("profile_id", ColumnType.Text),
+        ("name", ColumnType.Text),
+        ("location_id", ColumnType.Text),
+        ("starts_on", ColumnType.Text),
+        ("ends_on", ColumnType.Text));
+
+    /// <summary>
+    /// U: a template planned every <c>weekday</c> (ISO, 1 = Monday) of a program, or on one date
+    /// (<c>scheduled_on</c>), with the session that did it.
+    /// </summary>
+    public static Table ScheduledWorkouts { get; } = Synced("scheduled_workouts",
+        ("profile_id", ColumnType.Text),
+        ("program_id", ColumnType.Text),
+        ("template_id", ColumnType.Text),
+        ("weekday", ColumnType.Integer),
+        ("scheduled_on", ColumnType.Text),
+        ("session_id", ColumnType.Text));
+
+    /// <summary>
+    /// U: a set that beat the profile's earlier best for an exercise (<c>kind</c> e1rm, weight, reps or volume), one row
+    /// per record, so the rows are the history. Values are canonical: kg, or a rep count at <c>weight_kg</c>.
+    /// </summary>
+    public static Table PersonalRecords { get; } = Synced("personal_records",
+        ("profile_id", ColumnType.Text),
+        ("exercise_id", ColumnType.Text),
+        ("kind", ColumnType.Text),
+        ("value", ColumnType.Real),
+        ("weight_kg", ColumnType.Real),
+        ("reps", ColumnType.Integer),
+        ("e1rm_formula", ColumnType.Text),
+        ("set_log_id", ColumnType.Text),
+        ("achieved_at", ColumnType.Text),
+        ("local_date", ColumnType.Text));
 
     /// <summary>
     /// Local only, never uploaded. When the server permanently rejects a write (constraint or RLS
@@ -260,7 +313,8 @@ public static class AppSchema
         [
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
             MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, Exercises, WorkoutTemplates,
-            TemplateExercises, WorkoutSessions, SessionExercises, SetLogs, FailedUploadsTable, PhotoUploadsTable,
+            TemplateExercises, WorkoutSessions, SessionExercises, SetLogs, TrainingLocations, Programs, ScheduledWorkouts,
+            PersonalRecords, FailedUploadsTable, PhotoUploadsTable,
             PhotoDeletionsTable,
         ];
 
@@ -308,6 +362,15 @@ public static class AppSchema
                 ["zone_seconds"] = ServerColumnType.Json,
                 ["energy_estimate"] = ServerColumnType.Json,
             },
+            ["set_logs"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
+            {
+                ["is_pr"] = ServerColumnType.Boolean,
+            },
+            ["training_locations"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
+            {
+                ["equipment"] = ServerColumnType.Json,
+                ["plate_inventory"] = ServerColumnType.Json,
+            },
         };
 
     /// <summary>
@@ -334,7 +397,7 @@ public static class AppSchema
             [
                 "profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins",
                 "progress_photos", "exercises", "workout_templates", "template_exercises", "workout_sessions",
-                "session_exercises", "set_logs",
+                "session_exercises", "set_logs", "training_locations", "programs", "scheduled_workouts", "personal_records",
             ],
             StringComparer.Ordinal);
 

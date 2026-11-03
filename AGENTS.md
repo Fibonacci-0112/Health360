@@ -31,6 +31,7 @@ Use current source, project files and `.github/workflows/ci.yml` to verify comma
 | `supabase/migrations`, `supabase/tests/database` | Database evolution, access policies and pgTAP tests |
 | `powersync` | Sync Streams and local service configuration |
 | `tools/drift` | Postgres publication versus `AppSchema` consistency check |
+| `tools/importers` | Reference-data imports (free-exercise-db) into system rows, keyed by `external_id` |
 | `tests` | Domain, UI, local database, server, drift and two-client sync tests |
 
 Keep business calculations in Domain, shared screens in UI, and platform APIs behind host-supplied adapters. Preserve Domain's purity analyzer (`BannedSymbols.txt`) and purity tests. Inject clocks and randomness; do not use ambient time, randomness, environment, network or filesystem access in Domain.
@@ -76,6 +77,7 @@ supabase test db
 supabase db lint --level warning --fail-on error
 dotnet run --project tools/drift -c Release -p:ContinuousIntegrationBuild=true
 dotnet test --project tests/Health360.Server.Tests -c Release --filter-trait "Category=Database"
+dotnet test --project tests/Health360.Importers.Tests -c Release --filter-trait "Category=Database"
 ```
 
 Set `HEALTH360_DRIFT_DATABASE` and `HEALTH360_TEST_DATABASE` to a migrated, disposable local database for their respective checks. Server database tests need permission to create temporary roles and users. Never point test fixtures at production.

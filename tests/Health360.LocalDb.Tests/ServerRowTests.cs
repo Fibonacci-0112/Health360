@@ -67,6 +67,20 @@ public class ServerRowTests
         Assert.Equal("""{"equipment":["band"]}""", exercise.ToJsonString());
     }
 
+    [Fact]
+    public void SendsTheNewWorkoutColumnsAsTheirPostgresTypes()
+    {
+        var set = Uploads.ToServerRow("set_logs", new JsonObject { ["is_pr"] = 1L, ["e1rm_kg"] = 116.5 });
+        var location = Uploads.ToServerRow("training_locations", new JsonObject
+        {
+            ["equipment"] = """["barbell"]""",
+            ["plate_inventory"] = """[{"weight":20,"unit":"kg","count":2}]""",
+        });
+
+        Assert.Equal("""{"is_pr":true,"e1rm_kg":116.5}""", set.ToJsonString());
+        Assert.Equal("""{"equipment":["barbell"],"plate_inventory":[{"weight":20,"unit":"kg","count":2}]}""", location.ToJsonString());
+    }
+
     [Theory]
     [InlineData(1L, true)]
     [InlineData(0L, false)]

@@ -267,6 +267,25 @@ App rules (product choices, not from either source):
 
 Golden values: 100 × 5 → Epley 116.667, Brzycki 112.5; 225 × 8 → Epley 285, Brzycki 279.310; 80 × 10 → both 106.667.
 
+Stored on `set_logs.e1rm_kg` with the formula in `e1rm_formula` (the logger uses Epley). The `set_logs` trigger recomputes it with `private.e1rm_kg` from `weight_kg`, in the same operations and order as `OneRepMax.Estimate`, so a set's estimate syncs back unchanged; `CanonicalUnitParityTests` checks the two agree bit for bit. Only a completed set that isn't a warm-up gets an estimate (a warm-up isn't taken to fatigue; a planned set wasn't done); otherwise both columns are null.
+
+## Personal records
+
+`PersonalRecords.Detect(earlier, set)` in `Training/`. App rules, not from a published source. A completed set (warm-ups left out) is compared with the profile's other completed sets of the same exercise, all in canonical kg:
+
+| Record | Beats the earlier best when |
+| --- | --- |
+| e1RM | its e1RM is greater than every earlier e1RM, recomputed with the same formula |
+| Heaviest weight | its load is greater than every earlier load |
+| Reps at a weight | an earlier set was at the same load (within tolerance) and it has more reps than any of them |
+| Set volume | load × reps is greater than every earlier set's |
+
+- "Greater" is `Quantity.CanonicalGreater` (relative tolerance 1e-9) and "same load" is `Quantity.CanonicalEquals`, so repeating a lift in the other unit is never a record (§2.6).
+- A record needs something to beat: an exercise's first set is a baseline, an e1RM record needs an earlier estimate, and a reps record an earlier set at that load.
+- Each record is a `personal_records` row (kind, canonical value, the set's load and reps, the formula for e1RM, the set). The rows are the history; deleting or un-ticking the set removes its records. Records of other sets aren't recomputed when an earlier set is later deleted.
+
+Golden values: after 100 kg × 5, 102.5 × 5 beats e1RM (119.583), weight and volume (512.5); 100 × 6 then beats reps at 100 kg, e1RM (120) and volume (600); 60 × 9 is a volume record only (540).
+
 ## Progression
 
 `Progression` in `Training/`. These are rules, not published equations. Loads and the increment share one unit, the lifting unit the increment was set in (PLAN.md §2.6); a set logged in another unit is converted first, so the same session gives the same suggestion in lb or kg.

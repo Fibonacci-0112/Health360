@@ -16,19 +16,21 @@ public sealed class TestDatabase : IAsyncDisposable
         Db = db;
     }
 
-    public PowerSyncDatabase Db { get; }
+    public PowerSyncDatabase Db { get; private set; }
 
     public static async Task<TestDatabase> OpenAsync()
     {
         var directory = Path.Combine(Path.GetTempPath(), "health360-localdb-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        var db = new PowerSyncDatabase(new PowerSyncDatabaseOptions
-        {
-            Database = new SQLOpenOptions { DbFilename = Path.Combine(directory, "test.db") },
-            Schema = AppSchema.Schema,
-        });
-        await db.Init();
-        return new TestDatabase(directory, db);
+        return new TestDatabase(directory, await OpenFileAsync(directory));
+    }
+
+    /// <summary>Closes the database and opens the same file again, as the app does after being killed and relaunched.</summary>
+    public async Task<PowerSyncDatabase> ReopenAsync()
+    {
+        await Db.Close();
+        Db = await OpenFileAsync(directory);
+        return Db;
     }
 
     /// <summary>A profile row as sync brings it down: in the table, with no upload queued for it.</summary>
@@ -38,6 +40,17 @@ public sealed class TestDatabase : IAsyncDisposable
             await tx.Execute("INSERT INTO profiles (id, user_id) VALUES (?, ?)", [profileId, userId]);
             await tx.Execute("DELETE FROM ps_crud WHERE id = (SELECT max(id) FROM ps_crud)");
         });
+
+    private static async Task<PowerSyncDatabase> OpenFileAsync(string directory)
+    {
+        var db = new PowerSyncDatabase(new PowerSyncDatabaseOptions
+        {
+            Database = new SQLOpenOptions { DbFilename = Path.Combine(directory, "test.db") },
+            Schema = AppSchema.Schema,
+        });
+        await db.Init();
+        return db;
+    }
 
     public async ValueTask DisposeAsync()
     {
