@@ -54,7 +54,14 @@ public sealed class TestDatabase : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await Db.Close();
+        // Tests that dispose a LocalDatabase have closed it already. A second Close isn't safe in PowerSync.Common
+        // 1.0.0: it disconnects again and can fail with a NullReferenceException (ConnectionManager.InitSyncStream)
+        // while the first close's sync stream is still being torn down.
+        if (!Db.Closed)
+        {
+            await Db.Close();
+        }
+
         try
         {
             Directory.Delete(directory, recursive: true);
