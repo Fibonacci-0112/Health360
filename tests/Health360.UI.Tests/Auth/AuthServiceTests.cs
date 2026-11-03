@@ -5,8 +5,8 @@ using Health360.UI.Tests.Support;
 namespace Health360.UI.Tests.Auth;
 
 /// <summary>
-/// The session lifecycle and account-switch isolation (CLAUDE.md, "Privacy, authentication, and
-/// security"): the local database is bound to the user before any screen sees the session, and only a
+/// The session lifecycle and account-switch isolation (AGENTS.md, "Database, offline sync and
+/// privacy"): the local database is bound to the user before any screen sees the session, and only a
 /// sign-out the user asked for clears the device.
 /// </summary>
 public sealed class AuthServiceTests : IAsyncLifetime
