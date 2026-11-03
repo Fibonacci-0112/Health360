@@ -70,21 +70,40 @@ public static class WorkoutProgression
                 "JOIN session_exercises se ON se.id = s.session_exercise_id " +
                 "WHERE se.session_id = ? AND s.profile_id = ? AND s.set_type = 'working' AND s.weight IS NOT NULL AND s.weight_unit IS NOT NULL",
                 [sessionId, profileId]).ConfigureAwait(false)).ToLookup(l => l.SessionExerciseId, StringComparer.Ordinal);
+            var rows = await RowIdsAsync(tx, profileId, templateId).ConfigureAwait(false);
+
+            // Entries linked to a row that still names their exercise claim it first; only then may an entry with no
+            // live link (none, or one to a row removed from the template) take a row, and only when the template
+            // lists its exercise once.
+            var matches = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (var exercise in logged)
             {
-                // By the link, while that row still names this exercise. An entry with no live link (none, or a row since
-                // removed) only when the template lists its exercise once, so it can't be taken for another row's.
                 var linked = exercise.TemplateExerciseId is { } link ? Array.FindIndex(planned, p => p.Id == link) : -1;
-                var index = linked >= 0
-                    ? (planned[linked].ExerciseId == exercise.ExerciseId ? linked : -1)
-                    : Unambiguous(planned, exercise.ExerciseId) ? Array.FindIndex(planned, p => p.ExerciseId == exercise.ExerciseId) : -1;
-                if (index < 0 || used[index])
+                if (linked >= 0 && planned[linked].ExerciseId == exercise.ExerciseId && !used[linked])
+                {
+                    (used[linked], matches[exercise.Id]) = (true, linked);
+                }
+            }
+
+            foreach (var exercise in logged)
+            {
+                // A link to a row still in the template (whether or not its exercise has synced here) is never a fallback.
+                if (exercise.TemplateExerciseId is { } link && rows.Contains(link))
                 {
                     continue;
                 }
 
-                used[index] = true;
-                if (await SuggestAsync(tx, profileId, templateId, planned, index, session.StartedAt).ConfigureAwait(false) is { } suggestion
+                var index = Unambiguous(planned, exercise.ExerciseId) ? Array.FindIndex(planned, p => p.ExerciseId == exercise.ExerciseId) : -1;
+                if (index >= 0 && !used[index])
+                {
+                    (used[index], matches[exercise.Id]) = (true, index);
+                }
+            }
+
+            foreach (var exercise in logged)
+            {
+                if (matches.TryGetValue(exercise.Id, out var index)
+                    && await SuggestAsync(tx, profileId, templateId, planned, index, session.StartedAt).ConfigureAwait(false) is { } suggestion
                     && loads[exercise.Id].Any(l => AtLoad(suggestion, l.Weight, l.WeightUnit)))
                 {
                     suggestions[exercise.Id] = suggestion;
@@ -109,6 +128,15 @@ public static class WorkoutProgression
     private static bool AtLoad(ExerciseSuggestion suggestion, double weight, string unit) =>
         unit == suggestion.Unit && Quantity.CanonicalEquals(weight, suggestion.Load);
 
+    /// <summary>
+    /// Every row of the template, including those whose exercise hasn't synced here (which
+    /// <see cref="WorkoutPlans.TemplateExercisesSql"/> leaves out), so such a row is never taken for one removed.
+    /// </summary>
+    private static async Task<HashSet<string>> RowIdsAsync(IDBGetUtils tx, string profileId, string templateId) =>
+        (await tx.GetAll<WorkoutPlans.IdOnly>(
+            "SELECT id AS Id FROM template_exercises WHERE template_id = ? AND profile_id = ?", [templateId, profileId]).ConfigureAwait(false))
+            .Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+
     /// <summary>Whether a template lists the exercise only once.</summary>
     internal static bool Unambiguous(IReadOnlyList<TemplateExerciseRow> template, string exerciseId) =>
         template.Count(e => e.ExerciseId == exerciseId) == 1;
@@ -127,7 +155,7 @@ public static class WorkoutProgression
     {
         var exercise = template[index];
         var unambiguous = Unambiguous(template, exercise.ExerciseId);
-        var live = template.Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
+        var live = await RowIdsAsync(tx, profileId, templateId).ConfigureAwait(false);
         if (exercise.Rule is not { } rule || exercise.Scheme is not { } scheme || exercise.TrackingType != "weight_reps")
         {
             return null;

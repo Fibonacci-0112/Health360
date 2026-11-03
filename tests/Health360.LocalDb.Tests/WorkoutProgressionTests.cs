@@ -288,6 +288,50 @@ public class WorkoutProgressionTests
     }
 
     [Fact]
+    public async Task An_entry_still_linked_to_its_row_keeps_it_over_one_whose_row_was_removed()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 3, 3, 140, "kg"), null, LinearKg),
+             new TemplateExerciseInput(Squat, new SetScheme(1, 8, 8, 100, "kg"), null, LinearKg)], clock);
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+        var logged = await WorkoutLog.ExercisesAsync(t.Db, Profile, session);
+
+        // The heavy row is removed mid-workout; its entry's link now dangles, but the back-off entry still owns its row.
+        var rows = await WorkoutPlans.TemplateExercisesAsync(t.Db, Profile, template);
+        await WorkoutPlans.UpdateTemplateAsync(t.Db, Profile, template, "Legs",
+            [new TemplateExerciseInput(Squat, rows[1].Scheme!, null, rows[1].Rule, rows[1].Id)], clock);
+
+        var notes = await WorkoutProgression.ForSessionAsync(t.Db, Profile, session);
+        Assert.Equal([logged[1].Id], notes.Keys);
+        Assert.Equal(100.0, notes[logged[1].Id].Load);
+    }
+
+    [Fact]
+    public async Task A_row_whose_exercise_hasnt_synced_isnt_taken_for_a_removed_one()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Push",
+            [new TemplateExerciseInput(Bench, new SetScheme(1, 5, 5, 100, "kg"), null, LinearKg)], clock);
+        await LogAsync(t, clock, template, [5]);
+
+        // Another device switched that row to an exercise not on this device yet, and added a new bench row.
+        var old = Assert.Single(await WorkoutPlans.TemplateExercisesAsync(t.Db, Profile, template));
+        await t.Db.Execute("UPDATE template_exercises SET exercise_id = '60000000-0000-7000-8000-0000000000ff' WHERE id = ?", [old.Id]);
+        await t.Db.Execute(
+            "INSERT INTO template_exercises (id, profile_id, template_id, exercise_id, position, set_scheme, progression, created_at, updated_at) " +
+            "VALUES ('70000000-0000-7000-8000-000000000005', ?, ?, ?, 1, ?, ?, '2026-11-03', '2026-11-03')",
+            [Profile, template, Bench, new SetScheme(1, 5, 5, 60, "kg").ToJson(), LinearKg.ToJson()]);
+
+        var (_, suggestion) = await StartAsync(t, clock, template);
+
+        // The old bench history belongs to the switched row, not the new one: the new row starts at its own load.
+        Assert.Equal((60.0, (ProgressionAction?)null), (suggestion!.Load, suggestion.Action));
+    }
+
+    [Fact]
     public async Task A_first_entry_without_work_sets_counts_as_nothing_even_when_a_later_entry_has_some()
     {
         await using var t = await OpenAsync();
