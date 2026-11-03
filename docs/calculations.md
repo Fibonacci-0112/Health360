@@ -1,8 +1,8 @@
-# Calculations: body and physiology (Phase 1, step 1.1)
+# Calculations: body, physiology and training (Phase 1, steps 1.1–1.2)
 
 The exact rules `Health360.Domain` implements for the body and physiology screens, with their sources. Code, tests and this page must agree; change them together. General rules are in [PLAN.md §2.8](PLAN.md) and the units rules in §2.6. Every formula here takes canonical units (kg, cm, years). Convert with `Health360.Domain/Units` and never through a rounded display value.
 
-Status: what's below is implemented and tested in `Health360.Domain` (`Body/`, `Physiology/`). Not yet specified: the LTHR estimate and the Nes et al. (2011) VO₂max estimator. They wait until they're checked against primary sources, not secondary ones (see [Still to specify](#still-to-specify)).
+Status: what's below is implemented and tested in `Health360.Domain` (`Body/`, `Physiology/`, `Training/`). Not yet specified: the LTHR estimate and the Nes et al. (2011) VO₂max estimator. They wait until they're checked against primary sources, not secondary ones (see [Still to specify](#still-to-specify)).
 
 ## Navy method (body fat from circumferences)
 
@@ -251,6 +251,33 @@ Deleting a measurement re-resolves straight away: the next measured value, then 
 - **Medication flag:** `profiles.takes_hr_lowering_medication`. When it's true, Tanaka gives nothing and zones need a measured max HR (or a measured basis above it).
 
 The golden checks are in `PhysiologyProfileTests` (Domain) and, through the screens, `PhysiologyTests` (UI): a lab RMR changes maintenance and deleting it falls back, and a measured max HR changes the zones and deleting it falls back.
+
+## Estimated one-rep max (e1RM)
+
+`OneRepMax.Estimate(load, reps, formula)` in `Training/`. The result is in the load's unit, so PRs compare e1RMs computed from canonical kg (§2.6: switching units never creates a PR).
+
+| Formula | Equation | Source |
+| --- | --- | --- |
+| Epley | load × (1 + reps / 30) | Epley B. (1985). *Poundage Chart.* Boyd Epley Workout. Lincoln, NE: Body Enterprises. A coaching chart, not a peer-reviewed paper. |
+| Brzycki | load × 36 / (37 − reps) | Brzycki M. (1993). Strength testing: predicting a one-rep max from reps-to-fatigue. *JOPERD* 64(1):88–90. |
+
+App rules (product choices, not from either source):
+- A single (1 rep) is its own 1RM for both formulas. Brzycki already gives that; Epley would give 1.033 × load.
+- Nothing is estimated above 10 reps (`OneRepMax.MaxReps`); the two equations agree within about 4% up to 10 reps (they meet exactly at 10) and diverge beyond.
+
+Golden values: 100 × 5 → Epley 116.667, Brzycki 112.5; 225 × 8 → Epley 285, Brzycki 279.310; 80 × 10 → both 106.667.
+
+## Progression
+
+`Progression` in `Training/`. These are rules, not published equations. Loads and the increment share one unit, the lifting unit the increment was set in (PLAN.md §2.6); a set logged in another unit is converted first, so the same session gives the same suggestion in lb or kg.
+
+- **Linear** (target reps *r*): if every work set reached *r* reps at the prescribed load or heavier, the next load is load + increment. Otherwise the session is a miss.
+- **Double** (rep range *min*–*max*): if every set reached *max* reps at the prescribed load or heavier, the load goes up by the increment and the target restarts at *min*. If any set fell below *min* or was lighter than prescribed, the session is a miss. Otherwise the load stays and nothing is counted.
+- **Misses and deloads** (`DeloadPolicy`, default 3 misses and 10%): misses in a row are counted and stored by the caller. On the third, the load drops by 10% of the load in whole increments, rounded half away from zero and at least one increment, and the count resets. A deload that would reach 0 is skipped. Setting the miss count to 0 turns deloads off.
+- Suggestions move from the prescribed load in whole increments, so a load on the increment grid stays on it; an off-grid load (101 with +2.5) keeps its offset (103.5). Rounding to loads the plate inventory can build is the plate calculator's job (not yet built).
+- A session within the double-progression range ends a miss streak, so only misses in a row count toward a deload.
+
+Golden values (increment 2.5): linear 100 kg, 3 × 5 done → 102.5; third miss at 100 → 90; third miss at 20 → 17.5. With increment 5, third miss at 225 → 200. Double 8–12 at 60: 10/9/8 → 60 (streak reset to 0), 12/12/11 → 60, 12/12/12 → 62.5 (target 8), 9/8/7 → 62.5 with one miss.
 
 ## What the 1.1 exit criterion proves
 

@@ -336,6 +336,7 @@ Done on the earlier TypeScript stack; status and findings are in [phase0.md](pha
      - A 60-minute session logged offline on Android or Windows, with the app killed mid-session, loses nothing and syncs.
      - Load suggestions match the progression tests.
      - Session energy estimates match golden fixtures for time-in-zone, average-HR and no-HR inputs, and editing zones later leaves past sessions unchanged.
+   - e1RM and progression rules (in place, Domain only): `OneRepMax` (Epley, Brzycki) and `Progression` (linear and double, with deloads) in `Health360.Domain/Training`, with golden values in [calculations.md](calculations.md). Not yet stored, synced or shown: the workout schema and the logger come next.
 3. **Nutrition and label OCR**
    - Delivers: USDA import, food search, the barcode lookup chain, `ai-label-ocr` with checks and a confirm screen, food logging, recipes, the micronutrient panel, and formula targets.
    - Also the first Claude call against the live API (deferred from Phase 0b), which needs an Anthropic API key in the server's secrets.
