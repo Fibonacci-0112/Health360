@@ -365,14 +365,15 @@
     }
 
     /// <summary>When focus leaves the field: saves what it holds (blank clears it) and says what's wrong, if anything.</summary>
-    private async Task CommitAsync(LoggedSet set, string field, string? text)
+    /// <returns>Whether the field's text is now what the database holds.</returns>
+    private async Task<bool> CommitAsync(LoggedSet set, string field, string? text)
     {
         var key = FieldKey(set, field);
         drafts[key] = text;
         if (Change(set, field, text, out var problem) is not { } change)
         {
             error = problem;
-            return;
+            return false;
         }
 
         var saved = false;
@@ -403,6 +404,8 @@
         {
             drafts.Remove(key);
         }
+
+        return saved;
     }
 
     private Task QueueAsync(string key, Func<Task> save)
@@ -514,6 +517,17 @@
         RunAsync(async () =>
         {
             await FieldSavesOfAsync(set);
+            // Each field still being edited is saved first, and its failure stops the tap: completing would otherwise
+            // record the value stored before, not the one on screen.
+            var prefix = set.Id + "/";
+            foreach (var (key, text) in drafts.Where(d => d.Key.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+            {
+                if (!await CommitAsync(set, key[prefix.Length..], text))
+                {
+                    return;
+                }
+            }
+
             if (set.Completed)
             {
                 await Workouts.UncompleteSetAsync(set.Id);

@@ -209,6 +209,25 @@ public sealed class TrainTests : AppTestContext
     }
 
     [Fact]
+    public async Task Done_is_refused_while_a_field_holds_a_value_that_was_not_saved()
+    {
+        var cut = await TrainAsync();
+        await ClickAsync(cut, "#start-empty");
+        await AddSquatAsync(cut);
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 reps']", "5");
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 weight in kg']", "100");
+        // Out of range, so never saved: completing now would record no RPE while 81 is on screen.
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 RPE']", "81");
+
+        await ClickAsync(cut, "button[aria-label='Barbell Squat set 1 done']");
+
+        cut.WaitForAssertion(() => Assert.Equal("RPE runs from 0 to 10.", cut.Find("[role=alert]").TextContent), Wait);
+        Assert.Equal("false", cut.Find("button[aria-label='Barbell Squat set 1 done']").GetAttribute("aria-pressed"));
+        var session = (await WorkoutLog.ActiveSessionAsync(App.Database.Db, ProfileId))!;
+        Assert.False((await WorkoutLog.ExercisesAsync(App.Database.Db, ProfileId, session.Id)).Single().Sets.Single().Completed);
+    }
+
+    [Fact]
     public async Task A_set_without_reps_cannot_be_ticked_off()
     {
         var cut = await TrainAsync();
