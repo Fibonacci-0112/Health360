@@ -236,6 +236,7 @@
         watch = null;
         exercises = null;
         results = [];
+        query = null;
         watchedProfile = profileId;
         watchedSession = SessionId;
         if (profileId is null)
@@ -395,12 +396,14 @@
     private async Task SearchAsync(ChangeEventArgs e)
     {
         var typed = e.Value as string;
+        var profile = watchedProfile;
         query = typed;
         try
         {
             var found = string.IsNullOrWhiteSpace(typed) ? [] : await Workouts.SearchExercisesAsync(typed);
-            // A slower search for earlier text must not replace the results for what's in the box now.
-            if (query == typed)
+            // A slower search for earlier text, or one started before a profile change, must not replace what's
+            // shown for the text in the box now.
+            if (query == typed && watchedProfile == profile)
             {
                 results = found;
             }

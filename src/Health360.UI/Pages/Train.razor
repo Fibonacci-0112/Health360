@@ -197,7 +197,7 @@
                 {
                     if (!token.IsCancellationRequested)
                     {
-                        await LoadAsync();
+                        await LoadAsync(token);
                         StateHasChanged();
                     }
                 });
@@ -220,7 +220,11 @@
         }
     }
 
-    private async Task LoadAsync()
+    /// <summary>
+    /// Reads everything the tab shows, then publishes it only if the watch that asked is still current: a load that
+    /// spans a profile change must not put the previous profile's workouts back on screen.
+    /// </summary>
+    private async Task LoadAsync(CancellationToken token)
     {
         if (Workouts.ProfileId is null)
         {
@@ -229,17 +233,26 @@
 
         try
         {
-            active = await Workouts.ActiveSessionAsync();
-            templates = await Workouts.TemplatesAsync();
-            planned = await Workouts.PlannedAsync(Workouts.Today, Workouts.Today.AddDays(6));
-            records = await Workouts.RecordsAsync();
-            recent = await Workouts.RecentSessionsAsync();
+            var newActive = await Workouts.ActiveSessionAsync();
+            var newTemplates = await Workouts.TemplatesAsync();
+            var newPlanned = await Workouts.PlannedAsync(Workouts.Today, Workouts.Today.AddDays(6));
+            var newRecords = await Workouts.RecordsAsync();
+            var newRecent = await Workouts.RecentSessionsAsync();
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            (active, templates, planned, records, recent) = (newActive, newTemplates, newPlanned, newRecords, newRecent);
             loaded = true;
             error = null;
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            error = "Couldn't read your workouts on this device. Leave this tab and come back to try again.";
+            if (!token.IsCancellationRequested)
+            {
+                error = "Couldn't read your workouts on this device. Leave this tab and come back to try again.";
+            }
         }
     }
 
