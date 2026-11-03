@@ -25,19 +25,41 @@ public class ServicesTests
             .AddHealth360Ui();
 
         var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
-        await using (provider)
+        try
         {
-            // Sync and uploads take their token from sign-in's session.
-            Assert.Same(provider.GetRequiredService<SessionManager>(), provider.GetRequiredService<ISupabaseSession>());
-            Assert.NotNull(provider.GetRequiredService<AuthService>());
-            Assert.NotNull(provider.GetRequiredService<ProfileService>());
-            Assert.IsType<DeviceLocale>(provider.GetRequiredService<IDeviceLocale>());
-            Assert.IsType<LocalAccount>(provider.GetRequiredService<ILocalAccount>());
-            Assert.NotNull(provider.GetRequiredService<PhotoUploader>());
-            provider.GetRequiredService<SyncState>().Dispose();
-            await provider.GetRequiredService<PowerSyncDatabase>().Close();
+            await using (provider)
+            {
+                // Sync and uploads take their token from sign-in's session.
+                Assert.Same(provider.GetRequiredService<SessionManager>(), provider.GetRequiredService<ISupabaseSession>());
+                Assert.NotNull(provider.GetRequiredService<AuthService>());
+                Assert.NotNull(provider.GetRequiredService<ProfileService>());
+                Assert.IsType<DeviceLocale>(provider.GetRequiredService<IDeviceLocale>());
+                Assert.IsType<LocalAccount>(provider.GetRequiredService<ILocalAccount>());
+                Assert.NotNull(provider.GetRequiredService<PhotoUploader>());
+                provider.GetRequiredService<SyncState>().Dispose();
+                await provider.GetRequiredService<PowerSyncDatabase>().Close();
+            }
         }
+        finally
+        {
+            DeleteBestEffort(directory);
+        }
+    }
 
-        Directory.Delete(directory, recursive: true);
+    // Background SQLite/PowerSync work can still hold files for a moment after Close().
+    private static void DeleteBestEffort(string directory)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+                return;
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(100);
+            }
+        }
     }
 }
