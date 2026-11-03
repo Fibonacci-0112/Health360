@@ -228,8 +228,7 @@ public static class WorkoutLog
                 [id, profileId, templateId, now, Timestamps.LocalDate(clock), now, now]).ConfigureAwait(false);
             for (var i = 0; i < exercises.Length; i++)
             {
-                var suggestion = await WorkoutProgression.SuggestAsync(
-                    tx, profileId, templateId!, exercises[i], WorkoutProgression.Unambiguous(exercises, exercises[i].ExerciseId), now).ConfigureAwait(false);
+                var suggestion = await WorkoutProgression.SuggestAsync(tx, profileId, templateId!, exercises, i, now).ConfigureAwait(false);
 
                 // Linear progression aims for the top of the range, also before there is a load to suggest. A row with a
                 // rule follows its own scheme then, not sets copied from an unrelated workout of the exercise.

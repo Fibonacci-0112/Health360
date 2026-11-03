@@ -254,6 +254,40 @@ public class WorkoutProgressionTests
     }
 
     [Fact]
+    public async Task Removing_an_exercise_and_adding_it_back_keeps_its_history()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 5, 5, 100, "kg"), null, LinearKg)], clock);
+        await LogAsync(t, clock, template, [5]);
+
+        // The editor gives the re-added row a new id; the old sessions link to the row that's gone.
+        await WorkoutPlans.UpdateTemplateAsync(t.Db, Profile, template, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 5, 5, 100, "kg"), null, LinearKg)], clock);
+
+        var (_, suggestion) = await StartAsync(t, clock, template);
+        Assert.Equal((102.5, ProgressionAction.Increase), (suggestion!.Load, suggestion.Action));
+    }
+
+    [Fact]
+    public async Task An_entry_whose_row_now_names_another_exercise_gets_no_note()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 5, 5, 100, "kg"), null, LinearKg)], clock);
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+        var row = Assert.Single(await WorkoutPlans.TemplateExercisesAsync(t.Db, Profile, template));
+
+        // Mid-workout, the same row is switched to bench at the same load.
+        await WorkoutPlans.UpdateTemplateAsync(t.Db, Profile, template, "Legs",
+            [new TemplateExerciseInput(Bench, new SetScheme(1, 5, 5, 100, "kg"), null, LinearKg, row.Id)], clock);
+
+        Assert.Empty(await WorkoutProgression.ForSessionAsync(t.Db, Profile, session));
+    }
+
+    [Fact]
     public async Task A_first_entry_without_work_sets_counts_as_nothing_even_when_a_later_entry_has_some()
     {
         await using var t = await OpenAsync();

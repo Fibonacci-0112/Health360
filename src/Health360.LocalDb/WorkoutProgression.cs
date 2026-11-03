@@ -72,10 +72,11 @@ public static class WorkoutProgression
                 [sessionId, profileId]).ConfigureAwait(false)).ToLookup(l => l.SessionExerciseId, StringComparer.Ordinal);
             foreach (var exercise in logged)
             {
-                // By the link; an entry without one (synced from before the link existed) only when the template lists
-                // its exercise once, so it can't be mistaken for another row of the same exercise.
-                var index = exercise.TemplateExerciseId is { } link
-                    ? Array.FindIndex(planned, p => p.Id == link)
+                // By the link, while that row still names this exercise. An entry with no live link (none, or a row since
+                // removed) only when the template lists its exercise once, so it can't be taken for another row's.
+                var linked = exercise.TemplateExerciseId is { } link ? Array.FindIndex(planned, p => p.Id == link) : -1;
+                var index = linked >= 0
+                    ? (planned[linked].ExerciseId == exercise.ExerciseId ? linked : -1)
                     : Unambiguous(planned, exercise.ExerciseId) ? Array.FindIndex(planned, p => p.ExerciseId == exercise.ExerciseId) : -1;
                 if (index < 0 || used[index])
                 {
@@ -83,8 +84,7 @@ public static class WorkoutProgression
                 }
 
                 used[index] = true;
-                if (await SuggestAsync(tx, profileId, templateId, planned[index], Unambiguous(planned, planned[index].ExerciseId), session.StartedAt)
-                    .ConfigureAwait(false) is { } suggestion
+                if (await SuggestAsync(tx, profileId, templateId, planned, index, session.StartedAt).ConfigureAwait(false) is { } suggestion
                     && loads[exercise.Id].Any(l => AtLoad(suggestion, l.Weight, l.WeightUnit)))
                 {
                     suggestions[exercise.Id] = suggestion;
@@ -118,12 +118,16 @@ public static class WorkoutProgression
     /// has no rule, isn't counted in weight and reps, or has neither history nor a starting load. Each past session
     /// contributes its entry planned from this template row (<c>session_exercises.template_exercise_id</c>), so a
     /// template that lists an exercise twice (heavy sets, then back-off sets) keeps two histories however its rows
-    /// are reordered. A session without such an entry contributes its first unlinked entry of the exercise only when
-    /// <paramref name="unambiguous"/> (the template lists the exercise once); otherwise nothing.
+    /// are reordered. A session without such an entry contributes its first entry of the exercise with no live link
+    /// (none, or to a row since removed, as after removing an exercise and adding it back) only when the template
+    /// lists the exercise once; otherwise nothing.
     /// </summary>
     internal static async Task<ExerciseSuggestion?> SuggestAsync(
-        IDBGetUtils tx, string profileId, string templateId, TemplateExerciseRow exercise, bool unambiguous, string before)
+        IDBGetUtils tx, string profileId, string templateId, IReadOnlyList<TemplateExerciseRow> template, int index, string before)
     {
+        var exercise = template[index];
+        var unambiguous = Unambiguous(template, exercise.ExerciseId);
+        var live = template.Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
         if (exercise.Rule is not { } rule || exercise.Scheme is not { } scheme || exercise.TrackingType != "weight_reps")
         {
             return null;
@@ -151,7 +155,7 @@ public static class WorkoutProgression
             // The rows come in replay order, so groups do too; within one, entries come by position.
             var entries = session.GroupBy(r => r.SessionExerciseId, StringComparer.Ordinal).ToList();
             var entry = entries.FirstOrDefault(e => e.First().TemplateExerciseId == exercise.Id)
-                ?? (unambiguous ? entries.FirstOrDefault(e => e.First().TemplateExerciseId is null) : null);
+                ?? (unambiguous ? entries.FirstOrDefault(e => e.First().TemplateExerciseId is not { } l || !live.Contains(l)) : null);
             sessions.Add([.. (entry ?? Enumerable.Empty<HistorySet>())
                 .Where(r => r.Weight is not null && r.WeightUnit is not null && r.Reps is not null)
                 .Select(r => (Load: UnitCodes.Convert(r.Weight!.Value, r.WeightUnit!, rule.IncrementUnit), Reps: (int)r.Reps!.Value))
