@@ -47,6 +47,26 @@ public class ServerRowTests
         Assert.Equal("""{"boundaries":[0,130,145],"boundaries_canonical":[],"unit":"bpm"}""", row.ToJsonString());
     }
 
+    [Fact]
+    public void SendsWorkoutJsonColumnsAsJson()
+    {
+        var template = Uploads.ToServerRow("template_exercises", new JsonObject
+        {
+            ["set_scheme"] = """{"sets":3,"min_reps":8}""",
+            ["progression"] = """{"kind":"double"}""",
+        });
+        var session = Uploads.ToServerRow("workout_sessions", new JsonObject
+        {
+            ["zone_seconds"] = "[600,1200]",
+            ["energy_estimate"] = """{"method_version":1}""",
+        });
+        var exercise = Uploads.ToServerRow("exercises", new JsonObject { ["equipment"] = """["band"]""" });
+
+        Assert.Equal("""{"set_scheme":{"sets":3,"min_reps":8},"progression":{"kind":"double"}}""", template.ToJsonString());
+        Assert.Equal("""{"zone_seconds":[600,1200],"energy_estimate":{"method_version":1}}""", session.ToJsonString());
+        Assert.Equal("""{"equipment":["band"]}""", exercise.ToJsonString());
+    }
+
     [Theory]
     [InlineData(1L, true)]
     [InlineData(0L, false)]

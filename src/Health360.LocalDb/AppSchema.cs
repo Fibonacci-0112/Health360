@@ -139,6 +139,80 @@ public static class AppSchema
         ("thumb_path", ColumnType.Text));
 
     /// <summary>
+    /// G/H: the exercise library. System rows have no <c>household_id</c> and are read-only; a household's custom
+    /// exercises are written by its members. <c>equipment</c> and the muscle lists are JSON arrays of codes.
+    /// </summary>
+    public static Table Exercises { get; } = Synced("exercises",
+        ("household_id", ColumnType.Text),
+        ("external_id", ColumnType.Text),
+        ("name", ColumnType.Text),
+        ("tracking_type", ColumnType.Text),
+        ("equipment", ColumnType.Text),
+        ("primary_muscles", ColumnType.Text),
+        ("secondary_muscles", ColumnType.Text));
+
+    /// <summary>U: a named workout routine.</summary>
+    public static Table WorkoutTemplates { get; } = Synced("workout_templates",
+        ("profile_id", ColumnType.Text),
+        ("name", ColumnType.Text));
+
+    /// <summary>U: one exercise in a template, in order, with its set scheme, rest and progression rule (JSON objects).</summary>
+    public static Table TemplateExercises { get; } = Synced("template_exercises",
+        ("profile_id", ColumnType.Text),
+        ("template_id", ColumnType.Text),
+        ("exercise_id", ColumnType.Text),
+        ("position", ColumnType.Integer),
+        ("set_scheme", ColumnType.Text),
+        ("rest_seconds", ColumnType.Integer),
+        ("progression", ColumnType.Text));
+
+    /// <summary>
+    /// U: one workout as performed. <c>energy_estimate</c> is a stored snapshot (PLAN.md §2.9), so later zone edits
+    /// leave past sessions unchanged. <c>ended_at</c> is null while the session is in progress.
+    /// </summary>
+    public static Table WorkoutSessions { get; } = Synced("workout_sessions",
+        ("profile_id", ColumnType.Text),
+        ("template_id", ColumnType.Text),
+        ("kind", ColumnType.Text),
+        ("sport", ColumnType.Text),
+        ("started_at", ColumnType.Text),
+        ("ended_at", ColumnType.Text),
+        ("local_date", ColumnType.Text),
+        ("avg_hr", ColumnType.Real),
+        ("max_hr", ColumnType.Real),
+        ("zone_seconds", ColumnType.Text),
+        ("energy_estimate", ColumnType.Text),
+        ("rpe", ColumnType.Real));
+
+    /// <summary>U: one exercise in a session, in order.</summary>
+    public static Table SessionExercises { get; } = Synced("session_exercises",
+        ("profile_id", ColumnType.Text),
+        ("session_id", ColumnType.Text),
+        ("exercise_id", ColumnType.Text),
+        ("position", ColumnType.Integer));
+
+    /// <summary>
+    /// U: one set as entered. The server recomputes <c>weight_kg</c> and <c>distance_m</c> from the entered value and
+    /// unit, whatever the client sends.
+    /// </summary>
+    public static Table SetLogs { get; } = Synced("set_logs",
+        ("profile_id", ColumnType.Text),
+        ("session_exercise_id", ColumnType.Text),
+        ("position", ColumnType.Integer),
+        ("set_type", ColumnType.Text),
+        ("reps", ColumnType.Integer),
+        ("weight", ColumnType.Real),
+        ("weight_unit", ColumnType.Text),
+        ("weight_kg", ColumnType.Real),
+        ("rpe", ColumnType.Real),
+        ("rir", ColumnType.Integer),
+        ("duration_seconds", ColumnType.Real),
+        ("distance", ColumnType.Real),
+        ("distance_unit", ColumnType.Text),
+        ("distance_m", ColumnType.Real),
+        ("completed_at", ColumnType.Text));
+
+    /// <summary>
     /// Local only, never uploaded. When the server permanently rejects a write (constraint or RLS
     /// violation), the connector parks it here instead of blocking the upload queue (PLAN.md §4).
     /// <c>data</c> is the CRUD payload as JSON, so the user can retry or discard it.
@@ -185,8 +259,9 @@ public static class AppSchema
     public static IReadOnlyList<Table> Tables { get; } =
         [
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
-            MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, FailedUploadsTable,
-            PhotoUploadsTable, PhotoDeletionsTable,
+            MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, Exercises, WorkoutTemplates,
+            TemplateExercises, WorkoutSessions, SessionExercises, SetLogs, FailedUploadsTable, PhotoUploadsTable,
+            PhotoDeletionsTable,
         ];
 
     public static Schema Schema { get; } = new([.. Tables]);
@@ -217,6 +292,22 @@ public static class AppSchema
                 ["boundaries"] = ServerColumnType.Json,
                 ["boundaries_canonical"] = ServerColumnType.Json,
             },
+            ["exercises"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
+            {
+                ["equipment"] = ServerColumnType.Json,
+                ["primary_muscles"] = ServerColumnType.Json,
+                ["secondary_muscles"] = ServerColumnType.Json,
+            },
+            ["template_exercises"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
+            {
+                ["set_scheme"] = ServerColumnType.Json,
+                ["progression"] = ServerColumnType.Json,
+            },
+            ["workout_sessions"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
+            {
+                ["zone_seconds"] = ServerColumnType.Json,
+                ["energy_estimate"] = ServerColumnType.Json,
+            },
         };
 
     /// <summary>
@@ -240,7 +331,11 @@ public static class AppSchema
     /// <summary>Tables the client may write. Everything else synced is read-only on the client.</summary>
     public static IReadOnlySet<string> UploadableTables { get; } =
         new HashSet<string>(
-            ["profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins", "progress_photos"],
+            [
+                "profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins",
+                "progress_photos", "exercises", "workout_templates", "template_exercises", "workout_sessions",
+                "session_exercises", "set_logs",
+            ],
             StringComparer.Ordinal);
 
     private static Table Synced(string name, params (string Name, ColumnType Type)[] columns) =>
