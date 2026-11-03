@@ -228,7 +228,8 @@ public static class WorkoutLog
                 [id, profileId, templateId, now, Timestamps.LocalDate(clock), now, now]).ConfigureAwait(false);
             for (var i = 0; i < exercises.Length; i++)
             {
-                var suggestion = await WorkoutProgression.SuggestAsync(tx, profileId, templateId!, exercises[i], now).ConfigureAwait(false);
+                var suggestion = await WorkoutProgression.SuggestAsync(
+                    tx, profileId, templateId!, exercises[i], WorkoutProgression.Occurrence(exercises, i), now).ConfigureAwait(false);
                 await AddExerciseAsync(tx, profileId, id, exercises[i].ExerciseId, i, exercises[i].Scheme, suggestion, loadUnit, clock)
                     .ConfigureAwait(false);
             }

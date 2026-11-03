@@ -28,6 +28,10 @@
     }
     else
     {
+        @if (incomplete)
+        {
+            <p class="muted" role="status" id="template-incomplete">@WorkoutPlans.HiddenExercises</p>
+        }
         <form class="form" @onsubmit="SaveAsync" aria-label="Template">
             <div class="field">
                 <label for="template-name" class="label">Name</label>
@@ -126,7 +130,7 @@
             }
 
             <div class="inline">
-                <button type="submit" class="primary" id="save-template" disabled="@busy">Save template</button>
+                <button type="submit" class="primary" id="save-template" disabled="@(busy || incomplete)">Save template</button>
                 @if (TemplateId is not null)
                 {
                     @if (confirmingDelete)
@@ -182,6 +186,7 @@
 
     private bool loaded;
     private bool missing;
+    private bool incomplete;
     private bool busy;
     private bool confirmingDelete;
     private string? error;
@@ -247,7 +252,7 @@
         }
 
         loadedFor = key;
-        (loaded, missing, error, name, rows, query, results, confirmingDelete) = (false, false, null, "", [], null, [], false);
+        (loaded, missing, incomplete, error, name, rows, query, results, confirmingDelete) = (false, false, false, null, "", [], null, [], false);
         if (Workouts.ProfileId is null)
         {
             return;
@@ -267,6 +272,9 @@
                 missing = template is null;
                 name = template?.Name ?? "";
                 rows = [.. exercises.Select(FromRow)];
+
+                // The count includes rows whose exercise hasn't synced; the list leaves them out, so saving would drop them.
+                incomplete = template is not null && template.ExerciseCount > exercises.Length;
             }
 
             loaded = true;
@@ -417,6 +425,12 @@
     private async Task SaveAsync()
     {
         error = null;
+        if (incomplete)
+        {
+            error = WorkoutPlans.HiddenExercises;
+            return;
+        }
+
         if (!WorkoutCodes.IsName(name))
         {
             error = "Give the template a name of up to 120 characters.";

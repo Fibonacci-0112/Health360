@@ -339,6 +339,9 @@
             ProgressionAction.Increase => $"Progression: up {Number(s.Rule.Increment)} {s.Unit} to {load}. Every set reached {s.MaxReps} reps last time.",
             ProgressionAction.Deload => $"Progression: deload to {load} after {s.Rule.DeloadAfter} missed sessions in a row.",
             _ when s.ConsecutiveFailures == 0 => $"Progression: stay at {load} and aim for {s.MaxReps} reps on every set.",
+            // A deload that would reach 0 is skipped (calculations.md), so the streak can pass the limit and the load stays.
+            _ when s.Rule.DeloadAfter > 0 && s.ConsecutiveFailures >= s.Rule.DeloadAfter =>
+                $"Progression: stay at {load}. Target missed {misses} in a row, but a deload would take the load to nothing.",
             _ when s.Rule.DeloadAfter > 0 =>
                 $"Progression: stay at {load}. Target missed {misses} in a row; the load drops after {s.Rule.DeloadAfter}.",
             _ => $"Progression: stay at {load}. Target missed {misses} in a row.",

@@ -157,7 +157,8 @@ public static class WorkoutPlans
     /// <exception cref="ValidationException">A set scheme or progression rule fails its validator.</exception>
     /// <exception cref="InvalidOperationException">
     /// The template isn't on this device, an id isn't one of its exercises (removed meanwhile, here or on another
-    /// device), or an exercise isn't on this device.
+    /// device), an exercise isn't on this device, or the template has a row whose exercise hasn't synced yet (which
+    /// <see cref="TemplateExercisesAsync"/> doesn't list, so the edit can't be complete).
     /// </exception>
     public static async Task UpdateTemplateAsync(
         IPowerSyncDatabase db,
@@ -186,12 +187,20 @@ public static class WorkoutPlans
                 "SELECT name AS Name FROM workout_templates WHERE id = ? AND profile_id = ?", [templateId, profileId]).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("The template is not on this device.");
             var existing = (await tx.GetAll<StoredTemplateExercise>(
-                "SELECT id AS Id, exercise_id AS ExerciseId, position AS Position, set_scheme AS SetScheme, rest_seconds AS RestSeconds, " +
-                "progression AS Progression FROM template_exercises WHERE template_id = ? AND profile_id = ?",
+                "SELECT te.id AS Id, te.exercise_id AS ExerciseId, te.position AS Position, te.set_scheme AS SetScheme, te.rest_seconds AS RestSeconds, " +
+                "te.progression AS Progression, EXISTS (SELECT 1 FROM exercises e WHERE e.id = te.exercise_id) AS OnDevice " +
+                "FROM template_exercises te WHERE te.template_id = ? AND te.profile_id = ?",
                 [templateId, profileId]).ConfigureAwait(false)).ToDictionary(e => e.Id, StringComparer.Ordinal);
             if (kept.FirstOrDefault(id => !existing.ContainsKey(id)) is not null)
             {
                 throw new InvalidOperationException("An exercise was removed from this template meanwhile. Reopen it to see the current plan.");
+            }
+
+            // TemplateExercisesAsync leaves out a row whose exercise hasn't synced, so an editor never saw it: leaving it
+            // out here is not a request to remove it.
+            if (existing.Values.Any(e => e.OnDevice == 0 && !kept.Contains(e.Id, StringComparer.Ordinal)))
+            {
+                throw new InvalidOperationException(HiddenExercises);
             }
 
             if (template.Name != name.Trim())
@@ -258,6 +267,10 @@ public static class WorkoutPlans
             await tx.Execute("DELETE FROM workout_templates WHERE id = ? AND profile_id = ?", [templateId, profileId]).ConfigureAwait(false);
         }).ConfigureAwait(false);
     }
+
+    /// <summary>Why a template can't be edited until it has fully synced.</summary>
+    public const string HiddenExercises =
+        "Some of this template's exercises haven't reached this device yet. Wait for it to sync, then edit the template.";
 
     private static void CheckTemplate(string name, IReadOnlyList<TemplateExerciseInput> exercises)
     {
@@ -465,6 +478,8 @@ public static class WorkoutPlans
         public long? RestSeconds { get; set; }
 
         public string? Progression { get; set; }
+
+        public long OnDevice { get; set; }
     }
 
     internal sealed class SessionOn

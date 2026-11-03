@@ -167,6 +167,134 @@ public class WorkoutProgressionTests
         Assert.Equal((20.0, 102.5), (next.Sets[0].Weight!.Value, next.Sets[1].Weight!.Value));
     }
 
+    /// <summary>Ticks off every planned work set of a session exercise with these reps at its planned load.</summary>
+    private static async Task TickAsync(TestDatabase t, SteppingClock clock, LoggedExercise exercise, params int[] reps)
+    {
+        var work = exercise.Sets.Where(s => s.SetType == "working").ToList();
+        for (var i = 0; i < reps.Length; i++)
+        {
+            await WorkoutLog.UpdateSetAsync(t.Db, Profile, work[i].Id, new SetEntry(reps[i], work[i].Weight, work[i].WeightUnit ?? "kg"), clock);
+            await WorkoutLog.CompleteSetAsync(t.Db, Profile, work[i].Id, clock);
+        }
+    }
+
+    [Fact]
+    public async Task An_exercise_listed_twice_progresses_each_entry_from_its_own_sets()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Push",
+            [new TemplateExerciseInput(Bench, new SetScheme(1, 3, 3, 100, "kg"), null, LinearKg),
+             new TemplateExerciseInput(Bench, new SetScheme(3, 8, 8, 80, "kg"), null, LinearKg)], clock);
+
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+        var logged = await WorkoutLog.ExercisesAsync(t.Db, Profile, session);
+        Assert.Equal([100.0, 80, 80, 80], logged.SelectMany(e => e.Sets).Select(s => s.Weight!.Value));
+        await TickAsync(t, clock, logged[0], 2); // the top set misses
+        await TickAsync(t, clock, logged[1], 8, 8, 8); // the back-off sets all reach 8
+        await WorkoutLog.FinishAsync(t.Db, Profile, session, clock);
+        clock.Advance(TimeSpan.FromDays(2));
+
+        var next = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+        var planned = await WorkoutLog.ExercisesAsync(t.Db, Profile, next);
+        var suggestions = await WorkoutProgression.ForSessionAsync(t.Db, Profile, next);
+
+        Assert.Equal((100.0, 82.5), (planned[0].Sets.Single().Weight!.Value, planned[1].Sets[0].Weight!.Value));
+        Assert.Equal((ProgressionAction.Repeat, ProgressionAction.Increase), (suggestions[planned[0].Id].Action, suggestions[planned[1].Id].Action));
+    }
+
+    [Fact]
+    public async Task A_first_entry_without_work_sets_counts_as_nothing_even_when_a_later_entry_has_some()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 5, 5, 100, "kg"), null, LinearKg)], clock);
+
+        // The template's squat is only warmed up; a squat added by hand later in the workout is done in full.
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+        var first = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[0].Sets.Single();
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, first.Id, new SetEntry(5, 60, "kg", SetType: "warmup"), clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, first.Id, clock);
+        await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Squat, "kg", clock);
+        var extra = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[1];
+        var work = await WorkoutLog.AddSetAsync(t.Db, Profile, extra.Id, "kg", clock);
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, work, new SetEntry(5, 100, "kg"), clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, work, clock);
+        await WorkoutLog.FinishAsync(t.Db, Profile, session, clock);
+        clock.Advance(TimeSpan.FromDays(2));
+
+        var (_, suggestion) = await StartAsync(t, clock, template);
+
+        Assert.Equal((100.0, (ProgressionAction?)null), (suggestion!.Load, suggestion.Action));
+    }
+
+    [Fact]
+    public async Task The_note_is_left_out_once_no_work_set_is_at_its_load_and_after_the_workout()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 5, 5, 100, "kg"), null, LinearKg)], clock);
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+        var exercise = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[0];
+        Assert.Single(await WorkoutProgression.ForSessionAsync(t.Db, Profile, session));
+
+        // The template's starting load changes after the start: the recomputed 110 matches no planned set.
+        var row = Assert.Single(await WorkoutPlans.TemplateExercisesAsync(t.Db, Profile, template));
+        await WorkoutPlans.UpdateTemplateAsync(t.Db, Profile, template, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 5, 5, 110, "kg"), null, LinearKg, row.Id)], clock);
+        Assert.Empty(await WorkoutProgression.ForSessionAsync(t.Db, Profile, session));
+
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, exercise.Sets[0].Id, new SetEntry(5, 110, "kg"), clock);
+        Assert.Single(await WorkoutProgression.ForSessionAsync(t.Db, Profile, session));
+
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, exercise.Sets[0].Id, clock);
+        await WorkoutLog.FinishAsync(t.Db, Profile, session, clock);
+        Assert.Empty(await WorkoutProgression.ForSessionAsync(t.Db, Profile, session));
+    }
+
+    [Fact]
+    public async Task Only_the_templates_latest_sessions_with_the_exercise_are_replayed()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 5, 5, 100, "kg"), null, new ProgressionRule("linear", 2.5, "kg", 0))], clock);
+
+        // 101 successful sessions, each judged at its own (heavier) load: only the latest 100 move the load.
+        for (var i = 0; i <= WorkoutProgression.SessionsReplayed; i++)
+        {
+            await LogAsync(t, clock, template, [5]);
+        }
+
+        var (_, suggestion) = await StartAsync(t, clock, template);
+        Assert.Equal(100 + (2.5 * (WorkoutProgression.SessionsReplayed + 1)), suggestion!.Load);
+    }
+
+    [Fact]
+    public async Task A_template_row_whose_exercise_hasnt_synced_blocks_an_edit_that_leaves_it_out()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs", [new TemplateExerciseInput(Squat, new SetScheme(3, 5, 5))], clock);
+        // A row synced from another device whose custom exercise hasn't arrived yet.
+        await t.Db.Execute(
+            "INSERT INTO template_exercises (id, profile_id, template_id, exercise_id, position, set_scheme, created_at, updated_at) " +
+            "VALUES ('70000000-0000-7000-8000-000000000001', ?, ?, '60000000-0000-7000-8000-0000000000ff', 1, '{}', '2026-11-03', '2026-11-03')",
+            [Profile, template]);
+        await Uploads.UploadPendingAsync(t.Db, new FakeWriter(), clock, cancellationToken: Ct);
+        var shown = Assert.Single(await WorkoutPlans.TemplateExercisesAsync(t.Db, Profile, template));
+        Assert.Equal(2L, (await WorkoutPlans.TemplateAsync(t.Db, Profile, template))!.ExerciseCount);
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutPlans.UpdateTemplateAsync(t.Db, Profile, template, "Lower",
+            [new TemplateExerciseInput(Squat, new SetScheme(3, 5, 5), null, null, shown.Id)], clock));
+
+        Assert.Equal(WorkoutPlans.HiddenExercises, refused.Message);
+        Assert.Equal(0, await Uploads.PendingUploadCountAsync(t.Db));
+        Assert.Equal("Legs", (await WorkoutPlans.TemplateAsync(t.Db, Profile, template))!.Name);
+    }
+
     [Fact]
     public async Task Without_a_rule_or_a_start_load_the_logger_plans_as_before()
     {

@@ -35,13 +35,16 @@ public sealed record ExerciseSuggestion(
 /// </summary>
 public static class WorkoutProgression
 {
-    /// <summary>How many of the latest sessions are replayed; older ones no longer change the load.</summary>
+    /// <summary>How many of the template's latest sessions with the exercise are replayed; older ones no longer change the load.</summary>
     public const int SessionsReplayed = 100;
 
     /// <summary>
-    /// The suggestion for each exercise of a session started from a template, by <c>session_exercises</c> id. Each
-    /// session exercise is matched to the template's exercises in order by exercise; one without a rule, or added by
-    /// hand, has none.
+    /// The suggestion for each exercise of a session in progress that was started from a template, by
+    /// <c>session_exercises</c> id. Each session exercise is matched to the template's exercises in order by
+    /// exercise; one without a rule, or added by hand, has none. The suggestion is worked out again from the
+    /// template and history as they are now, so it is left out unless one of the exercise's work sets is still at
+    /// its load: a template edited, or history synced, since the start can't put a note over sets it didn't plan.
+    /// A finished session has none.
     /// </summary>
     public static async Task<IReadOnlyDictionary<string, ExerciseSuggestion>> ForSessionAsync(
         IPowerSyncDatabase db, string profileId, string sessionId)
@@ -52,28 +55,40 @@ public static class WorkoutProgression
         {
             var suggestions = new Dictionary<string, ExerciseSuggestion>(StringComparer.Ordinal);
             var session = await tx.GetOptional<SessionTemplate>(
-                "SELECT template_id AS TemplateId, started_at AS StartedAt FROM workout_sessions WHERE id = ? AND profile_id = ?",
+                "SELECT template_id AS TemplateId, started_at AS StartedAt, ended_at AS EndedAt FROM workout_sessions WHERE id = ? AND profile_id = ?",
                 [sessionId, profileId]).ConfigureAwait(false);
-            if (session?.TemplateId is not { } templateId)
+            if (session?.TemplateId is not { } templateId || session.EndedAt is not null)
             {
                 return suggestions;
             }
 
-            var planned = (await tx.GetAll<TemplateExerciseRow>(WorkoutPlans.TemplateExercisesSql, [templateId, profileId]).ConfigureAwait(false)).ToList();
+            var planned = await tx.GetAll<TemplateExerciseRow>(WorkoutPlans.TemplateExercisesSql, [templateId, profileId]).ConfigureAwait(false);
+            var used = new bool[planned.Length];
             var logged = await tx.GetAll<SessionExercise>(
                 "SELECT id AS Id, exercise_id AS ExerciseId FROM session_exercises WHERE session_id = ? AND profile_id = ? ORDER BY position, id",
                 [sessionId, profileId]).ConfigureAwait(false);
+            var loads = (await tx.GetAll<PlannedLoad>(
+                "SELECT s.session_exercise_id AS SessionExerciseId, s.weight AS Weight, s.weight_unit AS WeightUnit FROM set_logs s " +
+                "JOIN session_exercises se ON se.id = s.session_exercise_id " +
+                "WHERE se.session_id = ? AND s.profile_id = ? AND s.set_type = 'working' AND s.weight IS NOT NULL AND s.weight_unit IS NOT NULL",
+                [sessionId, profileId]).ConfigureAwait(false)).ToLookup(l => l.SessionExerciseId, StringComparer.Ordinal);
             foreach (var exercise in logged)
             {
-                var index = planned.FindIndex(p => p.ExerciseId == exercise.ExerciseId);
+                var index = -1;
+                for (var i = 0; i < planned.Length && index < 0; i++)
+                {
+                    index = !used[i] && planned[i].ExerciseId == exercise.ExerciseId ? i : -1;
+                }
+
                 if (index < 0)
                 {
                     continue;
                 }
 
-                var match = planned[index];
-                planned.RemoveAt(index);
-                if (await SuggestAsync(tx, profileId, templateId, match, session.StartedAt).ConfigureAwait(false) is { } suggestion)
+                used[index] = true;
+                var occurrence = Occurrence(planned, index);
+                if (await SuggestAsync(tx, profileId, templateId, planned[index], occurrence, session.StartedAt).ConfigureAwait(false) is { } suggestion
+                    && loads[exercise.Id].Any(l => l.WeightUnit == suggestion.Unit && Quantity.CanonicalEquals(l.Weight, suggestion.Load)))
                 {
                     suggestions[exercise.Id] = suggestion;
                 }
@@ -83,51 +98,65 @@ public static class WorkoutProgression
         }).ConfigureAwait(false);
     }
 
+    /// <summary>Which entry of its exercise a template row is: 0 for the first, 1 for a second row of the same exercise, …</summary>
+    internal static int Occurrence(IReadOnlyList<TemplateExerciseRow> template, int index) =>
+        template.Take(index).Count(e => e.ExerciseId == template[index].ExerciseId);
+
     /// <summary>
     /// The suggestion for one template exercise from sessions started before <paramref name="before"/>; null when it
-    /// has no rule, isn't counted in weight and reps, or has neither history nor a starting load.
+    /// has no rule, isn't counted in weight and reps, or has neither history nor a starting load. A template may list
+    /// an exercise more than once (heavy sets, then back-off sets); <paramref name="occurrence"/> says which entry
+    /// this is, and each past session contributes the same entry of that exercise, by position.
     /// </summary>
     internal static async Task<ExerciseSuggestion?> SuggestAsync(
-        IDBGetUtils tx, string profileId, string templateId, TemplateExerciseRow exercise, string before)
+        IDBGetUtils tx, string profileId, string templateId, TemplateExerciseRow exercise, int occurrence, string before)
     {
         if (exercise.Rule is not { } rule || exercise.Scheme is not { } scheme || exercise.TrackingType != "weight_reps")
         {
             return null;
         }
 
+        // The latest sessions of the template with this exercise, then every entry of the exercise in them with its
+        // counted sets (none, through the outer join, for an entry with only warm-ups or unticked sets).
+        var started = WorkoutLog.Instant("w.started_at");
         var rows = await tx.GetAll<HistorySet>(
             "SELECT ws.id AS SessionId, se.id AS SessionExerciseId, s.weight AS Weight, s.weight_unit AS WeightUnit, s.reps AS Reps " +
-            "FROM set_logs s JOIN session_exercises se ON se.id = s.session_exercise_id JOIN workout_sessions ws ON ws.id = se.session_id " +
-            "WHERE s.profile_id = ? AND ws.profile_id = ? AND ws.template_id = ? AND se.exercise_id = ? AND ws.ended_at IS NOT NULL " +
-            $"AND {WorkoutLog.Instant("ws.started_at")} < {WorkoutLog.Instant("?")} " +
-            "AND s.completed_at IS NOT NULL AND s.set_type = 'working' AND s.weight IS NOT NULL AND s.weight_unit IS NOT NULL AND s.reps IS NOT NULL " +
+            "FROM workout_sessions ws JOIN session_exercises se ON se.session_id = ws.id AND se.profile_id = ws.profile_id AND se.exercise_id = ? " +
+            "LEFT JOIN set_logs s ON s.session_exercise_id = se.id AND s.profile_id = ws.profile_id AND s.completed_at IS NOT NULL " +
+            "AND s.set_type = 'working' AND s.weight IS NOT NULL AND s.weight_unit IS NOT NULL AND s.reps IS NOT NULL " +
+            "WHERE ws.id IN (SELECT w.id FROM workout_sessions w WHERE w.profile_id = ? AND w.template_id = ? AND w.ended_at IS NOT NULL " +
+            $"AND {started} < {WorkoutLog.Instant("?")} " +
+            "AND EXISTS (SELECT 1 FROM session_exercises x WHERE x.session_id = w.id AND x.exercise_id = ?) " +
+            $"ORDER BY {started} DESC, w.id DESC LIMIT {SessionsReplayed}) " +
             $"ORDER BY {WorkoutLog.Instant("ws.started_at")}, ws.id, se.position, se.id, s.position, s.id",
             // Instant() repeats its expression three times, so the bound comes three times.
-            [profileId, profileId, templateId, exercise.ExerciseId, before, before, before]).ConfigureAwait(false);
+            [exercise.ExerciseId, profileId, templateId, before, before, before, exercise.ExerciseId]).ConfigureAwait(false);
 
-        // One exercise per session: the first, if a session did it twice.
         var sessions = new List<List<WorkSet>>();
         string? sessionId = null;
         string? sessionExerciseId = null;
+        var entry = -1;
         foreach (var row in rows)
         {
             if (row.SessionId != sessionId)
             {
-                (sessionId, sessionExerciseId) = (row.SessionId, row.SessionExerciseId);
+                (sessionId, sessionExerciseId, entry) = (row.SessionId, null, -1);
                 sessions.Add([]);
             }
-            else if (row.SessionExerciseId != sessionExerciseId)
+
+            if (row.SessionExerciseId != sessionExerciseId)
             {
-                continue;
+                (sessionExerciseId, entry) = (row.SessionExerciseId, entry + 1);
             }
 
-            if (UnitCodes.Convert(row.Weight, row.WeightUnit, rule.IncrementUnit) is { } load)
+            if (entry == occurrence && row is { Weight: { } weight, WeightUnit: { } unit, Reps: { } reps }
+                && UnitCodes.Convert(weight, unit, rule.IncrementUnit) is { } load)
             {
-                sessions[^1].Add(new WorkSet(load, (int)row.Reps));
+                sessions[^1].Add(new WorkSet(load, (int)reps));
             }
         }
 
-        var replayed = sessions.Where(s => s.Count > 0).TakeLast(SessionsReplayed).ToList();
+        var replayed = sessions.Where(s => s.Count > 0).ToList();
         var kind = rule.Kind == "linear" ? ProgressionKind.LinearProgression : ProgressionKind.DoubleProgression;
         double? start = scheme.Load is { } l && scheme.LoadUnit is { } u ? UnitCodes.Convert(l, u, rule.IncrementUnit) : null;
         var next = Progression.Replay(
@@ -148,6 +177,17 @@ public static class WorkoutProgression
         public string? TemplateId { get; set; }
 
         public string StartedAt { get; set; } = "";
+
+        public string? EndedAt { get; set; }
+    }
+
+    internal sealed class PlannedLoad
+    {
+        public string SessionExerciseId { get; set; } = "";
+
+        public double Weight { get; set; }
+
+        public string WeightUnit { get; set; } = "";
     }
 
     internal sealed class SessionExercise
@@ -163,10 +203,10 @@ public static class WorkoutProgression
 
         public string SessionExerciseId { get; set; } = "";
 
-        public double Weight { get; set; }
+        public double? Weight { get; set; }
 
-        public string WeightUnit { get; set; } = "";
+        public string? WeightUnit { get; set; }
 
-        public long Reps { get; set; }
+        public long? Reps { get; set; }
     }
 }

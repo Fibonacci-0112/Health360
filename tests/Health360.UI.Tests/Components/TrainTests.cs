@@ -455,4 +455,23 @@ public sealed class TrainTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Contains("None yet. A template lists", cut.Markup, StringComparison.Ordinal), Wait);
         Assert.Empty(await WorkoutPlans.TemplatesAsync(App.Database.Db, ProfileId));
     }
+
+    [Fact]
+    public async Task A_template_not_fully_synced_can_be_seen_but_not_saved()
+    {
+        var cut = await TrainAsync(seed: async () =>
+        {
+            var template = await WorkoutPlans.CreateTemplateAsync(App.Database.Db, ProfileId, "Legs",
+                [new TemplateExerciseInput(Squat, new SetScheme(3, 8, 12))], App.Clock);
+            await App.Database.Db.Execute(
+                "INSERT INTO template_exercises (id, profile_id, template_id, exercise_id, position, set_scheme, created_at, updated_at) " +
+                "VALUES ('70000000-0000-7000-8000-000000000001', ?, ?, '60000000-0000-7000-8000-0000000000ff', 1, '{}', '2026-11-03', '2026-11-03')",
+                [ProfileId, template]);
+        });
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Edit Legs']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Edit Legs']");
+
+        cut.WaitForAssertion(() => Assert.Equal(WorkoutPlans.HiddenExercises, cut.Find("#template-incomplete").TextContent), Wait);
+        Assert.True(cut.Find("#save-template").HasAttribute("disabled"));
+    }
 }
