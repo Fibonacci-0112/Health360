@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Setup script for Claude Code cloud environments (claude.ai/code).
 # Paste into the environment's "Setup script" field, or run `bash tools/cloud/setup.sh`.
-# Installs what the checks in CLAUDE.md need: the .NET SDK from global.json, and Postgres + pgTAP
+# Installs what the checks in AGENTS.md need: the .NET SDK from global.json, and Postgres + pgTAP
 # for `tools/db/test-local.sh` (no Docker in the cloud container).
 # It runs before the repo's env vars are available, so it reads no secrets.
 set -euo pipefail
