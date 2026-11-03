@@ -166,4 +166,93 @@ public class ProgressionTests
             return next.Load > 0 && onGrid && next.Load <= load + inc;
         });
     }
+
+    private static IReadOnlyList<WorkSet>[] History(params WorkSet[][] sessions) => sessions;
+
+    [Fact]
+    public void Replay_without_history_suggests_nothing() =>
+        Assert.Null(Progression.Replay(ProgressionKind.DoubleProgression, 8, 12, 2.5, 60, []));
+
+    [Fact]
+    public void Replay_counts_misses_from_the_history_and_deloads_on_the_third()
+    {
+        // Golden (calculations.md): double 8–12 from 60, increment 2.5.
+        var sessions = History(Sets(60, 10, 9, 8), Sets(60, 12, 12, 12), Sets(62.5, 7, 7, 7), Sets(62.5, 7, 7, 6));
+
+        Assert.Equal(new ProgressionSuggestion(62.5, 8, 12, ProgressionAction.Repeat, 2), Progression.Replay(ProgressionKind.DoubleProgression, 8, 12, 2.5, 60, sessions));
+        Assert.Equal(
+            new ProgressionSuggestion(55, 8, 12, ProgressionAction.Deload, 0),
+            Progression.Replay(ProgressionKind.DoubleProgression, 8, 12, 2.5, 60, [.. sessions, Sets(62.5, 7, 6, 6)]));
+    }
+
+    [Fact]
+    public void Replay_targets_the_top_of_the_range_for_linear()
+    {
+        var next = Progression.Replay(ProgressionKind.LinearProgression, 3, 5, 2.5, 100, History(Sets(100, 5, 5, 5), Sets(102.5, 5, 5, 5)));
+
+        Assert.Equal(new ProgressionSuggestion(105, 5, 5, ProgressionAction.Increase, 0), next);
+    }
+
+    [Fact]
+    public void Replay_without_a_start_load_judges_the_first_session_by_its_lightest_set()
+    {
+        // 90 then 100: judged at 90, every set reached 5, so 92.5.
+        var next = Progression.Replay(ProgressionKind.LinearProgression, 5, 5, 2.5, null, History([new WorkSet(90, 5), new WorkSet(100, 5)]));
+
+        Assert.Equal(new ProgressionSuggestion(92.5, 5, 5, ProgressionAction.Increase, 0), next);
+    }
+
+    [Fact]
+    public void Replay_builds_on_a_heavier_load_chosen_by_hand_but_counts_a_lighter_one_as_a_miss()
+    {
+        // Suggested 102.5 after the first session; the second was all at 110, so it is judged at 110.
+        var heavier = Progression.Replay(ProgressionKind.LinearProgression, 5, 5, 2.5, 100, History(Sets(100, 5, 5), Sets(110, 5, 5)));
+        var lighter = Progression.Replay(ProgressionKind.LinearProgression, 5, 5, 2.5, 100, History(Sets(100, 5, 5), Sets(95, 5, 5)));
+
+        Assert.Equal(new ProgressionSuggestion(112.5, 5, 5, ProgressionAction.Increase, 0), heavier);
+        Assert.Equal(new ProgressionSuggestion(102.5, 5, 5, ProgressionAction.Repeat, 1), lighter);
+    }
+
+    [Fact]
+    public void Replay_skips_empty_and_unloaded_sessions()
+    {
+        var next = Progression.Replay(ProgressionKind.LinearProgression, 5, 5, 2.5, null, History([], Sets(0, 5, 5), Sets(50, 5, 5)));
+
+        Assert.Equal(new ProgressionSuggestion(52.5, 5, 5, ProgressionAction.Increase, 0), next);
+        Assert.Null(Progression.Replay(ProgressionKind.LinearProgression, 5, 5, 2.5, null, History(Sets(0, 5))));
+    }
+
+    [Fact]
+    public void Replay_matches_stepping_each_session_by_hand()
+    {
+        Holds(Gen.Zip(Gen.Elements(1.0, 2.5, 5.0), Gen.ListOf(Gen.Zip(Int(0, 14), Int(0, 14)))), t =>
+        {
+            var (inc, raw) = t;
+            var sessions = raw.Take(12).ToList();
+            double load = 40;
+            var failures = 0;
+            var replayed = new List<IReadOnlyList<WorkSet>>();
+            foreach (var (a, b) in sessions)
+            {
+                var sets = Sets(load, a, b);
+                replayed.Add(sets);
+                var step = Progression.DoubleProgression(load, 8, 12, sets, inc, failures);
+                (load, failures) = (step.Load, step.ConsecutiveFailures);
+            }
+
+            var next = Progression.Replay(ProgressionKind.DoubleProgression, 8, 12, inc, 40, replayed);
+            return sessions.Count == 0 ? next is null : next is not null && next.Load == load && next.ConsecutiveFailures == failures;
+        });
+    }
+
+    [Fact]
+    public void Replay_skips_sessions_done_without_load_rather_than_counting_misses()
+    {
+        // Three unloaded sessions after a start at 100 would be three misses and a deload if they counted.
+        var unloaded = History(Sets(0, 5, 5), Sets(0, 5, 5), Sets(0, 5, 5));
+
+        Assert.Null(Progression.Replay(ProgressionKind.LinearProgression, 5, 5, 2.5, 100, unloaded));
+        var (next, last) = Progression.ReplayCounted(ProgressionKind.LinearProgression, 5, 5, 2.5, 100, [Sets(100, 5, 4), .. unloaded]);
+        Assert.Equal((new ProgressionSuggestion(100, 5, 5, ProgressionAction.Repeat, 1), 0), (next, last));
+    }
 }

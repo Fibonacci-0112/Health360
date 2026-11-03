@@ -185,9 +185,10 @@ public static class WorkoutLog
     }
 
     /// <summary>
-    /// Starts a strength session, empty or from a template. Each exercise gets planned sets to accept with one tap: last
-    /// time's completed sets as entered, or else the template's scheme, or else one empty set in
-    /// <paramref name="loadUnit"/>. A dated <paramref name="scheduledId"/> is marked as done by this session.
+    /// Starts a strength session, empty or from a template. Each exercise gets planned sets to accept with one tap: with
+    /// a progression rule, last time's warm-ups and the scheme's work sets at the suggested load
+    /// (<see cref="WorkoutProgression"/>); otherwise last time's completed sets as entered, or else the template's
+    /// scheme, or else one empty set in <paramref name="loadUnit"/>. A dated <paramref name="scheduledId"/> is marked as done by this session.
     /// </summary>
     /// <exception cref="InvalidOperationException">A session is already in progress, or the template isn't on this device.</exception>
     public static async Task<string> StartAsync(
@@ -218,12 +219,7 @@ public static class WorkoutLog
                 _ = await tx.GetOptional<WorkoutPlans.IdOnly>(
                     "SELECT id AS Id FROM workout_templates WHERE id = ? AND profile_id = ?", [templateId, profileId]).ConfigureAwait(false)
                     ?? throw new InvalidOperationException("The template is not on this device.");
-                exercises = await tx.GetAll<TemplateExerciseRow>(
-                    "SELECT te.id AS Id, te.exercise_id AS ExerciseId, e.name AS ExerciseName, e.tracking_type AS TrackingType, " +
-                    "te.position AS Position, te.set_scheme AS SetScheme, te.rest_seconds AS RestSeconds " +
-                    "FROM template_exercises te JOIN exercises e ON e.id = te.exercise_id " +
-                    "WHERE te.template_id = ? AND te.profile_id = ? ORDER BY te.position, te.id",
-                    [templateId, profileId]).ConfigureAwait(false);
+                exercises = await tx.GetAll<TemplateExerciseRow>(WorkoutPlans.TemplateExercisesSql, [templateId, profileId]).ConfigureAwait(false);
             }
 
             await tx.Execute(
@@ -232,7 +228,15 @@ public static class WorkoutLog
                 [id, profileId, templateId, now, Timestamps.LocalDate(clock), now, now]).ConfigureAwait(false);
             for (var i = 0; i < exercises.Length; i++)
             {
-                await AddExerciseAsync(tx, profileId, id, exercises[i].ExerciseId, i, exercises[i].Scheme, loadUnit, clock).ConfigureAwait(false);
+                var suggestion = await WorkoutProgression.SuggestAsync(
+                    tx, profileId, templateId!, exercises[i], WorkoutProgression.Occurrence(exercises, i), now).ConfigureAwait(false);
+
+                // Linear progression aims for the top of the range, also before there is a load to suggest. A row with a
+                // rule follows its own scheme then, not sets copied from an unrelated workout of the exercise.
+                var scheme = exercises[i].Scheme is { } s && exercises[i].Rule?.Kind == "linear" ? s with { MinReps = s.MaxReps } : exercises[i].Scheme;
+                var ruled = exercises[i].Rule is not null && scheme is not null && exercises[i].TrackingType == "weight_reps";
+                await AddExerciseAsync(tx, profileId, id, exercises[i].ExerciseId, i, scheme, suggestion, loadUnit, clock, ruled)
+                    .ConfigureAwait(false);
             }
 
             if (scheduledId is not null)
@@ -262,7 +266,7 @@ public static class WorkoutLog
             var next = await tx.Get<Count>(
                 "SELECT coalesce(max(position) + 1, 0) AS N FROM session_exercises WHERE session_id = ? AND profile_id = ?",
                 [sessionId, profileId]).ConfigureAwait(false);
-            id = await AddExerciseAsync(tx, profileId, sessionId, exerciseId, (int)next.N, null, loadUnit, clock).ConfigureAwait(false);
+            id = await AddExerciseAsync(tx, profileId, sessionId, exerciseId, (int)next.N, null, null, loadUnit, clock).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return id;
     }
@@ -642,11 +646,20 @@ public static class WorkoutLog
     /// from Postgres (<c>2026-11-03 18:20:00+00</c>) compare by when they happened, not as text. SQLite reads both once an
     /// hour-only offset is given its minutes.
     /// </summary>
-    private static string Instant(string expression) =>
+    internal static string Instant(string expression) =>
         $"julianday(CASE WHEN {expression} GLOB '*[+-][0-9][0-9]' THEN {expression} || ':00' ELSE {expression} END)";
 
     private static async Task<string> AddExerciseAsync(
-        ITransaction tx, string profileId, string sessionId, string exerciseId, int position, SetScheme? scheme, string loadUnit, TimeProvider clock)
+        ITransaction tx,
+        string profileId,
+        string sessionId,
+        string exerciseId,
+        int position,
+        SetScheme? scheme,
+        ExerciseSuggestion? suggestion,
+        string loadUnit,
+        TimeProvider clock,
+        bool fromSchemeFirst = false)
     {
         var id = ExerciseLibrary.NewId(clock);
         var now = Timestamps.UtcNow(clock);
@@ -665,16 +678,26 @@ public static class WorkoutLog
             "ORDER BY ws.started_at DESC, se.position DESC LIMIT 1) ORDER BY s.position, s.id",
             [profileId, profileId, exerciseId, sessionId]).ConfigureAwait(false);
 
-        IEnumerable<SetValues> planned = last.Length > 0
+        // With a progression rule: last time's warm-ups as entered, then the work sets at the suggested load.
+        IEnumerable<SetValues> planned = suggestion is not null
+            ? last.Where(s => s.SetType == "warmup").Concat(Enumerable.Range(0, suggestion.Sets).Select(i => new SetValues
+            {
+                SetType = "working",
+                Reps = suggestion.PlannedReps(i),
+                Weight = suggestion.Load,
+                WeightUnit = suggestion.Unit,
+            }))
+            : last.Length > 0 && !fromSchemeFirst
             ? last
             : scheme is not null
-                ? Enumerable.Range(0, scheme.Sets).Select(_ => new SetValues
+                // A row with a rule but no load to suggest yet keeps last time's warm-ups before its scheme's work sets.
+                ? last.Where(s => fromSchemeFirst && s.SetType == "warmup").Concat(Enumerable.Range(0, scheme.Sets).Select(_ => new SetValues
                 {
                     SetType = "working",
                     Reps = scheme.MinReps,
                     Weight = scheme.Load,
                     WeightUnit = scheme.LoadUnit ?? loadUnit,
-                })
+                }))
                 : [new SetValues { SetType = "working", WeightUnit = loadUnit }];
         var i = 0;
         foreach (var values in planned)

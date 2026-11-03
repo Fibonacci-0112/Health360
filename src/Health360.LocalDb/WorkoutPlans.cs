@@ -2,6 +2,7 @@ using System.Globalization;
 using FluentValidation;
 using Health360.Contracts.Training;
 using PowerSync.Common.Client;
+using PowerSync.Common.DB;
 
 namespace Health360.LocalDb;
 
@@ -33,7 +34,12 @@ public sealed class TemplateExerciseRow
 
     public long? RestSeconds { get; set; }
 
+    /// <summary>JSON text; see <see cref="ProgressionRule"/>.</summary>
+    public string? Progression { get; set; }
+
     public SetScheme? Scheme => Contracts.Training.SetScheme.Parse(SetScheme);
+
+    public ProgressionRule? Rule => ProgressionRule.Parse(Progression);
 }
 
 /// <summary>One <c>programs</c> row.</summary>
@@ -78,21 +84,36 @@ public static class WorkoutPlans
             [profileId]).ConfigureAwait(false);
     }
 
-    /// <summary>A template's exercises in order. An exercise that hasn't synced yet is left out.</summary>
-    public static async Task<TemplateExerciseRow[]> TemplateExercisesAsync(IPowerSyncDatabase db, string profileId, string templateId)
+    /// <summary>One of the profile's templates; null when it isn't on this device.</summary>
+    public static async Task<TemplateRow?> TemplateAsync(IPowerSyncDatabase db, string profileId, string templateId)
     {
         ArgumentNullException.ThrowIfNull(db);
-        return await db.GetAll<TemplateExerciseRow>(
-            "SELECT te.id AS Id, te.exercise_id AS ExerciseId, e.name AS ExerciseName, e.tracking_type AS TrackingType, " +
-            "te.position AS Position, te.set_scheme AS SetScheme, te.rest_seconds AS RestSeconds " +
-            "FROM template_exercises te JOIN exercises e ON e.id = te.exercise_id " +
-            "WHERE te.template_id = ? AND te.profile_id = ? ORDER BY te.position, te.id",
+        return await db.GetOptional<TemplateRow>(
+            "SELECT t.id AS Id, t.name AS Name, (SELECT count(*) FROM template_exercises e WHERE e.template_id = t.id) AS ExerciseCount " +
+            "FROM workout_templates t WHERE t.id = ? AND t.profile_id = ?",
             [templateId, profileId]).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// A template's exercises in order, with each one's scheme, rest and progression rule. An exercise that hasn't
+    /// synced yet is left out.
+    /// </summary>
+    public static async Task<TemplateExerciseRow[]> TemplateExercisesAsync(IPowerSyncDatabase db, string profileId, string templateId)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        return await db.GetAll<TemplateExerciseRow>(TemplateExercisesSql, [templateId, profileId]).ConfigureAwait(false);
+    }
+
+    /// <summary>A template's exercises (template id, then profile id), as <see cref="TemplateExercisesAsync"/> reads them.</summary>
+    internal const string TemplateExercisesSql =
+        "SELECT te.id AS Id, te.exercise_id AS ExerciseId, e.name AS ExerciseName, e.tracking_type AS TrackingType, " +
+        "te.position AS Position, te.set_scheme AS SetScheme, te.rest_seconds AS RestSeconds, te.progression AS Progression " +
+        "FROM template_exercises te JOIN exercises e ON e.id = te.exercise_id " +
+        "WHERE te.template_id = ? AND te.profile_id = ? ORDER BY te.position, te.id";
+
     /// <summary>Adds a template with its exercises, in the order given, in one transaction.</summary>
-    /// <exception cref="ArgumentException">The name is empty or too long, or a rest time is out of range.</exception>
-    /// <exception cref="ValidationException">A set scheme fails <see cref="SetSchemeValidator"/>.</exception>
+    /// <exception cref="ArgumentException">The name is empty or too long, a rest time is out of range, or an exercise has an id.</exception>
+    /// <exception cref="ValidationException">A set scheme or progression rule fails its validator.</exception>
     /// <exception cref="InvalidOperationException">An exercise isn't on this device.</exception>
     public static async Task<string> CreateTemplateAsync(
         IPowerSyncDatabase db,
@@ -105,18 +126,10 @@ public static class WorkoutPlans
         ArgumentException.ThrowIfNullOrEmpty(profileId);
         ArgumentNullException.ThrowIfNull(exercises);
         ArgumentNullException.ThrowIfNull(clock);
-        if (!WorkoutCodes.IsName(name))
+        CheckTemplate(name, exercises);
+        if (exercises.Any(e => e.Id is not null))
         {
-            throw new ArgumentException("A name of 1 to 120 characters.", nameof(name));
-        }
-
-        foreach (var exercise in exercises)
-        {
-            new SetSchemeValidator().ValidateAndThrow(exercise.Scheme);
-            if (exercise.RestSeconds is < 0 or > 3600)
-            {
-                throw new ArgumentException("Rest is 0 to 3600 seconds.", nameof(exercises));
-            }
+            throw new ArgumentException("A new template's exercises are new too.", nameof(exercises));
         }
 
         var id = ExerciseLibrary.NewId(clock);
@@ -128,17 +141,191 @@ public static class WorkoutPlans
                 [id, profileId, name.Trim(), now, now]).ConfigureAwait(false);
             for (var i = 0; i < exercises.Count; i++)
             {
-                var exercise = exercises[i];
-                _ = await tx.GetOptional<IdOnly>("SELECT id AS Id FROM exercises WHERE id = ?", [exercise.ExerciseId]).ConfigureAwait(false)
-                    ?? throw new InvalidOperationException("The exercise is not on this device.");
-                await tx.Execute(
-                    "INSERT INTO template_exercises (id, profile_id, template_id, exercise_id, position, set_scheme, rest_seconds, " +
-                    "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [ExerciseLibrary.NewId(clock), profileId, id, exercise.ExerciseId, i, exercise.Scheme.ToJson(), exercise.RestSeconds, now, now])
-                    .ConfigureAwait(false);
+                await InsertTemplateExerciseAsync(tx, profileId, id, exercises[i], i, clock).ConfigureAwait(false);
             }
         }).ConfigureAwait(false);
         return id;
+    }
+
+    /// <summary>
+    /// Renames a template and replaces its exercises with <paramref name="exercises"/>, in that order, in one
+    /// transaction. An exercise with an <see cref="TemplateExerciseInput.Id"/> keeps its row (written only if
+    /// something changed), one without is added, and the template's other rows are deleted. Past sessions keep what
+    /// was logged; only the next start uses the new plan. <paramref name="loadedIds"/>, when given, are the rows the
+    /// edit started from: a row not among them arrived since and was never shown, so the edit is refused.
+    /// </summary>
+    /// <exception cref="ArgumentException">The name or a rest time is out of range, or an id appears twice.</exception>
+    /// <exception cref="ValidationException">A set scheme or progression rule fails its validator.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The template isn't on this device, an id isn't one of its exercises (removed meanwhile, here or on another
+    /// device), an exercise isn't on this device, or the template has a row whose exercise hasn't synced yet (which
+    /// <see cref="TemplateExercisesAsync"/> doesn't list, so the edit can't be complete).
+    /// </exception>
+    public static async Task UpdateTemplateAsync(
+        IPowerSyncDatabase db,
+        string profileId,
+        string templateId,
+        string name,
+        IReadOnlyList<TemplateExerciseInput> exercises,
+        TimeProvider clock,
+        IReadOnlyCollection<string>? loadedIds = null)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentException.ThrowIfNullOrEmpty(profileId);
+        ArgumentException.ThrowIfNullOrEmpty(templateId);
+        ArgumentNullException.ThrowIfNull(exercises);
+        ArgumentNullException.ThrowIfNull(clock);
+        CheckTemplate(name, exercises);
+        var kept = exercises.Where(e => e.Id is not null).Select(e => e.Id!).ToList();
+        if (kept.Distinct(StringComparer.Ordinal).Count() != kept.Count)
+        {
+            throw new ArgumentException("An exercise row appears twice.", nameof(exercises));
+        }
+
+        var now = Timestamps.UtcNow(clock);
+        await db.WriteTransaction(async tx =>
+        {
+            var template = await tx.GetOptional<NameOnly>(
+                "SELECT name AS Name FROM workout_templates WHERE id = ? AND profile_id = ?", [templateId, profileId]).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The template is not on this device.");
+            var existing = (await tx.GetAll<StoredTemplateExercise>(
+                "SELECT te.id AS Id, te.exercise_id AS ExerciseId, te.position AS Position, te.set_scheme AS SetScheme, te.rest_seconds AS RestSeconds, " +
+                "te.progression AS Progression, EXISTS (SELECT 1 FROM exercises e WHERE e.id = te.exercise_id) AS OnDevice " +
+                "FROM template_exercises te WHERE te.template_id = ? AND te.profile_id = ?",
+                [templateId, profileId]).ConfigureAwait(false)).ToDictionary(e => e.Id, StringComparer.Ordinal);
+            if (kept.FirstOrDefault(id => !existing.ContainsKey(id)) is not null)
+            {
+                throw new InvalidOperationException("An exercise was removed from this template meanwhile. Reopen it to see the current plan.");
+            }
+
+            // TemplateExercisesAsync leaves out a row whose exercise hasn't synced, so an editor never saw it: leaving it
+            // out here is not a request to remove it.
+            if (existing.Values.Any(e => e.OnDevice == 0 && !kept.Contains(e.Id, StringComparer.Ordinal)))
+            {
+                throw new InvalidOperationException(HiddenExercises);
+            }
+
+            // A row added since the editor loaded (synced from another device) was never shown, so it isn't removed.
+            if (loadedIds is not null && existing.Keys.Any(id => !loadedIds.Contains(id, StringComparer.Ordinal)))
+            {
+                throw new InvalidOperationException(TemplateChanged);
+            }
+
+            if (template.Name != name.Trim())
+            {
+                await tx.Execute("UPDATE workout_templates SET name = ?, updated_at = ? WHERE id = ? AND profile_id = ?",
+                    [name.Trim(), now, templateId, profileId]).ConfigureAwait(false);
+            }
+
+            foreach (var gone in existing.Keys.Except(kept, StringComparer.Ordinal))
+            {
+                await tx.Execute("DELETE FROM template_exercises WHERE id = ? AND profile_id = ?", [gone, profileId]).ConfigureAwait(false);
+            }
+
+            for (var i = 0; i < exercises.Count; i++)
+            {
+                var exercise = exercises[i];
+                if (exercise.Id is null)
+                {
+                    await InsertTemplateExerciseAsync(tx, profileId, templateId, exercise, i, clock).ConfigureAwait(false);
+                    continue;
+                }
+
+                var row = existing[exercise.Id];
+                if (row.ExerciseId == exercise.ExerciseId && row.Position == i && row.RestSeconds == exercise.RestSeconds
+                    && SetScheme.Parse(row.SetScheme) == exercise.Scheme && ProgressionRule.Parse(row.Progression) == exercise.Progression)
+                {
+                    continue;
+                }
+
+                if (row.ExerciseId != exercise.ExerciseId)
+                {
+                    await RequireExerciseAsync(tx, exercise.ExerciseId).ConfigureAwait(false);
+                }
+
+                await tx.Execute(
+                    "UPDATE template_exercises SET exercise_id = ?, position = ?, set_scheme = ?, rest_seconds = ?, progression = ?, updated_at = ? " +
+                    "WHERE id = ? AND profile_id = ?",
+                    [exercise.ExerciseId, i, exercise.Scheme.ToJson(), exercise.RestSeconds, exercise.Progression?.ToJson(), now, exercise.Id, profileId])
+                    .ConfigureAwait(false);
+            }
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deletes a template with its exercises and its schedule entries, as the server's cascade does. Sessions done
+    /// from it keep everything logged and lose only the link (also as the server does).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The template isn't on this device.</exception>
+    public static async Task DeleteTemplateAsync(IPowerSyncDatabase db, string profileId, string templateId, TimeProvider clock)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentException.ThrowIfNullOrEmpty(profileId);
+        ArgumentNullException.ThrowIfNull(clock);
+        var now = Timestamps.UtcNow(clock);
+        await db.WriteTransaction(async tx =>
+        {
+            _ = await tx.GetOptional<IdOnly>(
+                "SELECT id AS Id FROM workout_templates WHERE id = ? AND profile_id = ?", [templateId, profileId]).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The template is not on this device.");
+            await tx.Execute("DELETE FROM template_exercises WHERE template_id = ? AND profile_id = ?", [templateId, profileId]).ConfigureAwait(false);
+            await tx.Execute("DELETE FROM scheduled_workouts WHERE template_id = ? AND profile_id = ?", [templateId, profileId]).ConfigureAwait(false);
+            await tx.Execute("UPDATE workout_sessions SET template_id = NULL, updated_at = ? WHERE template_id = ? AND profile_id = ?",
+                [now, templateId, profileId]).ConfigureAwait(false);
+            await tx.Execute("DELETE FROM workout_templates WHERE id = ? AND profile_id = ?", [templateId, profileId]).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>Why an edit was refused because the template gained an exercise after it was loaded.</summary>
+    public const string TemplateChanged =
+        "This template was changed on another device while you edited it. Reopen it to see the current plan, then make your changes again.";
+
+    /// <summary>Why a template can't be edited until it has fully synced.</summary>
+    public const string HiddenExercises =
+        "Some of this template's exercises haven't reached this device yet. Wait for it to sync, then edit the template.";
+
+    private static void CheckTemplate(string name, IReadOnlyList<TemplateExerciseInput> exercises)
+    {
+        if (!WorkoutCodes.IsName(name))
+        {
+            throw new ArgumentException("A name of 1 to 120 characters.", nameof(name));
+        }
+
+        if (exercises.Count > 50)
+        {
+            throw new ArgumentException("A template has at most 50 exercises.", nameof(exercises));
+        }
+
+        foreach (var exercise in exercises)
+        {
+            ArgumentNullException.ThrowIfNull(exercise);
+            new SetSchemeValidator().ValidateAndThrow(exercise.Scheme);
+            if (exercise.Progression is { } rule)
+            {
+                new ProgressionRuleValidator().ValidateAndThrow(rule);
+            }
+
+            if (exercise.RestSeconds is < 0 or > 3600)
+            {
+                throw new ArgumentException("Rest is 0 to 3600 seconds.", nameof(exercises));
+            }
+        }
+    }
+
+    private static async Task RequireExerciseAsync(ITransaction tx, string exerciseId) =>
+        _ = await tx.GetOptional<IdOnly>("SELECT id AS Id FROM exercises WHERE id = ?", [exerciseId]).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The exercise is not on this device.");
+
+    private static async Task InsertTemplateExerciseAsync(
+        ITransaction tx, string profileId, string templateId, TemplateExerciseInput exercise, int position, TimeProvider clock)
+    {
+        await RequireExerciseAsync(tx, exercise.ExerciseId).ConfigureAwait(false);
+        var now = Timestamps.UtcNow(clock);
+        await tx.Execute(
+            "INSERT INTO template_exercises (id, profile_id, template_id, exercise_id, position, set_scheme, rest_seconds, progression, " +
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [ExerciseLibrary.NewId(clock), profileId, templateId, exercise.ExerciseId, position, exercise.Scheme.ToJson(), exercise.RestSeconds,
+             exercise.Progression?.ToJson(), now, now]).ConfigureAwait(false);
     }
 
     /// <summary>The profile's programs, newest start first.</summary>
@@ -283,6 +470,28 @@ public static class WorkoutPlans
     internal sealed class IdOnly
     {
         public string Id { get; set; } = "";
+    }
+
+    internal sealed class NameOnly
+    {
+        public string Name { get; set; } = "";
+    }
+
+    internal sealed class StoredTemplateExercise
+    {
+        public string Id { get; set; } = "";
+
+        public string ExerciseId { get; set; } = "";
+
+        public long Position { get; set; }
+
+        public string? SetScheme { get; set; }
+
+        public long? RestSeconds { get; set; }
+
+        public string? Progression { get; set; }
+
+        public long OnDevice { get; set; }
     }
 
     internal sealed class SessionOn
