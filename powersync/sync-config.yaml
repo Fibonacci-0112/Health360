@@ -28,6 +28,11 @@ streams:
       - SELECT * FROM metric_pins WHERE profile_id IN my_profiles
       # Photo metadata only. Only the owner's: photos shared through a 'photos' grant arrive with shared_profile.
       - SELECT * FROM progress_photos WHERE profile_id IN my_profiles
+      - SELECT * FROM workout_templates WHERE profile_id IN my_profiles
+      - SELECT * FROM template_exercises WHERE profile_id IN my_profiles
+      - SELECT * FROM workout_sessions WHERE profile_id IN my_profiles
+      - SELECT * FROM session_exercises WHERE profile_id IN my_profiles
+      - SELECT * FROM set_logs WHERE profile_id IN my_profiles
 
   # H tables for every household the user belongs to.
   household:
@@ -37,6 +42,8 @@ streams:
     queries:
       - SELECT * FROM households WHERE id IN my_households
       - SELECT * FROM household_members WHERE household_id IN my_households
+      # Custom exercises. System exercises (household_id null) arrive with reference.
+      - SELECT * FROM exercises WHERE household_id IN my_households
 
   # G tables: global reference data, the same for everyone signed in.
   reference:
@@ -44,6 +51,7 @@ streams:
     queries:
       - SELECT * FROM reference_datasets
       - SELECT * FROM metric_definitions
+      - SELECT * FROM exercises WHERE household_id IS NULL
 
   # Not in Phase 0: `shared_profile`, an on-demand stream for another member's rows. It must check
   # sharing_grants exactly as private.readable_profile_ids() does before it is added.
