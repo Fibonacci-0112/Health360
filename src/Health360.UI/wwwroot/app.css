@@ -703,6 +703,54 @@ button.compact {
     object-fit: contain;
 }
 
+/* Slider comparison: both photos in the older one's box, the newer one on top and clipped from the left, with a
+   line where they meet. The range input below it moves the line (dragging or arrow keys). */
+/* The photos and the range under them, as wide as the photos. */
+.photo-slider-frame {
+    display: inline-grid;
+    align-self: flex-start;
+    max-width: 100%;
+    gap: var(--space-sm);
+}
+
+.photo-slider {
+    position: relative;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.photo-slider img {
+    display: block;
+    max-width: 100%;
+    max-height: 70vh;
+}
+
+.photo-slider .photo-slider-newer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    object-fit: contain;
+}
+
+.photo-slider-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    /* White with a dark edge, so it shows on light and dark photos in either theme. */
+    background: #fff;
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 40%);
+    pointer-events: none;
+}
+
+.photo-slider-range {
+    width: 100%;
+    margin: 0;
+}
+
 .photo-compare-pick {
     display: inline-flex;
     align-items: center;

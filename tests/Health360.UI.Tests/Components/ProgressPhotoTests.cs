@@ -358,6 +358,90 @@ public sealed class ProgressPhotoTests : AppTestContext
     }
 
     [Fact]
+    public async Task TheSliderShowsTheOlderPhotoLeftOfTheLineAndMovesWithTheRange()
+    {
+        App.PhotoStorage.Reachable = true;
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-01");
+        App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+        await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
+        await ChangeAsync(cut, "input[aria-label='Compare the Back photo from 2026-10-01']", "on");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll(".photo-compare-grid img").Count), Wait);
+        Assert.Equal("true", cut.Find("#photo-compare-side").GetAttribute("aria-pressed"));
+
+        await ClickAsync(cut, "#photo-compare-slider");
+
+        // Both in one box: the older underneath, the newer on top revealed right of the line, which starts in the middle.
+        Assert.Equal("true", cut.Find("#photo-compare-slider").GetAttribute("aria-pressed"));
+        Assert.Equal("Slider", cut.Find("#photo-compare-title").TextContent);
+        Assert.Empty(cut.FindAll(".photo-compare-grid"));
+        var images = cut.FindAll(".photo-slider img");
+        Assert.Equal(2, images.Count);
+        Assert.Equal("Back progress photo from 2026-10-01", images[0].GetAttribute("alt"));
+        Assert.Equal("Front progress photo from 2026-10-30", images[1].GetAttribute("alt"));
+        Assert.Contains("photo-slider-newer", images[1].GetAttribute("class"), StringComparison.Ordinal);
+        Assert.Equal("clip-path: inset(0 0 0 50%)", images[1].GetAttribute("style"));
+        var range = cut.Find("#photo-compare-position");
+        Assert.Equal("range", range.GetAttribute("type"));
+        Assert.Equal("50", range.GetAttribute("value"));
+        Assert.Equal("Slider: 2026-10-01 on the left, 2026-10-30 on the right", range.GetAttribute("aria-label"));
+        Assert.Equal("50% of the 2026-10-30 photo shown", range.GetAttribute("aria-valuetext"));
+
+        await TypeAsync(cut, "#photo-compare-position", "30");
+        Assert.Equal("clip-path: inset(0 0 0 30%)", cut.Find(".photo-slider-newer").GetAttribute("style"));
+        Assert.Equal("left: 30%", cut.Find(".photo-slider-line").GetAttribute("style"));
+        Assert.Equal("70% of the 2026-10-30 photo shown", cut.Find("#photo-compare-position").GetAttribute("aria-valuetext"));
+
+        // Out of range or not a number: kept within 0 to 100, or left where it was.
+        await TypeAsync(cut, "#photo-compare-position", "150");
+        Assert.Equal("100", cut.Find("#photo-compare-position").GetAttribute("value"));
+        await TypeAsync(cut, "#photo-compare-position", "abc");
+        Assert.Equal("100", cut.Find("#photo-compare-position").GetAttribute("value"));
+
+        // Back to side by side, both photos still there.
+        await ClickAsync(cut, "#photo-compare-side");
+        Assert.Empty(cut.FindAll(".photo-slider"));
+        Assert.Equal(2, cut.FindAll(".photo-compare-grid img").Count);
+    }
+
+    [Fact]
+    public async Task TheSliderWaitsForBothPhotosShowingEachOnItsOwnUntilThenAndANewPairStartsInTheMiddle()
+    {
+        await App.Database.SeedPhotoAsync(OtherDevicePhoto, ProfileId, "back", "2026-10-01");
+        App.PhotoStorage.Stored[$"{ProfileId}/{OtherDevicePhoto}.jpg"] = Support.Jpegs.WithGps();
+        var cut = await BodyAsync();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll("[aria-label='Your progress photos'] li")), Wait);
+        await ClickAsync(cut, "#photos-take");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll("[aria-label='Your progress photos'] li").Count), Wait);
+
+        // Offline: the photo on this device shows, the uploaded one can't be fetched, so the slider can't be drawn yet.
+        await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
+        await ChangeAsync(cut, "input[aria-label='Compare the Back photo from 2026-10-01']", "on");
+        cut.WaitForAssertion(() => cut.Find("#photo-compare-retry"), Wait);
+        await ClickAsync(cut, "#photo-compare-slider");
+        Assert.Empty(cut.FindAll(".photo-slider"));
+        Assert.Contains("The slider needs both photos", cut.Find(".photo-compare").TextContent, StringComparison.Ordinal);
+        Assert.Contains("Couldn't load this photo", cut.Find(".photo-compare-grid").TextContent, StringComparison.Ordinal);
+        Assert.Single(cut.FindAll(".photo-compare-grid img"));
+
+        // Back online, Try again brings the other photo and the slider appears.
+        App.PhotoStorage.Reachable = true;
+        await ClickAsync(cut, "#photo-compare-retry");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll(".photo-slider img").Count), Wait);
+        Assert.DoesNotContain("The slider needs both photos", cut.Find(".photo-compare").TextContent, StringComparison.Ordinal);
+
+        // A new pair keeps the slider view but starts with the line in the middle again.
+        await TypeAsync(cut, "#photo-compare-position", "20");
+        await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
+        await ChangeAsync(cut, "input[aria-label='Compare the Front photo from 2026-10-30']", "on");
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll(".photo-slider img").Count), Wait);
+        Assert.Equal("50", cut.Find("#photo-compare-position").GetAttribute("value"));
+    }
+
+    [Fact]
     public async Task AComparedPhotoNotUploadedYetSaysSoAndAThirdCannotBeTicked()
     {
         App.PhotoStorage.Reachable = true;

@@ -15,7 +15,8 @@
    When there's an earlier photo in the same pose, a new one is shown with that photo over it at 30% (the ghost
    overlay) before it's saved, so the user can keep it or retake it with the same framing. The system camera can't
    draw an overlay, so this is a review after capture rather than a live one. Ticking Compare on two photos shows
-   them side by side, older on the left. Delete (with a confirmation) removes a photo's row through the upload queue
+   them side by side, older on the left, or with a slider: both in one box, the newer one revealed from the right
+   by dragging (or arrow keys), so the older stays on the left of the line. Delete (with a confirmation) removes a photo's row through the upload queue
    and its files from Storage once that delete has reached the server. *@
 <section class="card" aria-labelledby="photos-title">
     <h2 id="photos-title">Progress photos</h2>
@@ -126,33 +127,66 @@
         @if (compared.Count == 2)
         {
             <figure class="photo-compare" aria-labelledby="photo-compare-title">
-                <figcaption id="photo-compare-title" class="strong">Side by side</figcaption>
-                <div class="photo-compare-grid">
-                    @foreach (var photo in compared)
-                    {
-                        <div @key="photo.Id" class="photo-compare-cell">
-                            <span class="small">@PoseName(photo.Pose) · @photo.LocalDate</span>
-                            @switch (compareImages.GetValueOrDefault(photo.Id)?.Status)
-                            {
-                                case null:
-                                    <p class="muted small" role="status">Loading photo</p>
-                                    break;
-                                case PhotoImageStatus.Available:
-                                    <img src="@compareUris[photo.Id]" alt="@($"{PoseName(photo.Pose)} progress photo from {photo.LocalDate}")" />
-                                    break;
-                                case PhotoImageStatus.NotUploaded:
-                                    <p class="muted small" role="status">Not available yet. It hasn't finished uploading from the device it was taken on.</p>
-                                    break;
-                                case PhotoImageStatus.Unreachable:
-                                    <p class="error small" role="alert">Couldn't load this photo. Check your connection.</p>
-                                    break;
-                                default:
-                                    <p class="error small" role="alert">The server wouldn't send this photo.</p>
-                                    break;
-                            }
-                        </div>
-                    }
+                <figcaption id="photo-compare-title" class="strong">@(compareSlider ? "Slider" : "Side by side")</figcaption>
+                <div class="inline" role="group" aria-label="How to compare">
+                    <button type="button" class="secondary" id="photo-compare-side" aria-pressed="@(compareSlider ? "false" : "true")"
+                            @onclick="() => SetCompareSlider(false)">Side by side</button>
+                    <button type="button" class="secondary" id="photo-compare-slider" aria-pressed="@(compareSlider ? "true" : "false")"
+                            @onclick="() => SetCompareSlider(true)">Slider</button>
                 </div>
+                @if (compareSlider && compared.All(p => compareImages.GetValueOrDefault(p.Id)?.Status == PhotoImageStatus.Available))
+                {
+                    var (older, newer) = (compared[0], compared[1]);
+                    // The newer photo lies on top, clipped from the left at the slider's position, so the older one shows
+                    // left of the line and the newer one right of it. Both are scaled into the older photo's box.
+                    <div class="photo-slider-frame">
+                        <div class="photo-slider">
+                            <img src="@compareUris[older.Id]" alt="@($"{PoseName(older.Pose)} progress photo from {older.LocalDate}")" />
+                            <img class="photo-slider-newer" src="@compareUris[newer.Id]" style="@($"clip-path: inset(0 0 0 {sliderPosition}%)")"
+                                 alt="@($"{PoseName(newer.Pose)} progress photo from {newer.LocalDate}")" />
+                            <span class="photo-slider-line" style="@($"left: {sliderPosition}%")" aria-hidden="true"></span>
+                        </div>
+                        <input type="range" id="photo-compare-position" class="photo-slider-range" min="0" max="100" step="1" value="@sliderPosition"
+                               aria-label="@($"Slider: {older.LocalDate} on the left, {newer.LocalDate} on the right")"
+                               aria-valuetext="@($"{100 - sliderPosition}% of the {newer.LocalDate} photo shown")"
+                               @oninput="MoveSlider" />
+                    </div>
+                    <p class="muted small">@PoseName(older.Pose) · @older.LocalDate on the left of the line, @PoseName(newer.Pose) · @newer.LocalDate on the right.</p>
+                }
+                else
+                {
+                    if (compareSlider)
+                    {
+                        <p class="muted small" role="status">The slider needs both photos. Until they're both here, each is shown on its own.</p>
+                    }
+
+                    <div class="photo-compare-grid">
+                        @foreach (var photo in compared)
+                        {
+                            <div @key="photo.Id" class="photo-compare-cell">
+                                <span class="small">@PoseName(photo.Pose) · @photo.LocalDate</span>
+                                @switch (compareImages.GetValueOrDefault(photo.Id)?.Status)
+                                {
+                                    case null:
+                                        <p class="muted small" role="status">Loading photo</p>
+                                        break;
+                                    case PhotoImageStatus.Available:
+                                        <img src="@compareUris[photo.Id]" alt="@($"{PoseName(photo.Pose)} progress photo from {photo.LocalDate}")" />
+                                        break;
+                                    case PhotoImageStatus.NotUploaded:
+                                        <p class="muted small" role="status">Not available yet. It hasn't finished uploading from the device it was taken on.</p>
+                                        break;
+                                    case PhotoImageStatus.Unreachable:
+                                        <p class="error small" role="alert">Couldn't load this photo. Check your connection.</p>
+                                        break;
+                                    default:
+                                        <p class="error small" role="alert">The server wouldn't send this photo.</p>
+                                        break;
+                                }
+                            </div>
+                        }
+                    </div>
+                }
                 <div class="inline">
                     @if (compareImages.Values.Any(i => i?.Status == PhotoImageStatus.Unreachable))
                     {
@@ -164,7 +198,7 @@
         }
         else if (compared.Count == 1)
         {
-            <p class="muted small" role="status">Tick Compare on one more photo to see them side by side.</p>
+            <p class="muted small" role="status">Tick Compare on one more photo to compare them.</p>
         }
 
         <ul class="measurement-list" aria-label="Your progress photos">
@@ -534,7 +568,22 @@
     private readonly Dictionary<string, string> compareUris = new(StringComparer.Ordinal);
     private CancellationTokenSource? compareLoad;
 
+    // Slider instead of side by side, and where its line is: the percentage of the box, from the left, that shows the
+    // older photo. A new pair starts in the middle; the view chosen stays for the next pair.
+    private bool compareSlider;
+    private int sliderPosition = 50;
+
     private bool IsCompared(string id) => compared.Any(p => p.Id == id);
+
+    private void SetCompareSlider(bool slider) => compareSlider = slider;
+
+    private void MoveSlider(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var position))
+        {
+            sliderPosition = Math.Clamp(position, 0, 100);
+        }
+    }
 
     private void ToggleCompare(ProgressPhotoRow photo)
     {
@@ -558,6 +607,7 @@
         compareLoad = null;
         compareImages.Clear();
         compareUris.Clear();
+        sliderPosition = 50;
         if (compared.Count != 2 || watchedProfile is not { } profileId)
         {
             return;
