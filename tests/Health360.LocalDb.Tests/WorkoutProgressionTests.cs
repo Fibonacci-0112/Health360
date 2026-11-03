@@ -204,6 +204,56 @@ public class WorkoutProgressionTests
     }
 
     [Fact]
+    public async Task Reordering_a_template_keeps_each_entry_of_a_repeated_exercise_on_its_own_history()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 3, 3, 140, "kg"), null, LinearKg),
+             new TemplateExerciseInput(Squat, new SetScheme(1, 8, 8, 100, "kg"), null, LinearKg)], clock);
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+        var logged = await WorkoutLog.ExercisesAsync(t.Db, Profile, session);
+        await TickAsync(t, clock, logged[0], 3);
+        await TickAsync(t, clock, logged[1], 8);
+        await WorkoutLog.FinishAsync(t.Db, Profile, session, clock);
+        clock.Advance(TimeSpan.FromDays(2));
+
+        // The back-off row moves first.
+        var rows = await WorkoutPlans.TemplateExercisesAsync(t.Db, Profile, template);
+        await WorkoutPlans.UpdateTemplateAsync(t.Db, Profile, template, "Legs",
+            [.. rows.Reverse().Select(r => new TemplateExerciseInput(r.ExerciseId, r.Scheme!, null, r.Rule, r.Id))], clock);
+
+        var next = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+        var planned = await WorkoutLog.ExercisesAsync(t.Db, Profile, next);
+
+        Assert.Equal((102.5, 142.5), (planned[0].Sets.Single().Weight!.Value, planned[1].Sets.Single().Weight!.Value));
+    }
+
+    [Fact]
+    public async Task Removing_an_entry_mid_workout_doesnt_shift_the_others_onto_its_row()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 3, 3, 140, "kg"), null, LinearKg),
+             new TemplateExerciseInput(Squat, new SetScheme(1, 8, 8, 100, "kg"), null, LinearKg)], clock);
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+        var logged = await WorkoutLog.ExercisesAsync(t.Db, Profile, session);
+
+        // The heavy entry is dropped; the back-off entry is done in full.
+        await WorkoutLog.RemoveExerciseAsync(t.Db, Profile, logged[0].Id);
+        var notes = await WorkoutProgression.ForSessionAsync(t.Db, Profile, session);
+        Assert.Equal(100.0, notes[logged[1].Id].Load);
+        await TickAsync(t, clock, logged[1], 8);
+        await WorkoutLog.FinishAsync(t.Db, Profile, session, clock);
+        clock.Advance(TimeSpan.FromDays(2));
+
+        var planned = await WorkoutLog.ExercisesAsync(t.Db, Profile, await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock));
+
+        Assert.Equal((140.0, 102.5), (planned[0].Sets.Single().Weight!.Value, planned[1].Sets.Single().Weight!.Value));
+    }
+
+    [Fact]
     public async Task A_first_entry_without_work_sets_counts_as_nothing_even_when_a_later_entry_has_some()
     {
         await using var t = await OpenAsync();
