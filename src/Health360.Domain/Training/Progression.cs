@@ -102,9 +102,9 @@ public static class Progression
         var failures = consecutiveFailures + 1;
         if (deload.FailuresBeforeDeload > 0 && failures >= deload.FailuresBeforeDeload)
         {
-            // Snap the ratio within a tiny tolerance first, so 3.4999999999999996 from a unit conversion still
+            // Snap the ratio to 12 decimals first (conversion noise is ~1e-15), so 3.4999999999999996 from a unit conversion still
             // counts as the half it is and the same session deloads alike in lb and kg.
-            var ratio = Math.Round(load * deload.Fraction / increment, 9);
+            var ratio = Math.Round(load * deload.Fraction / increment, 12);
             var steps = Math.Max(1, Math.Round(ratio, MidpointRounding.AwayFromZero));
             var reduced = Finite(load - (steps * increment));
             if (reduced > 0 && !Quantity.CanonicalEquals(reduced, 0))

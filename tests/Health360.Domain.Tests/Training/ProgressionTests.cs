@@ -146,6 +146,15 @@ public class ProgressionTests
     }
 
     [Fact]
+    public void A_ratio_genuinely_below_a_half_is_not_snapped_up()
+    {
+        // 35 × 0.99999999988 / 10 = 3.4999999996: three increments, not four (which would reach 0 and skip).
+        var next = Progression.LinearProgression(35, 5, Sets(35, 4), 10, 2, new DeloadPolicy(Fraction: 0.99999999988));
+
+        Assert.Equal(new ProgressionSuggestion(5, 5, 5, ProgressionAction.Deload, 0), next);
+    }
+
+    [Fact]
     public void Suggestions_stay_positive_and_on_the_increment_grid()
     {
         Holds(Gen.Zip(Int(1, 200), Gen.Zip(Gen.Elements(1.0, 2.5, 5.0), Gen.Zip(Int(0, 7), Int(0, 5)))), t =>
