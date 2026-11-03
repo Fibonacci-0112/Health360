@@ -155,11 +155,13 @@ public static class WorkoutProgression
     {
         var exercise = template[index];
         var unambiguous = Unambiguous(template, exercise.ExerciseId);
-        var live = await RowIdsAsync(tx, profileId, templateId).ConfigureAwait(false);
         if (exercise.Rule is not { } rule || exercise.Scheme is not { } scheme || exercise.TrackingType != "weight_reps")
         {
             return null;
         }
+
+        // Read only for a row that progresses, and only when an unlinked entry could stand in for it.
+        var live = unambiguous ? await RowIdsAsync(tx, profileId, templateId).ConfigureAwait(false) : [];
 
         // The template's finished sessions with this exercise, then every entry of the exercise in them with its
         // counted sets (none, through the outer join, for an entry with only warm-ups or unticked sets). All of them:
