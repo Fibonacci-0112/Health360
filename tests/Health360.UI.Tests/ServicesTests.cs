@@ -24,9 +24,10 @@ public class ServicesTests
             .AddSingleton<IPhotoCapture>(new FakePhotoCapture())
             .AddHealth360Ui();
 
-        var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+        var completed = false;
         try
         {
+            var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
             await using (provider)
             {
                 // Sync and uploads take their token from sign-in's session.
@@ -36,28 +37,48 @@ public class ServicesTests
                 Assert.IsType<DeviceLocale>(provider.GetRequiredService<IDeviceLocale>());
                 Assert.IsType<LocalAccount>(provider.GetRequiredService<ILocalAccount>());
                 Assert.NotNull(provider.GetRequiredService<PhotoUploader>());
-                provider.GetRequiredService<SyncState>().Dispose();
+
+                // Stop and await the background workers before closing, so nothing still touches the files.
+                await provider.GetRequiredService<SyncState>().DisposeAsync();
+                await provider.GetRequiredService<PhotoUploader>().DisposeAsync();
                 await provider.GetRequiredService<PowerSyncDatabase>().Close();
             }
+
+            completed = true;
         }
         finally
         {
-            DeleteBestEffort(directory);
+            // Only report a leftover directory when the test itself passed, so it never hides the real failure.
+            DeleteDirectory(directory, throwOnFailure: completed);
         }
     }
 
-    // Background SQLite/PowerSync work can still hold files for a moment after Close().
-    private static void DeleteBestEffort(string directory)
+    // Native SQLite handles can take a moment to be released after Close().
+    private static void DeleteDirectory(string directory, bool throwOnFailure)
     {
-        for (var attempt = 0; attempt < 5; attempt++)
+        for (var attempt = 1; ; attempt++)
         {
             try
             {
-                Directory.Delete(directory, recursive: true);
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+
                 return;
             }
-            catch (IOException)
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
+                if (attempt >= 20)
+                {
+                    if (throwOnFailure)
+                    {
+                        throw new IOException($"Could not delete the test directory '{directory}'.", error);
+                    }
+
+                    return;
+                }
+
                 Thread.Sleep(100);
             }
         }

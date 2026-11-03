@@ -8,7 +8,7 @@ namespace Health360.UI.Data;
 /// Whether this device is syncing, how many writes haven't reached the server (PLAN.md §2.7: the
 /// "unsynced entries" indicator), and the writes the server rejected, with their retry and discard actions.
 /// </summary>
-public sealed partial class SyncState : IDisposable
+public sealed partial class SyncState : IDisposable, IAsyncDisposable
 {
     /// <summary>How often the upload queue is counted; PowerSync has no event for it.</summary>
     public static readonly TimeSpan PendingPollInterval = TimeSpan.FromSeconds(1);
@@ -20,6 +20,7 @@ public sealed partial class SyncState : IDisposable
     private readonly PhotoUploader? photos;
     private readonly CancellationTokenSource stop = new();
     private readonly CancellationToken stopping;
+    private readonly Task workers;
     private int disposed;
 
     public SyncState(PowerSyncDatabase db, IRemoteWriter writer, TimeProvider clock, ILogger<SyncState> logger, PhotoUploader? photos = null)
@@ -33,9 +34,10 @@ public sealed partial class SyncState : IDisposable
         Update();
         // Photo files upload in the background while the app runs, and again whenever the connection returns.
         photos?.Start();
-        _ = Task.Run(WatchStatusAsync, CancellationToken.None);
-        _ = Task.Run(PollPendingAsync, CancellationToken.None);
-        _ = Task.Run(WatchFailedAsync, CancellationToken.None);
+        workers = Task.WhenAll(
+            Task.Run(WatchStatusAsync, CancellationToken.None),
+            Task.Run(PollPendingAsync, CancellationToken.None),
+            Task.Run(WatchFailedAsync, CancellationToken.None));
     }
 
     /// <summary>Raised when anything here changes, possibly off the UI thread.</summary>
@@ -90,6 +92,27 @@ public sealed partial class SyncState : IDisposable
         }
 
         stop.Cancel();
+        stop.Dispose();
+    }
+
+    /// <summary>Stops the background watchers and waits for them to finish.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) == 1)
+        {
+            return;
+        }
+
+        stop.Cancel();
+        try
+        {
+            await workers.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Stopping; the watchers' own failures don't matter any more.
+        }
+
         stop.Dispose();
     }
 
