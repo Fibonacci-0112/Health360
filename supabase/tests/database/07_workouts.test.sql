@@ -3,7 +3,7 @@
 -- `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(37);
+select plan(39);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000000a', 'a@example.com'),
@@ -74,7 +74,7 @@ select throws_ok(
   '23514', null, 'the tracking type must be a known one');
 select throws_ok(
   format($$ update exercises set household_id = %L where household_id is not null $$, current_setting('t.hb')),
-  '42501', null, 'a custom exercise cannot move to another household');
+  '23514', null, 'a custom exercise cannot move to another household');
 select is(
   (select count(*) from exercises where household_id = current_setting('t.ha')::uuid), 1::bigint,
   'the custom exercise is still there');
@@ -179,6 +179,24 @@ select is(
     + (select count(*) from session_exercises) + (select count(*) from set_logs),
   6::bigint, 'a workouts grant shows A''s template, session and sets');
 select is(pg_temp.affected($$ update set_logs set reps = 1 $$), 0::bigint, 'the grant is read-only');
+
+-------- A member of two households still can't move a custom exercise between them
+reset role;
+insert into household_members (household_id, profile_id, role)
+  values (current_setting('t.hb')::uuid, current_setting('t.a')::uuid, 'adult');
+set local role authenticated;
+select pg_temp.login('a');
+select throws_ok(
+  format($$ update exercises set household_id = %L where id = '60000000-0000-7000-8000-000000000002' $$, current_setting('t.hb')),
+  '23514', null, 'a custom exercise stays in its household, even for a member of both');
+
+-------- The importer
+reset role;
+set local role service_role;
+select lives_ok(
+  $$ insert into exercises (external_id, name, tracking_type, equipment, primary_muscles)
+     values ('Push_Up', 'Push-up', 'reps', '["body_only"]', '["chest"]') $$,
+  'service_role can import a system exercise');
 
 select * from finish();
 rollback;

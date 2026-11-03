@@ -54,6 +54,20 @@ create index exercises_household_idx on public.exercises (household_id);
 create trigger exercises_updated_at before update on public.exercises
   for each row execute function private.set_updated_at();
 
+-- A custom exercise stays in its household: moving it would hide it from the members whose templates and sessions
+-- use it. RLS can't compare old and new rows, so a trigger does. SQLSTATE class 23, so uploads quarantine.
+create function private.exercises_fixed_household() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if new.household_id is distinct from old.household_id then
+    raise exception 'an exercise cannot move to another household' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+
+create trigger exercises_fixed_household before update of household_id on public.exercises
+  for each row execute function private.exercises_fixed_household();
+
 -------------------------------------------------------------------------------
 -- workout_templates, template_exercises (U)
 -------------------------------------------------------------------------------
@@ -212,7 +226,10 @@ create trigger set_logs_updated_at before update on public.set_logs
 -- The check constraints call these with the caller's rights (00_rls_coverage checks the grants).
 revoke all on function private.is_code_array(jsonb), private.is_zone_seconds(jsonb) from public, anon;
 grant execute on function private.is_code_array(jsonb), private.is_zone_seconds(jsonb) to authenticated;
-revoke all on function private.set_logs_canonical() from public, anon;
+-- The importer writes system exercises as service_role, which bypasses RLS but not function privileges.
+grant usage on schema private to service_role;
+grant execute on function private.is_code_array(jsonb), private.is_zone_seconds(jsonb) to service_role;
+revoke all on function private.set_logs_canonical(), private.exercises_fixed_household() from public, anon;
 
 alter table public.exercises enable row level security;
 alter table public.workout_templates enable row level security;
