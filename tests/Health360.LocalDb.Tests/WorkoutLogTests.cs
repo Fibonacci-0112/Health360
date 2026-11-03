@@ -376,6 +376,47 @@ public class WorkoutLogTests
     }
 
     [Fact]
+    public async Task A_later_set_synced_in_postgres_time_format_is_not_counted_as_earlier()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        await LogSessionAsync(t, clock, (95, "kg", 5, "working"));
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, null, "kg", clock);
+        var exercise = await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Squat, "kg", clock);
+        var first = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session)).Single().Sets.Single().Id;
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, first, new SetEntry(5, 100, "kg"), clock);
+        Assert.NotEmpty(await WorkoutLog.CompleteSetAsync(t.Db, Profile, first, clock));
+        var second = await WorkoutLog.AddSetAsync(t.Db, Profile, exercise, "kg", clock);
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, second, new SetEntry(5, 110, "kg"), clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, second, clock);
+        // As if the heavier set came back from the server: Postgres' text form, ten minutes after the first set. As text
+        // it sorts before the first set's "T…Z" time.
+        var firstAt = DateTimeOffset.Parse(await t.Db.Get<string>("SELECT completed_at FROM set_logs WHERE id = ?", [first]), System.Globalization.CultureInfo.InvariantCulture);
+        var laterAt = firstAt.AddMinutes(10).UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss'+00'", System.Globalization.CultureInfo.InvariantCulture);
+        await t.Db.Execute("UPDATE set_logs SET completed_at = ? WHERE id = ?", [laterAt, second]);
+
+        await WorkoutLog.ChangeSetAsync(t.Db, Profile, first, e => e with { Rpe = 8 }, clock);
+
+        Assert.Equal(3, (await WorkoutLog.RecordsAsync(t.Db, Profile)).Count(r => r.SetLogId == first));
+    }
+
+    [Fact]
+    public async Task A_set_of_an_exercise_not_yet_synced_cannot_be_ticked_off()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, null, "kg", clock);
+        await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Squat, "kg", clock);
+        var set = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session)).Single().Sets.Single().Id;
+        // The exercise's row goes away locally (a custom exercise another device deleted, or a sync not yet done).
+        await t.Db.Execute("DELETE FROM exercises WHERE id = ?", [Squat]);
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutLog.CompleteSetAsync(t.Db, Profile, set, clock));
+
+        Assert.Contains("hasn't synced", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Only_one_session_is_in_progress()
     {
         await using var t = await OpenAsync();

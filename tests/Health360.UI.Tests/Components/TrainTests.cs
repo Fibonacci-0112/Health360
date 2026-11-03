@@ -248,6 +248,21 @@ public sealed class TrainTests : AppTestContext
     }
 
     [Fact]
+    public async Task Clearing_a_field_saves_without_leaving_it()
+    {
+        var cut = await TrainAsync();
+        await ClickAsync(cut, "#start-empty");
+        await AddSquatAsync(cut);
+        var session = (await WorkoutLog.ActiveSessionAsync(App.Database.Db, ProfileId))!;
+        await ChangeAsync(cut, "input[aria-label='Barbell Squat set 1 RPE']", "8");
+        await WaitForSetAsync(session.Id, s => s.Rpe == 8);
+
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 RPE']", "");
+
+        await WaitForSetAsync(session.Id, s => s.Rpe is null);
+    }
+
+    [Fact]
     public async Task A_set_without_reps_cannot_be_ticked_off()
     {
         var cut = await TrainAsync();

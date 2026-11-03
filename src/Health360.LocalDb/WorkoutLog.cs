@@ -579,7 +579,8 @@ public static class WorkoutLog
                 "SELECT s.set_type AS SetType, s.reps AS Reps, s.weight_kg AS WeightKg FROM set_logs s " +
                 "JOIN session_exercises se ON se.id = s.session_exercise_id " +
                 "WHERE s.profile_id = ? AND se.exercise_id = ? AND s.id <> ? AND s.completed_at IS NOT NULL AND s.set_type <> 'warmup' " +
-                "AND s.weight_kg > 0 AND s.reps >= 1 AND (s.completed_at < ? OR (s.completed_at = ? AND s.id < ?))",
+                $"AND s.weight_kg > 0 AND s.reps >= 1 AND ({Instant("s.completed_at")} < (SELECT {Instant("t")} FROM (SELECT ? AS t)) " +
+                $"OR ({Instant("s.completed_at")} = (SELECT {Instant("t")} FROM (SELECT ? AS t)) AND s.id < ?))",
                 [profileId, set.ExerciseId, setId, completedAt, completedAt, setId]).ConfigureAwait(false);
             // Earlier estimates are recomputed with this formula, so a record never comes from comparing two formulas.
             var lifted = earlier.Select(s => new LiftedSet(s.WeightKg!.Value, (int)s.Reps!.Value, E1rmFor("working", true, s.WeightKg, (int)s.Reps!.Value, formula)))
@@ -614,6 +615,12 @@ public static class WorkoutLog
     /// </summary>
     private static void RequireMeasure(string? trackingType, long? reps, double? durationSeconds, double? distance)
     {
+        if (trackingType is null)
+        {
+            // The exercise hasn't synced to this device, so what the set needs is unknown: don't let it through blank.
+            throw new InvalidOperationException("This exercise hasn't synced to this device yet. Try again once it has.");
+        }
+
         if (trackingType is "weight_reps" or "reps" && reps is null)
         {
             throw new InvalidOperationException("Enter the reps first.");
@@ -629,6 +636,14 @@ public static class WorkoutLog
             throw new InvalidOperationException("Enter the distance or the time first.");
         }
     }
+
+    /// <summary>
+    /// SQL for a timestamp as an instant (Julian day), so times written here (<c>2026-11-03T18:10:00.000Z</c>) and synced
+    /// from Postgres (<c>2026-11-03 18:20:00+00</c>) compare by when they happened, not as text. SQLite reads both once an
+    /// hour-only offset is given its minutes.
+    /// </summary>
+    private static string Instant(string expression) =>
+        $"julianday(CASE WHEN {expression} GLOB '*[+-][0-9][0-9]' THEN {expression} || ':00' ELSE {expression} END)";
 
     private static async Task<string> AddExerciseAsync(
         ITransaction tx, string profileId, string sessionId, string exerciseId, int position, SetScheme? scheme, string loadUnit, TimeProvider clock)

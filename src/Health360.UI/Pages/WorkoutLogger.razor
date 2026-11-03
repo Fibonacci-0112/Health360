@@ -335,14 +335,15 @@
 
     /// <summary>
     /// While typing: the field keeps the text exactly as typed, and each value that is complete and valid is saved at
-    /// once, so killing the app mid-edit keeps the latest one. Blank or half-typed text ("1:", "8.") waits; nothing is
+    /// once, so killing the app mid-edit keeps the latest one. Clearing a field saves too (a required one stays as it is
+    /// until it's filled again). Half-typed text ("1:") waits; nothing is
     /// reported until focus leaves the field.
     /// </summary>
     private Task TypeAsync(LoggedSet set, string field, string? text)
     {
         var key = FieldKey(set, field);
         drafts[key] = text;
-        if (string.IsNullOrWhiteSpace(text) || Change(set, field, text, out _) is not { } change)
+        if (Change(set, field, text, out _) is not { } change)
         {
             return Task.CompletedTask;
         }
