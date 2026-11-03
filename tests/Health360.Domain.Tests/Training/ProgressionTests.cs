@@ -244,4 +244,15 @@ public class ProgressionTests
             return sessions.Count == 0 ? next is null : next is not null && next.Load == load && next.ConsecutiveFailures == failures;
         });
     }
+
+    [Fact]
+    public void Replay_skips_sessions_done_without_load_rather_than_counting_misses()
+    {
+        // Three unloaded sessions after a start at 100 would be three misses and a deload if they counted.
+        var unloaded = History(Sets(0, 5, 5), Sets(0, 5, 5), Sets(0, 5, 5));
+
+        Assert.Null(Progression.Replay(ProgressionKind.LinearProgression, 5, 5, 2.5, 100, unloaded));
+        var (next, last) = Progression.ReplayCounted(ProgressionKind.LinearProgression, 5, 5, 2.5, 100, [Sets(100, 5, 4), .. unloaded]);
+        Assert.Equal((new ProgressionSuggestion(100, 5, 5, ProgressionAction.Repeat, 1), 0), (next, last));
+    }
 }

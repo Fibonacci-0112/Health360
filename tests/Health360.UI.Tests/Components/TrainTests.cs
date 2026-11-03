@@ -474,4 +474,23 @@ public sealed class TrainTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Equal(WorkoutPlans.HiddenExercises, cut.Find("#template-incomplete").TextContent), Wait);
         Assert.True(cut.Find("#save-template").HasAttribute("disabled"));
     }
+
+    [Fact]
+    public async Task Saving_an_unchanged_row_keeps_its_stored_load_and_unit()
+    {
+        string template = "";
+        var cut = await TrainAsync(seed: async () => template = await WorkoutPlans.CreateTemplateAsync(App.Database.Db, ProfileId, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(3, 5, 5, 225, "lb"), null, new ProgressionRule("linear", 2.5, "kg"))], App.Clock));
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Edit Legs']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Edit Legs']");
+        cut.WaitForAssertion(() => Assert.Equal("kg", cut.Find("#unit-0").GetAttribute("value")), Wait);
+
+        // The load is shown in the rule's unit; renaming alone must not rewrite it as a converted, rounded kg value.
+        await TypeAsync(cut, "#template-name", "Lower");
+        await SubmitAsync(cut, "#save-template");
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Edit Lower']"), Wait);
+
+        var row = Assert.Single(await WorkoutPlans.TemplateExercisesAsync(App.Database.Db, ProfileId, template));
+        Assert.Equal(new SetScheme(3, 5, 5, 225, "lb"), row.Scheme);
+    }
 }

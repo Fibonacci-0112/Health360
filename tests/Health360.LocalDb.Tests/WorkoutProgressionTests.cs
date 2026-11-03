@@ -255,21 +255,57 @@ public class WorkoutProgressionTests
     }
 
     [Fact]
-    public async Task Only_the_templates_latest_sessions_with_the_exercise_are_replayed()
+    public async Task Every_finished_session_is_replayed_so_old_ones_still_shape_the_load()
     {
         await using var t = await OpenAsync();
         var clock = new SteppingClock();
         var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
-            [new TemplateExerciseInput(Squat, new SetScheme(1, 5, 5, 100, "kg"), null, new ProgressionRule("linear", 2.5, "kg", 0))], clock);
+            [new TemplateExerciseInput(Squat, new SetScheme(1, 5, 5, 100, "kg"), null, LinearKg)], clock);
 
-        // 101 successful sessions, each judged at its own (heavier) load: only the latest 100 move the load.
-        for (var i = 0; i <= WorkoutProgression.SessionsReplayed; i++)
+        // 101 sessions all at 100 × 5: after the first, a cycle of miss, miss, deload to 92.5, then up again. The full
+        // history ends on an increase to 102.5; replaying only the latest 100 from the starting load would end on a deload.
+        for (var i = 0; i < 101; i++)
         {
-            await LogAsync(t, clock, template, [5]);
+            await LogAsync(t, clock, template, [5], [(100, "kg")]);
         }
 
         var (_, suggestion) = await StartAsync(t, clock, template);
-        Assert.Equal(100 + (2.5 * (WorkoutProgression.SessionsReplayed + 1)), suggestion!.Load);
+        Assert.Equal((102.5, ProgressionAction.Increase), (suggestion!.Load, suggestion.Action));
+    }
+
+    [Fact]
+    public async Task A_linear_rule_plans_the_top_of_the_range_before_there_is_a_load_to_suggest()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(2, 8, 12), null, LinearKg)], clock);
+
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
+
+        Assert.All((await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[0].Sets, s => Assert.Equal((12, null), (s.Reps!.Value, s.Weight)));
+    }
+
+    [Fact]
+    public async Task An_edit_is_refused_when_the_template_gained_a_row_after_it_was_loaded()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs", [new TemplateExerciseInput(Squat, new SetScheme(3, 5, 5))], clock);
+        var loaded = (await WorkoutPlans.TemplateExercisesAsync(t.Db, Profile, template)).Select(e => e.Id).ToList();
+
+        // Another device adds bench meanwhile.
+        await t.Db.Execute(
+            "INSERT INTO template_exercises (id, profile_id, template_id, exercise_id, position, set_scheme, created_at, updated_at) " +
+            "VALUES ('70000000-0000-7000-8000-000000000002', ?, ?, ?, 1, '{}', '2026-11-03', '2026-11-03')", [Profile, template, Bench]);
+        await Uploads.UploadPendingAsync(t.Db, new FakeWriter(), clock, cancellationToken: Ct);
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutPlans.UpdateTemplateAsync(t.Db, Profile, template, "Lower",
+            [new TemplateExerciseInput(Squat, new SetScheme(3, 5, 5), null, null, loaded[0])], clock, loaded));
+
+        Assert.Equal(WorkoutPlans.TemplateChanged, refused.Message);
+        Assert.Equal(0, await Uploads.PendingUploadCountAsync(t.Db));
+        Assert.Equal(2, (await WorkoutPlans.TemplateExercisesAsync(t.Db, Profile, template)).Length);
     }
 
     [Fact]

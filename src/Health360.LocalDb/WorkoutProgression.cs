@@ -35,9 +35,6 @@ public sealed record ExerciseSuggestion(
 /// </summary>
 public static class WorkoutProgression
 {
-    /// <summary>How many of the template's latest sessions with the exercise are replayed; older ones no longer change the load.</summary>
-    public const int SessionsReplayed = 100;
-
     /// <summary>
     /// The suggestion for each exercise of a session in progress that was started from a template, by
     /// <c>session_exercises</c> id. Each session exercise is matched to the template's exercises in order by
@@ -116,8 +113,9 @@ public static class WorkoutProgression
             return null;
         }
 
-        // The latest sessions of the template with this exercise, then every entry of the exercise in them with its
-        // counted sets (none, through the outer join, for an entry with only warm-ups or unticked sets).
+        // The template's finished sessions with this exercise, then every entry of the exercise in them with its
+        // counted sets (none, through the outer join, for an entry with only warm-ups or unticked sets). All of them:
+        // the replay starts from the template's starting load, so leaving out older sessions would change the result.
         var started = WorkoutLog.Instant("w.started_at");
         var rows = await tx.GetAll<HistorySet>(
             "SELECT ws.id AS SessionId, se.id AS SessionExerciseId, s.weight AS Weight, s.weight_unit AS WeightUnit, s.reps AS Reps " +
@@ -126,8 +124,7 @@ public static class WorkoutProgression
             "AND s.set_type = 'working' AND s.weight IS NOT NULL AND s.weight_unit IS NOT NULL AND s.reps IS NOT NULL " +
             "WHERE ws.id IN (SELECT w.id FROM workout_sessions w WHERE w.profile_id = ? AND w.template_id = ? AND w.ended_at IS NOT NULL " +
             $"AND {started} < {WorkoutLog.Instant("?")} " +
-            "AND EXISTS (SELECT 1 FROM session_exercises x WHERE x.session_id = w.id AND x.exercise_id = ?) " +
-            $"ORDER BY {started} DESC, w.id DESC LIMIT {SessionsReplayed}) " +
+            "AND EXISTS (SELECT 1 FROM session_exercises x WHERE x.session_id = w.id AND x.exercise_id = ?)) " +
             $"ORDER BY {WorkoutLog.Instant("ws.started_at")}, ws.id, se.position, se.id, s.position, s.id",
             // Instant() repeats its expression three times, so the bound comes three times.
             [exercise.ExerciseId, profileId, templateId, before, before, before, exercise.ExerciseId]).ConfigureAwait(false);
@@ -156,17 +153,16 @@ public static class WorkoutProgression
             }
         }
 
-        var replayed = sessions.Where(s => s.Count > 0).ToList();
         var kind = rule.Kind == "linear" ? ProgressionKind.LinearProgression : ProgressionKind.DoubleProgression;
         double? start = scheme.Load is { } l && scheme.LoadUnit is { } u ? UnitCodes.Convert(l, u, rule.IncrementUnit) : null;
-        var next = Progression.Replay(
-            kind, scheme.MinReps, scheme.MaxReps, rule.Increment, start, [.. replayed], new DeloadPolicy(rule.DeloadAfter));
+        var (next, lastCounted) = Progression.ReplayCounted(
+            kind, scheme.MinReps, scheme.MaxReps, rule.Increment, start, [.. sessions], new DeloadPolicy(rule.DeloadAfter));
         var minReps = kind == ProgressionKind.LinearProgression ? scheme.MaxReps : scheme.MinReps;
         if (next is not null)
         {
             return new ExerciseSuggestion(
                 next.Load, rule.IncrementUnit, scheme.Sets, next.MinReps, next.MaxReps, next.Action, next.ConsecutiveFailures, rule,
-                [.. replayed[^1].Select(s => s.Reps)]);
+                [.. sessions[lastCounted].Select(s => s.Reps)]);
         }
 
         return start is > 0 ? new ExerciseSuggestion(start.Value, rule.IncrementUnit, scheme.Sets, minReps, scheme.MaxReps, null, 0, rule, []) : null;

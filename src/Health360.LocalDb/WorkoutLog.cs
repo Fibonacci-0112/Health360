@@ -230,7 +230,10 @@ public static class WorkoutLog
             {
                 var suggestion = await WorkoutProgression.SuggestAsync(
                     tx, profileId, templateId!, exercises[i], WorkoutProgression.Occurrence(exercises, i), now).ConfigureAwait(false);
-                await AddExerciseAsync(tx, profileId, id, exercises[i].ExerciseId, i, exercises[i].Scheme, suggestion, loadUnit, clock)
+
+                // Linear progression aims for the top of the range, also before there is a load to suggest.
+                var scheme = exercises[i].Scheme is { } s && exercises[i].Rule?.Kind == "linear" ? s with { MinReps = s.MaxReps } : exercises[i].Scheme;
+                await AddExerciseAsync(tx, profileId, id, exercises[i].ExerciseId, i, scheme, suggestion, loadUnit, clock)
                     .ConfigureAwait(false);
             }
 

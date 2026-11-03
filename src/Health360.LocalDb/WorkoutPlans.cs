@@ -151,7 +151,8 @@ public static class WorkoutPlans
     /// Renames a template and replaces its exercises with <paramref name="exercises"/>, in that order, in one
     /// transaction. An exercise with an <see cref="TemplateExerciseInput.Id"/> keeps its row (written only if
     /// something changed), one without is added, and the template's other rows are deleted. Past sessions keep what
-    /// was logged; only the next start uses the new plan.
+    /// was logged; only the next start uses the new plan. <paramref name="loadedIds"/>, when given, are the rows the
+    /// edit started from: a row not among them arrived since and was never shown, so the edit is refused.
     /// </summary>
     /// <exception cref="ArgumentException">The name or a rest time is out of range, or an id appears twice.</exception>
     /// <exception cref="ValidationException">A set scheme or progression rule fails its validator.</exception>
@@ -166,7 +167,8 @@ public static class WorkoutPlans
         string templateId,
         string name,
         IReadOnlyList<TemplateExerciseInput> exercises,
-        TimeProvider clock)
+        TimeProvider clock,
+        IReadOnlyCollection<string>? loadedIds = null)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentException.ThrowIfNullOrEmpty(profileId);
@@ -201,6 +203,12 @@ public static class WorkoutPlans
             if (existing.Values.Any(e => e.OnDevice == 0 && !kept.Contains(e.Id, StringComparer.Ordinal)))
             {
                 throw new InvalidOperationException(HiddenExercises);
+            }
+
+            // A row added since the editor loaded (synced from another device) was never shown, so it isn't removed.
+            if (loadedIds is not null && existing.Keys.Any(id => !loadedIds.Contains(id, StringComparer.Ordinal)))
+            {
+                throw new InvalidOperationException(TemplateChanged);
             }
 
             if (template.Name != name.Trim())
@@ -267,6 +275,10 @@ public static class WorkoutPlans
             await tx.Execute("DELETE FROM workout_templates WHERE id = ? AND profile_id = ?", [templateId, profileId]).ConfigureAwait(false);
         }).ConfigureAwait(false);
     }
+
+    /// <summary>Why an edit was refused because the template gained an exercise after it was loaded.</summary>
+    public const string TemplateChanged =
+        "This template was changed on another device while you edited it. Reopen it to see the current plan, then make your changes again.";
 
     /// <summary>Why a template can't be edited until it has fully synced.</summary>
     public const string HiddenExercises =

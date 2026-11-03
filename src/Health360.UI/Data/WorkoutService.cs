@@ -40,8 +40,9 @@ public sealed class WorkoutService(PowerSyncDatabase db, ProfileService profiles
     public Task<string> CreateTemplateAsync(string name, IReadOnlyList<TemplateExerciseInput> exercises) =>
         WorkoutPlans.CreateTemplateAsync(db, RequireProfile(), name, exercises, clock);
 
-    public Task UpdateTemplateAsync(string templateId, string name, IReadOnlyList<TemplateExerciseInput> exercises) =>
-        WorkoutPlans.UpdateTemplateAsync(db, RequireProfile(), templateId, name, exercises, clock);
+    public Task UpdateTemplateAsync(
+        string templateId, string name, IReadOnlyList<TemplateExerciseInput> exercises, IReadOnlyCollection<string>? loadedIds = null) =>
+        WorkoutPlans.UpdateTemplateAsync(db, RequireProfile(), templateId, name, exercises, clock, loadedIds);
 
     public Task DeleteTemplateAsync(string templateId) => WorkoutPlans.DeleteTemplateAsync(db, RequireProfile(), templateId, clock);
 

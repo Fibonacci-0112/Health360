@@ -195,7 +195,9 @@
     private string? query;
     private ExerciseRow[] results = [];
     private string? loadedFor;
-    private int searches;
+
+    /// <summary>The template's rows as loaded: saving refuses if the template gained a row since (on another device).</summary>
+    private List<string> loadedIds = [];
 
     /// <summary>One exercise of the template as the form edits it: text as typed, parsed on save.</summary>
     private sealed class Row
@@ -229,13 +231,24 @@
         public string Increment { get; set; } = "";
 
         public string DeloadAfter { get; set; } = "3";
+
+        /// <summary>
+        /// The stored starting load and increment and the text first shown for them: a field left as shown saves the
+        /// stored value, in its own unit, rather than the text parsed back.
+        /// </summary>
+        public (double Load, string Unit, string Shown)? StoredLoad { get; init; }
+
+        public (double Increment, string Shown)? StoredIncrement { get; init; }
+
+        public string ShownUnit { get; init; } = "";
     }
 
     protected override void OnInitialized() => Profiles.Changed += ProfileChanged;
 
+    // It also fires when the profile row is refreshed or synced; LoadAsync reloads only for another profile, so
+    // unsaved edits survive that.
     private void ProfileChanged() => _ = InvokeAsync(async () =>
     {
-        loadedFor = null;
         await LoadAsync();
         StateHasChanged();
     });
@@ -252,7 +265,7 @@
         }
 
         loadedFor = key;
-        (loaded, missing, incomplete, error, name, rows, query, results, confirmingDelete) = (false, false, false, null, "", [], null, [], false);
+        (loaded, missing, incomplete, error, name, rows, loadedIds, query, results, confirmingDelete) = (false, false, false, null, "", [], [], null, [], false);
         if (Workouts.ProfileId is null)
         {
             return;
@@ -272,6 +285,7 @@
                 missing = template is null;
                 name = template?.Name ?? "";
                 rows = [.. exercises.Select(FromRow)];
+                loadedIds = [.. exercises.Select(e => e.Id)];
 
                 // The count includes rows whose exercise hasn't synced; the list leaves them out, so saving would drop them.
                 incomplete = template is not null && template.ExerciseCount > exercises.Length;
@@ -292,6 +306,7 @@
         var scheme = e.Scheme;
         var rule = e.Rule;
         var unit = rule?.IncrementUnit ?? scheme?.LoadUnit ?? Workouts.LoadUnit;
+        var shownLoad = scheme?.Load is { } stored && scheme.LoadUnit is { } storedUnit ? Number(UnitCodes.Convert(stored, storedUnit, unit) ?? stored) : null;
         return new Row
         {
             Id = e.Id,
@@ -303,10 +318,13 @@
             MaxReps = Text(scheme?.MaxReps ?? 12),
             Rest = e.RestSeconds is { } rest ? Text(rest) : "",
             // A starting load in another unit than the rule's is shown in the rule's, since one unit serves both.
-            Load = scheme?.Load is { } load && scheme.LoadUnit is { } from ? Number(UnitCodes.Convert(load, from, unit) ?? load) : "",
+            Load = shownLoad ?? "",
             Unit = unit,
+            ShownUnit = unit,
+            StoredLoad = scheme?.Load is { } load && scheme.LoadUnit is { } from ? (load, from, shownLoad!) : null,
             Kind = rule?.Kind ?? NoRule,
             Increment = rule is null ? DefaultIncrement(unit) : Number(rule.Increment),
+            StoredIncrement = rule is null ? null : (rule.Increment, Number(rule.Increment)),
             DeloadAfter = Text(rule?.DeloadAfter ?? 3),
         };
     }
@@ -341,12 +359,15 @@
 
     private async Task SearchAsync(ChangeEventArgs e)
     {
-        query = e.Value as string;
-        var mine = ++searches;
+        var typed = e.Value as string;
+        var loadedAs = loadedFor;
+        query = typed;
         try
         {
-            var found = string.IsNullOrWhiteSpace(query) ? [] : await Workouts.SearchExercisesAsync(query);
-            if (mine == searches)
+            var found = string.IsNullOrWhiteSpace(typed) ? [] : await Workouts.SearchExercisesAsync(typed);
+            // A slower search for earlier text, or one started before a profile change, must not replace what's
+            // shown for the text in the box now.
+            if (query == typed && loadedFor == loadedAs)
             {
                 results = found;
             }
@@ -387,10 +408,16 @@
             }
 
             double? load = null;
+            var loadUnit = row.Unit;
             ProgressionRule? rule = null;
             if (row.TracksLoad)
             {
-                if (!string.IsNullOrWhiteSpace(row.Load))
+                var unitKept = row.Unit == row.ShownUnit;
+                if (unitKept && row.StoredLoad is { } stored && row.Load == stored.Shown)
+                {
+                    (load, loadUnit) = (stored.Load, stored.Unit);
+                }
+                else if (!string.IsNullOrWhiteSpace(row.Load))
                 {
                     load = NumberText.Parse(row.Load);
                     if (load is null)
@@ -401,7 +428,10 @@
 
                 if (row.Kind != NoRule)
                 {
-                    if (NumberText.Parse(row.Increment) is not { } increment)
+                    var increment = unitKept && row.StoredIncrement is { } kept && row.Increment == kept.Shown
+                        ? kept.Increment
+                        : NumberText.Parse(row.Increment);
+                    if (increment is null)
                     {
                         return (null, $"{row.Name}: enter the increment as a number.");
                     }
@@ -411,11 +441,11 @@
                         return (null, $"{row.Name}: enter the misses before a deload as a whole number (0 for never).");
                     }
 
-                    rule = new ProgressionRule(row.Kind, increment, row.Unit, deload);
+                    rule = new ProgressionRule(row.Kind, increment.Value, row.Unit, deload);
                 }
             }
 
-            var scheme = new SetScheme(sets, min, max, load, load is null ? null : row.Unit);
+            var scheme = new SetScheme(sets, min, max, load, load is null ? null : loadUnit);
             exercises.Add(new TemplateExerciseInput(row.ExerciseId, scheme, rest, rule, row.Id));
         }
 
@@ -449,7 +479,7 @@
         {
             if (TemplateId is { } id)
             {
-                await Workouts.UpdateTemplateAsync(id, name, exercises);
+                await Workouts.UpdateTemplateAsync(id, name, exercises, loadedIds);
             }
             else
             {
@@ -518,7 +548,8 @@
 
     private static string Text(long value) => value.ToString(CultureInfo.InvariantCulture);
 
-    private static string Number(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+    // The shortest text that reads back as the same double, so a stored value isn't rounded on its way to the form.
+    private static string Number(double value) => value.ToString(CultureInfo.InvariantCulture);
 
     public void Dispose() => Profiles.Changed -= ProfileChanged;
 }

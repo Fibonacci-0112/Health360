@@ -88,10 +88,25 @@ public static class Progression
     /// the miss streak comes from the history itself and nothing needs storing. Each session is judged against the load
     /// the previous one suggested; when nothing was suggested yet (no <paramref name="startLoad"/>), or every work set
     /// was heavier than suggested, it is judged against its lightest work set, so a load chosen by hand is built on.
-    /// Linear progression targets <paramref name="maxReps"/>. Sessions without work sets, or at a load of 0, are skipped.
+    /// Linear progression targets <paramref name="maxReps"/>. Sessions without work sets, or with every set at a load
+    /// of 0, are skipped.
     /// Null when no session counts: the caller plans the start load, if any.
     /// </summary>
     public static ProgressionSuggestion? Replay(
+        ProgressionKind kind,
+        int minReps,
+        int maxReps,
+        double increment,
+        double? startLoad,
+        IReadOnlyList<IReadOnlyList<WorkSet>> sessions,
+        DeloadPolicy? deload = null) =>
+        ReplayCounted(kind, minReps, maxReps, increment, startLoad, sessions, deload).Next;
+
+    /// <summary>
+    /// <see cref="Replay"/>, with the index in <paramref name="sessions"/> of the last session it counted (-1 when
+    /// none), so a caller can plan from that session's reps.
+    /// </summary>
+    public static (ProgressionSuggestion? Next, int LastCounted) ReplayCounted(
         ProgressionKind kind,
         int minReps,
         int maxReps,
@@ -116,9 +131,13 @@ public static class Progression
         double? prescribed = startLoad is > 0 ? startLoad : null;
         var failures = 0;
         ProgressionSuggestion? last = null;
-        foreach (var sets in sessions)
+        var lastCounted = -1;
+        for (var i = 0; i < sessions.Count; i++)
         {
-            if (sets is null || sets.Count == 0)
+            var sets = sessions[i];
+
+            // A session done entirely without load (a body-weight day, say) says nothing about the load: skipped, not a miss.
+            if (sets is null || sets.Count == 0 || sets.All(s => !(s.Load > 0) || Quantity.CanonicalEquals(s.Load, 0)))
             {
                 continue;
             }
@@ -131,11 +150,12 @@ public static class Progression
             }
 
             last = Next(load, min, maxReps, sets, increment, failures, deload);
+            lastCounted = i;
             prescribed = last.Load;
             failures = last.ConsecutiveFailures;
         }
 
-        return last;
+        return (last, lastCounted);
     }
 
     private static ProgressionSuggestion Next(
