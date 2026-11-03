@@ -80,12 +80,27 @@ public class ProgressionTests
     }
 
     [Fact]
-    public void Within_the_range_keeps_the_miss_count()
+    public void A_session_within_the_range_ends_the_miss_streak()
     {
-        var next = Progression.DoubleProgression(60, 8, 12, Sets(60, 10, 10), 2.5, 2);
+        var inRange = Progression.DoubleProgression(60, 8, 12, Sets(60, 10, 10), 2.5, 2);
+        Assert.Equal(new ProgressionSuggestion(60, 8, 12, ProgressionAction.Repeat, 0), inRange);
 
-        Assert.Equal(new ProgressionSuggestion(60, 8, 12, ProgressionAction.Repeat, 2), next);
+        // Two misses, a session in range, then one more miss: not three in a row, so no deload.
+        var miss = Progression.DoubleProgression(60, 8, 12, Sets(60, 7), 2.5, inRange.ConsecutiveFailures);
+        Assert.Equal(new ProgressionSuggestion(60, 8, 12, ProgressionAction.Repeat, 1), miss);
     }
+
+    [Fact]
+    public void An_off_grid_load_moves_by_whole_increments()
+    {
+        Assert.Equal(103.5, Progression.LinearProgression(101, 5, Sets(101, 5), 2.5, 0).Load);
+        Assert.Equal(91, Progression.LinearProgression(101, 5, Sets(101, 4), 2.5, 2).Load);
+    }
+
+    [Fact]
+    public void A_load_too_large_to_represent_is_rejected() =>
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => Progression.LinearProgression(double.MaxValue, 5, Sets(double.MaxValue, 5), double.MaxValue, 0));
 
     [Fact]
     public void Invalid_inputs_are_rejected()

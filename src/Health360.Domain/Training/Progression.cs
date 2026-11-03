@@ -19,7 +19,7 @@ public enum ProgressionAction
 
 /// <summary>
 /// The next session's prescription. <see cref="ConsecutiveFailures"/> is stored with the exercise and passed
-/// back next time; it resets to 0 on an increase or a deload.
+/// back next time; it resets to 0 on any session that isn't a miss, and on a deload.
 /// </summary>
 public sealed record ProgressionSuggestion(
     double Load,
@@ -89,21 +89,21 @@ public static class Progression
 
         if (sets.All(s => AtLoad(s) && s.Reps >= maxReps))
         {
-            return new(load + increment, minReps, maxReps, ProgressionAction.Increase, 0);
+            return new(Finite(load + increment), minReps, maxReps, ProgressionAction.Increase, 0);
         }
 
         var missed = sets.Any(s => !AtLoad(s) || s.Reps < minReps);
         if (!missed)
         {
-            // Within the range but not yet at the top (double progression only): no failure counted.
-            return new(load, minReps, maxReps, ProgressionAction.Repeat, consecutiveFailures);
+            // Within the range but not yet at the top (double progression only): not a miss, so the streak ends.
+            return new(load, minReps, maxReps, ProgressionAction.Repeat, 0);
         }
 
         var failures = consecutiveFailures + 1;
         if (deload.FailuresBeforeDeload > 0 && failures >= deload.FailuresBeforeDeload)
         {
             var steps = Math.Max(1, Math.Round(load * deload.Fraction / increment, MidpointRounding.AwayFromZero));
-            var reduced = load - (steps * increment);
+            var reduced = Finite(load - (steps * increment));
             if (reduced > 0 && !Quantity.CanonicalEquals(reduced, 0))
             {
                 return new(reduced, minReps, maxReps, ProgressionAction.Deload, 0);
@@ -160,6 +160,9 @@ public static class Progression
             throw new ArgumentOutOfRangeException(nameof(deload), deload, "Fraction must be in (0, 1)");
         }
     }
+
+    private static double Finite(double load) =>
+        double.IsFinite(load) ? load : throw new ArgumentOutOfRangeException(nameof(load), load, "Load out of range");
 
     private static void Positive(double value, string name)
     {

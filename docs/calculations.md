@@ -274,9 +274,10 @@ Golden values: 100 × 5 → Epley 116.667, Brzycki 112.5; 225 × 8 → Epley 285
 - **Linear** (target reps *r*): if every work set reached *r* reps at the prescribed load or heavier, the next load is load + increment. Otherwise the session is a miss.
 - **Double** (rep range *min*–*max*): if every set reached *max* reps at the prescribed load or heavier, the load goes up by the increment and the target restarts at *min*. If any set fell below *min* or was lighter than prescribed, the session is a miss. Otherwise the load stays and nothing is counted.
 - **Misses and deloads** (`DeloadPolicy`, default 3 misses and 10%): misses in a row are counted and stored by the caller. On the third, the load drops by 10% of the load in whole increments, rounded half away from zero and at least one increment, and the count resets. A deload that would reach 0 is skipped. Setting the miss count to 0 turns deloads off.
-- Suggestions stay on the increment grid; rounding to loads the plate inventory can build is the plate calculator's job (not yet built).
+- Suggestions move from the prescribed load in whole increments, so a load on the increment grid stays on it; an off-grid load (101 with +2.5) keeps its offset (103.5). Rounding to loads the plate inventory can build is the plate calculator's job (not yet built).
+- A session within the double-progression range ends a miss streak, so only misses in a row count toward a deload.
 
-Golden values (increment 2.5): linear 100 kg, 3 × 5 done → 102.5; third miss at 100 → 90; third miss at 20 → 17.5. With increment 5, third miss at 225 → 200. Double 8–12 at 60: 10/9/8 → 60, 12/12/11 → 60, 12/12/12 → 62.5 (target 8), 9/8/7 → 62.5 with one miss.
+Golden values (increment 2.5): linear 100 kg, 3 × 5 done → 102.5; third miss at 100 → 90; third miss at 20 → 17.5. With increment 5, third miss at 225 → 200. Double 8–12 at 60: 10/9/8 → 60 (streak reset to 0), 12/12/11 → 60, 12/12/12 → 62.5 (target 8), 9/8/7 → 62.5 with one miss.
 
 ## What the 1.1 exit criterion proves
 
