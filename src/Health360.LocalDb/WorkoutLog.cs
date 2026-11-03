@@ -231,9 +231,11 @@ public static class WorkoutLog
                 var suggestion = await WorkoutProgression.SuggestAsync(
                     tx, profileId, templateId!, exercises[i], WorkoutProgression.Occurrence(exercises, i), now).ConfigureAwait(false);
 
-                // Linear progression aims for the top of the range, also before there is a load to suggest.
+                // Linear progression aims for the top of the range, also before there is a load to suggest. A row with a
+                // rule follows its own scheme then, not sets copied from an unrelated workout of the exercise.
                 var scheme = exercises[i].Scheme is { } s && exercises[i].Rule?.Kind == "linear" ? s with { MinReps = s.MaxReps } : exercises[i].Scheme;
-                await AddExerciseAsync(tx, profileId, id, exercises[i].ExerciseId, i, scheme, suggestion, loadUnit, clock)
+                var ruled = exercises[i].Rule is not null && scheme is not null && exercises[i].TrackingType == "weight_reps";
+                await AddExerciseAsync(tx, profileId, id, exercises[i].ExerciseId, i, scheme, suggestion, loadUnit, clock, ruled)
                     .ConfigureAwait(false);
             }
 
@@ -656,7 +658,8 @@ public static class WorkoutLog
         SetScheme? scheme,
         ExerciseSuggestion? suggestion,
         string loadUnit,
-        TimeProvider clock)
+        TimeProvider clock,
+        bool fromSchemeFirst = false)
     {
         var id = ExerciseLibrary.NewId(clock);
         var now = Timestamps.UtcNow(clock);
@@ -684,7 +687,7 @@ public static class WorkoutLog
                 Weight = suggestion.Load,
                 WeightUnit = suggestion.Unit,
             }))
-            : last.Length > 0
+            : last.Length > 0 && !fromSchemeFirst
             ? last
             : scheme is not null
                 ? Enumerable.Range(0, scheme.Sets).Select(_ => new SetValues

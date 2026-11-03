@@ -281,9 +281,21 @@ public class WorkoutProgressionTests
         var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs",
             [new TemplateExerciseInput(Squat, new SetScheme(2, 8, 12), null, LinearKg)], clock);
 
+        // A squat logged in a workout without the template, which the plan must not copy.
+        var other = await WorkoutLog.StartAsync(t.Db, Profile, null, "kg", clock);
+        var squat = await WorkoutLog.AddExerciseAsync(t.Db, Profile, other, Squat, "kg", clock);
+        var set = (await WorkoutLog.ExercisesAsync(t.Db, Profile, other))[0].Sets.Single();
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, set.Id, new SetEntry(3, 140, "kg"), clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, set.Id, clock);
+        Assert.NotNull(squat);
+        await WorkoutLog.FinishAsync(t.Db, Profile, other, clock);
+        clock.Advance(TimeSpan.FromDays(1));
+
         var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", clock);
 
-        Assert.All((await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[0].Sets, s => Assert.Equal((12, null), (s.Reps!.Value, s.Weight)));
+        var planned = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[0].Sets;
+        Assert.Equal(2, planned.Count);
+        Assert.All(planned, s => Assert.Equal((12, null), (s.Reps!.Value, s.Weight)));
     }
 
     [Fact]

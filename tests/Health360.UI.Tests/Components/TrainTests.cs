@@ -493,4 +493,22 @@ public sealed class TrainTests : AppTestContext
         var row = Assert.Single(await WorkoutPlans.TemplateExercisesAsync(App.Database.Db, ProfileId, template));
         Assert.Equal(new SetScheme(3, 5, 5, 225, "lb"), row.Scheme);
     }
+
+    [Fact]
+    public async Task A_small_increment_shows_as_a_plain_number_and_saves_after_a_unit_change()
+    {
+        string template = "";
+        var cut = await TrainAsync(seed: async () => template = await WorkoutPlans.CreateTemplateAsync(App.Database.Db, ProfileId, "Legs",
+            [new TemplateExerciseInput(Squat, new SetScheme(3, 5, 5), null, new ProgressionRule("linear", 0.000001, "kg"))], App.Clock));
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Edit Legs']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Edit Legs']");
+        cut.WaitForAssertion(() => Assert.Equal("0.000001", cut.Find("#inc-0").GetAttribute("value")), Wait);
+
+        await ChangeAsync(cut, "#unit-0", "lb");
+        await SubmitAsync(cut, "#save-template");
+
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Edit Legs']"), Wait);
+        var row = Assert.Single(await WorkoutPlans.TemplateExercisesAsync(App.Database.Db, ProfileId, template));
+        Assert.Equal(new ProgressionRule("linear", 0.000001, "lb"), row.Rule);
+    }
 }
