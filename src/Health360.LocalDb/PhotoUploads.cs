@@ -32,7 +32,7 @@ public sealed record PhotoUploadReport(int Uploaded, int Failed, bool Stopped, i
 /// stops the pass and leaves everything for the next one.
 /// </para>
 /// </summary>
-public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, IPhotoStorage storage, TimeProvider clock) : IDisposable
+public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, IPhotoStorage storage, TimeProvider clock) : IDisposable, IAsyncDisposable
 {
     public const string Table = "photo_uploads";
 
@@ -53,6 +53,7 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
     private CancellationTokenSource? running;
     private int started;
     private int disposed;
+    private Task? worker;
 
     // Changes each time a clear begins, so an add that was waiting for the lock across a clear is refused.
     private int generation;
@@ -574,7 +575,7 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         if (Interlocked.Exchange(ref started, 1) == 0)
         {
             var stopping = stop.Token;
-            _ = Task.Run(() => RunAsync(stopping), CancellationToken.None);
+            worker = Task.Run(() => RunAsync(stopping), CancellationToken.None);
         }
     }
 
@@ -586,6 +587,32 @@ public sealed class PhotoUploader(PowerSyncDatabase db, IPhotoFileStore files, I
         }
 
         stop.Cancel();
+        stop.Dispose();
+        pass.Dispose();
+        wake.Dispose();
+    }
+
+    /// <summary>Stops the background loop and waits for it to finish before releasing its resources.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) == 1)
+        {
+            return;
+        }
+
+        stop.Cancel();
+        if (Volatile.Read(ref worker) is { } running)
+        {
+            try
+            {
+                await running.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Stopping; the loop's own failures don't matter any more.
+            }
+        }
+
         stop.Dispose();
         pass.Dispose();
         wake.Dispose();
