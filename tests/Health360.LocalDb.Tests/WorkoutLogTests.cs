@@ -349,6 +349,33 @@ public class WorkoutLogTests
     }
 
     [Fact]
+    public async Task A_rep_based_set_needs_its_reps_to_be_done_and_keeps_them_once_done()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, null, "kg", clock);
+        await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Squat, "kg", clock);
+        await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Plank, "kg", clock);
+        var exercises = await WorkoutLog.ExercisesAsync(t.Db, Profile, session);
+        var squat = exercises[0].Sets.Single().Id;
+        var bodyweight = exercises[1].Sets.Single().Id;
+
+        // Blank sets (nothing to copy from last time): ticking them off is refused for weight and reps, and reps only.
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutLog.CompleteSetAsync(t.Db, Profile, squat, clock));
+        Assert.Equal("Enter the reps first.", refused.Message);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutLog.CompleteSetAsync(t.Db, Profile, bodyweight, clock));
+
+        await WorkoutLog.ChangeSetAsync(t.Db, Profile, squat, e => e with { Reps = 5, Weight = 60, WeightUnit = "kg" }, clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, squat, clock);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutLog.ChangeSetAsync(t.Db, Profile, squat, e => e with { Reps = null }, clock));
+
+        // Finishing keeps the done set with its reps and drops the blank one.
+        await WorkoutLog.FinishAsync(t.Db, Profile, session, clock);
+        var kept = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session)).Single().Sets.Single();
+        Assert.Equal((squat, 5, true), (kept.Id, kept.Reps!.Value, kept.Completed));
+    }
+
+    [Fact]
     public async Task Only_one_session_is_in_progress()
     {
         await using var t = await OpenAsync();

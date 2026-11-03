@@ -95,8 +95,9 @@
                                         <td>
                                             <span class="inline">
                                                 <input class="set-input" inputmode="decimal" aria-label="@($"{label} weight in {Unit(set)}")"
-                                                       value="@Number(set.Weight)" disabled="@busy"
-                                                       @onchange="e => SaveWeightAsync(set, e.Value as string)" />
+                                                       value="@Shown(set, WeightField, Number(set.Weight))" disabled="@busy"
+                                                       @oninput="e => TypeAsync(set, WeightField, e.Value as string)"
+                                                       @onchange="e => CommitAsync(set, WeightField, e.Value as string)" />
                                                 <span class="muted small">@Unit(set)</span>
                                             </span>
                                         </td>
@@ -106,8 +107,9 @@
                                         <td>
                                             <span class="inline">
                                                 <input class="set-input" inputmode="decimal" aria-label="@($"{label} distance in {DistanceUnit(set)}")"
-                                                       value="@Number(set.Distance)" disabled="@busy"
-                                                       @onchange="e => SaveDistanceAsync(set, e.Value as string)" />
+                                                       value="@Shown(set, DistanceField, Number(set.Distance))" disabled="@busy"
+                                                       @oninput="e => TypeAsync(set, DistanceField, e.Value as string)"
+                                                       @onchange="e => CommitAsync(set, DistanceField, e.Value as string)" />
                                                 <span class="muted small">@DistanceUnit(set)</span>
                                             </span>
                                         </td>
@@ -116,20 +118,25 @@
                                     {
                                         <td>
                                             <input class="set-input" inputmode="decimal" placeholder="m:ss" aria-label="@($"{label} time")"
-                                                   value="@Time(set.DurationSeconds)" disabled="@busy"
-                                                   @onchange="e => SaveTimeAsync(set, e.Value as string)" />
+                                                   value="@Shown(set, TimeField, Time(set.DurationSeconds))" disabled="@busy"
+                                                   @oninput="e => TypeAsync(set, TimeField, e.Value as string)"
+                                                   @onchange="e => CommitAsync(set, TimeField, e.Value as string)" />
                                         </td>
                                     }
                                     @if (exercise.TracksReps)
                                     {
                                         <td>
-                                            <input class="set-input" inputmode="numeric" aria-label="@($"{label} reps")" value="@set.Reps" disabled="@busy"
-                                                   @onchange="e => SaveRepsAsync(set, e.Value as string)" />
+                                            <input class="set-input" inputmode="numeric" aria-label="@($"{label} reps")"
+                                                   value="@Shown(set, RepsField, set.Reps?.ToString(System.Globalization.CultureInfo.InvariantCulture))" disabled="@busy"
+                                                   @oninput="e => TypeAsync(set, RepsField, e.Value as string)"
+                                                   @onchange="e => CommitAsync(set, RepsField, e.Value as string)" />
                                         </td>
                                     }
                                     <td>
-                                        <input class="set-input" inputmode="decimal" aria-label="@($"{label} RPE")" value="@Number(set.Rpe)" disabled="@busy"
-                                               @onchange="e => SaveRpeAsync(set, e.Value as string)" />
+                                        <input class="set-input" inputmode="decimal" aria-label="@($"{label} RPE")"
+                                               value="@Shown(set, RpeField, Number(set.Rpe))" disabled="@busy"
+                                               @oninput="e => TypeAsync(set, RpeField, e.Value as string)"
+                                               @onchange="e => CommitAsync(set, RpeField, e.Value as string)" />
                                     </td>
                                     <td>
                                         <button type="button" class="@(set.Completed ? "primary compact" : "secondary compact")" disabled="@busy"
@@ -237,6 +244,7 @@
         exercises = null;
         results = [];
         query = null;
+        drafts.Clear();
         watchedProfile = profileId;
         watchedSession = SessionId;
         if (profileId is null)
@@ -299,31 +307,6 @@
 
     private static string? Time(double? seconds) => seconds is { } s ? PaceText.Format(s) : null;
 
-    private Task SaveDistanceAsync(LoggedSet set, string? text)
-    {
-        var unit = DistanceUnit(set);
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return SaveAsync(set, e => e with { Distance = null, DistanceUnit = null });
-        }
-
-        return NumberText.Parse(text) is { } distance
-            ? SaveAsync(set, e => e with { Distance = distance, DistanceUnit = unit })
-            : Fail("Enter the distance as a number.");
-    }
-
-    private Task SaveTimeAsync(LoggedSet set, string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return SaveAsync(set, e => e with { DurationSeconds = null });
-        }
-
-        return PaceText.ParseSeconds(text) is { } seconds
-            ? SaveAsync(set, e => e with { DurationSeconds = seconds })
-            : Fail("Enter the time as minutes and seconds, like 1:30.");
-    }
-
     private static string? Number(double? value) =>
         value?.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
 
@@ -333,41 +316,190 @@
     private Task SaveTypeAsync(LoggedSet set, string? type) =>
         type is null ? Task.CompletedTask : SaveAsync(set, e => e with { SetType = type });
 
-    private Task SaveWeightAsync(LoggedSet set, string? text)
+    private const string WeightField = "weight";
+    private const string RepsField = "reps";
+    private const string RpeField = "rpe";
+    private const string TimeField = "time";
+    private const string DistanceField = "distance";
+
+    /// <summary>What each field shows while it is being edited: the text as typed, until focus leaves it.</summary>
+    private readonly Dictionary<string, string?> drafts = new(StringComparer.Ordinal);
+
+    /// <summary>The last save of each field, so a field's saves land in the order they were typed.</summary>
+    private readonly Dictionary<string, Task> fieldSaves = new(StringComparer.Ordinal);
+
+    private static string FieldKey(LoggedSet set, string field) => $"{set.Id}/{field}";
+
+    private string? Shown(LoggedSet set, string field, string? stored) =>
+        drafts.TryGetValue(FieldKey(set, field), out var typed) ? typed : stored;
+
+    /// <summary>
+    /// While typing: the field keeps the text exactly as typed, and each value that is complete and valid is saved at
+    /// once, so killing the app mid-edit keeps the latest one. Blank or half-typed text ("1:", "8.") waits; nothing is
+    /// reported until focus leaves the field.
+    /// </summary>
+    private Task TypeAsync(LoggedSet set, string field, string? text)
     {
-        var unit = Unit(set);
-        if (string.IsNullOrWhiteSpace(text))
+        var key = FieldKey(set, field);
+        drafts[key] = text;
+        if (string.IsNullOrWhiteSpace(text) || Change(set, field, text, out _) is not { } change)
         {
-            return SaveAsync(set, e => e with { Weight = null, WeightUnit = unit });
+            return Task.CompletedTask;
         }
 
-        return NumberText.Parse(text) is { } weight
-            ? SaveAsync(set, e => e with { Weight = weight, WeightUnit = unit })
-            : Fail("Enter the weight as a number.");
+        return QueueAsync(key, async () =>
+        {
+            try
+            {
+                Celebrate(await Workouts.ChangeSetAsync(set.Id, change));
+            }
+            catch (Exception e) when (e is FluentValidation.ValidationException or InvalidOperationException)
+            {
+                // Out of range or not allowed yet: it's reported when focus leaves the field.
+            }
+        });
     }
 
-    private Task SaveRepsAsync(LoggedSet set, string? text)
+    /// <summary>When focus leaves the field: saves what it holds (blank clears it) and says what's wrong, if anything.</summary>
+    private async Task CommitAsync(LoggedSet set, string field, string? text)
     {
-        if (string.IsNullOrWhiteSpace(text))
+        var key = FieldKey(set, field);
+        drafts[key] = text;
+        if (Change(set, field, text, out var problem) is not { } change)
         {
-            return SaveAsync(set, e => e with { Reps = null });
+            error = problem;
+            return;
         }
 
-        return int.TryParse(text.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var reps)
-            ? SaveAsync(set, e => e with { Reps = reps })
-            : Fail("Enter the reps as a whole number.");
+        var saved = false;
+        await QueueAsync(key, async () =>
+        {
+            error = null;
+            try
+            {
+                Celebrate(await Workouts.ChangeSetAsync(set.Id, change), null);
+                saved = true;
+            }
+            catch (FluentValidation.ValidationException e)
+            {
+                error = e.Errors.FirstOrDefault()?.ErrorMessage ?? "That entry isn't valid.";
+            }
+            catch (InvalidOperationException e)
+            {
+                error = e.Message;
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                error = "Couldn't save that on this device. Try again.";
+            }
+        });
+
+        // Saved: show the stored value again. Refused: keep the text, so it can be corrected.
+        if (saved && drafts.TryGetValue(key, out var shown) && shown == text)
+        {
+            drafts.Remove(key);
+        }
     }
 
-    private Task SaveRpeAsync(LoggedSet set, string? text)
+    private Task QueueAsync(string key, Func<Task> save)
     {
-        if (string.IsNullOrWhiteSpace(text))
+        var previous = fieldSaves.GetValueOrDefault(key) ?? Task.CompletedTask;
+        var next = AfterAsync(previous, save);
+        fieldSaves[key] = next;
+        return next;
+    }
+
+    private static async Task AfterAsync(Task previous, Func<Task> save)
+    {
+        try
         {
-            return SaveAsync(set, e => e with { Rpe = null });
+            await previous;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // The earlier save reported its own failure.
         }
 
-        return NumberText.Parse(text) is { } rpe
-            ? SaveAsync(set, e => e with { Rpe = rpe })
-            : Fail("Enter RPE as a number from 0 to 10.");
+        await save();
+    }
+
+    /// <summary>The change a field's text makes, or null with the problem when the text isn't a value for it.</summary>
+    private Func<SetEntry, SetEntry>? Change(LoggedSet set, string field, string? text, out string? problem)
+    {
+        problem = null;
+        var blank = string.IsNullOrWhiteSpace(text);
+        switch (field)
+        {
+            case WeightField:
+                var unit = Unit(set);
+                if (blank)
+                {
+                    return e => e with { Weight = null, WeightUnit = unit };
+                }
+
+                if (NumberText.Parse(text) is { } weight)
+                {
+                    return e => e with { Weight = weight, WeightUnit = unit };
+                }
+
+                problem = "Enter the weight as a number.";
+                return null;
+            case RepsField:
+                if (blank)
+                {
+                    return e => e with { Reps = null };
+                }
+
+                if (int.TryParse(text!.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var reps))
+                {
+                    return e => e with { Reps = reps };
+                }
+
+                problem = "Enter the reps as a whole number.";
+                return null;
+            case RpeField:
+                if (blank)
+                {
+                    return e => e with { Rpe = null };
+                }
+
+                if (NumberText.Parse(text) is { } rpe)
+                {
+                    return e => e with { Rpe = rpe };
+                }
+
+                problem = "Enter RPE as a number from 0 to 10.";
+                return null;
+            case TimeField:
+                if (blank)
+                {
+                    return e => e with { DurationSeconds = null };
+                }
+
+                if (PaceText.ParseSeconds(text) is { } seconds)
+                {
+                    return e => e with { DurationSeconds = seconds };
+                }
+
+                problem = "Enter the time as minutes and seconds, like 1:30.";
+                return null;
+            case DistanceField:
+                var distanceUnit = DistanceUnit(set);
+                if (blank)
+                {
+                    return e => e with { Distance = null, DistanceUnit = null };
+                }
+
+                if (NumberText.Parse(text) is { } distance)
+                {
+                    return e => e with { Distance = distance, DistanceUnit = distanceUnit };
+                }
+
+                problem = "Enter the distance as a number.";
+                return null;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown field");
+        }
     }
 
     private Task ToggleAsync(LoggedExercise exercise, LoggedSet set) =>
@@ -432,12 +564,6 @@
         await Workouts.DiscardAsync(SessionId);
         Navigation.NavigateTo("train");
     });
-
-    private Task Fail(string message)
-    {
-        error = message;
-        return Task.CompletedTask;
-    }
 
     /// <summary>Runs one change; a failure is shown, never thrown into the renderer.</summary>
     private async Task RunAsync(Func<Task> change)

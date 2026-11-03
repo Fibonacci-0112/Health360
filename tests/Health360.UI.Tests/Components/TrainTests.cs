@@ -148,6 +148,83 @@ public sealed class TrainTests : AppTestContext
     }
 
     [Fact]
+    public async Task Typing_saves_without_leaving_the_field_so_a_restart_keeps_it()
+    {
+        var cut = await TrainAsync();
+        await ClickAsync(cut, "#start-empty");
+        await AddSquatAsync(cut);
+        var session = (await WorkoutLog.ActiveSessionAsync(App.Database.Db, ProfileId))!;
+
+        // Typed, focus never leaves: each complete value is saved as it is typed, and the text stays as typed.
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 reps']", "7");
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 weight in kg']", "102");
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 weight in kg']", "102.");
+
+        await WaitForSetAsync(session.Id, s => s.Reps == 7 && s.Weight == 102);
+        Assert.Equal("102.", cut.Find("input[aria-label='Barbell Squat set 1 weight in kg']").GetAttribute("value"));
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 weight in kg']", "102.5");
+        await WaitForSetAsync(session.Id, s => s.Weight == 102.5);
+
+        // As after a restart: the logger is built again and reads the workout from the database.
+        Services.GetRequiredService<NavigationManager>().NavigateTo("train");
+        cut.WaitForAssertion(() => cut.Find("#resume"), Wait);
+        Services.GetRequiredService<NavigationManager>().NavigateTo($"train/workout/{session.Id}");
+        var reopened = cut;
+        reopened.WaitForAssertion(() => Assert.Equal("102.5", reopened.Find("input[aria-label='Barbell Squat set 1 weight in kg']").GetAttribute("value")), Wait);
+        Assert.Equal("7", reopened.Find("input[aria-label='Barbell Squat set 1 reps']").GetAttribute("value"));
+    }
+
+    [Fact]
+    public async Task A_half_typed_or_out_of_range_value_waits_until_focus_leaves()
+    {
+        var cut = await TrainAsync();
+        await ClickAsync(cut, "#start-empty");
+        await AddSquatAsync(cut);
+        var session = (await WorkoutLog.ActiveSessionAsync(App.Database.Db, ProfileId))!;
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 RPE']", "8");
+        await WaitForSetAsync(session.Id, s => s.Rpe == 8);
+
+        await TypeAsync(cut, "input[aria-label='Barbell Squat set 1 RPE']", "81");
+
+        Assert.Empty(cut.FindAll("[role=alert]"));
+        Assert.Equal("81", cut.Find("input[aria-label='Barbell Squat set 1 RPE']").GetAttribute("value"));
+        await ChangeAsync(cut, "input[aria-label='Barbell Squat set 1 RPE']", "81");
+        cut.WaitForAssertion(() => Assert.Equal("RPE runs from 0 to 10.", cut.Find("[role=alert]").TextContent), Wait);
+        await WaitForSetAsync(session.Id, s => s.Rpe == 8);
+    }
+
+    [Fact]
+    public async Task A_set_without_reps_cannot_be_ticked_off()
+    {
+        var cut = await TrainAsync();
+        await ClickAsync(cut, "#start-empty");
+        await AddSquatAsync(cut);
+
+        await ClickAsync(cut, "button[aria-label='Barbell Squat set 1 done']");
+
+        cut.WaitForAssertion(() => Assert.Equal("Enter the reps first.", cut.Find("[role=alert]").TextContent), Wait);
+        Assert.Equal("false", cut.Find("button[aria-label='Barbell Squat set 1 done']").GetAttribute("aria-pressed"));
+    }
+
+    private async Task WaitForSetAsync(string sessionId, Func<LoggedSet, bool> condition)
+    {
+        var deadline = DateTime.UtcNow + Wait;
+        LoggedSet? set = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            set = (await WorkoutLog.ExercisesAsync(App.Database.Db, ProfileId, sessionId)).Single().Sets.Single();
+            if (condition(set))
+            {
+                return;
+            }
+
+            await Task.Delay(20, Xunit.TestContext.Current.CancellationToken);
+        }
+
+        Assert.Fail($"The set never matched; last saved: {set}");
+    }
+
+    [Fact]
     public async Task An_invalid_weight_says_why_and_saves_nothing()
     {
         var cut = await TrainAsync();

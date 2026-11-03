@@ -367,7 +367,7 @@ public static class WorkoutLog
             if (current.CompletedAt is not null)
             {
                 // A completed set keeps what defines it: clearing a hold's time would leave a done set that says nothing.
-                RequireMeasure(state.TrackingType, entry.DurationSeconds, entry.Distance);
+                RequireMeasure(state.TrackingType, entry.Reps, entry.DurationSeconds, entry.Distance);
             }
 
             var weight = entry.Weight;
@@ -401,7 +401,7 @@ public static class WorkoutLog
         await db.WriteTransaction(async tx =>
         {
             var set = await RequireSetAsync(tx, profileId, setId).ConfigureAwait(false);
-            RequireMeasure(set.TrackingType, set.DurationSeconds, set.Distance);
+            RequireMeasure(set.TrackingType, set.Reps, set.DurationSeconds, set.Distance);
             records = await EvaluateAsync(tx, profileId, setId, set.CompletedAt ?? Timestamps.UtcNow(clock), formula, clock).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return records;
@@ -608,11 +608,17 @@ public static class WorkoutLog
     }
 
     /// <summary>
-    /// A timed exercise's set is defined by its time (or, for distance and time, either one): a done set without one
-    /// would say nothing.
+    /// What defines a done set: its reps for a rep-based exercise (weight and reps, or reps only), its time for a timed
+    /// one, and its distance or time for distance and time. A done set without it would say nothing, and once the
+    /// workout is finished it could no longer be corrected.
     /// </summary>
-    private static void RequireMeasure(string? trackingType, double? durationSeconds, double? distance)
+    private static void RequireMeasure(string? trackingType, long? reps, double? durationSeconds, double? distance)
     {
+        if (trackingType is "weight_reps" or "reps" && reps is null)
+        {
+            throw new InvalidOperationException("Enter the reps first.");
+        }
+
         if (trackingType == "duration" && durationSeconds is null)
         {
             throw new InvalidOperationException("Enter the time first.");
@@ -693,7 +699,7 @@ public static class WorkoutLog
     private static async Task<SetState> RequireSetAsync(ITransaction tx, string profileId, string setId)
     {
         var set = await tx.GetOptional<SetState>(
-            "SELECT s.completed_at AS CompletedAt, s.duration_seconds AS DurationSeconds, s.distance AS Distance, " +
+            "SELECT s.completed_at AS CompletedAt, s.reps AS Reps, s.duration_seconds AS DurationSeconds, s.distance AS Distance, " +
             "e.tracking_type AS TrackingType, ws.ended_at AS EndedAt FROM set_logs s " +
             "JOIN session_exercises se ON se.id = s.session_exercise_id JOIN workout_sessions ws ON ws.id = se.session_id " +
             "LEFT JOIN exercises e ON e.id = se.exercise_id WHERE s.id = ? AND s.profile_id = ?",
@@ -854,6 +860,8 @@ public static class WorkoutLog
     internal sealed class SetState
     {
         public string? CompletedAt { get; set; }
+
+        public long? Reps { get; set; }
 
         public double? DurationSeconds { get; set; }
 
