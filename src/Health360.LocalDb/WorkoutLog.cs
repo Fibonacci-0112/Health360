@@ -42,7 +42,10 @@ public sealed record LoggedSet(
     int? Rir,
     bool Completed,
     double? E1rmKg,
-    bool IsPr);
+    bool IsPr,
+    double? DurationSeconds = null,
+    double? Distance = null,
+    string? DistanceUnit = null);
 
 /// <summary>One exercise of a session with its sets, in order.</summary>
 public sealed record LoggedExercise(
@@ -54,6 +57,14 @@ public sealed record LoggedExercise(
     IReadOnlyList<LoggedSet> Sets)
 {
     public bool TracksLoad => TrackingType == "weight_reps";
+
+    /// <summary>Whether a set of it is counted in reps (weight and reps, or reps only).</summary>
+    public bool TracksReps => TrackingType is "weight_reps" or "reps";
+
+    /// <summary>Whether a set of it records a time (time only, or distance and time).</summary>
+    public bool TracksTime => TrackingType is "duration" or "distance_duration";
+
+    public bool TracksDistance => TrackingType == "distance_duration";
 }
 
 /// <summary>One <c>personal_records</c> row with its exercise's name.</summary>
@@ -114,11 +125,16 @@ public static class WorkoutLog
         $"SELECT {SessionColumns} FROM workout_sessions ws LEFT JOIN workout_templates t ON t.id = ws.template_id " +
         "WHERE ws.profile_id = ? AND ws.ended_at IS NULL ORDER BY ws.started_at DESC, ws.id DESC LIMIT 1";
 
+    private const string SetValueColumns =
+        "set_type AS SetType, reps AS Reps, weight AS Weight, weight_unit AS WeightUnit, duration_seconds AS DurationSeconds, " +
+        "distance AS Distance, distance_unit AS DistanceUnit";
+
     private const string SetsSql =
         "SELECT se.id AS SessionExerciseId, se.exercise_id AS ExerciseId, e.name AS ExerciseName, e.tracking_type AS TrackingType, " +
         "se.position AS ExercisePosition, s.id AS SetId, s.position AS SetPosition, s.set_type AS SetType, s.reps AS Reps, " +
         "s.weight AS Weight, s.weight_unit AS WeightUnit, s.weight_kg AS WeightKg, s.rpe AS Rpe, s.rir AS Rir, " +
-        "s.completed_at AS CompletedAt, s.e1rm_kg AS E1rmKg, s.is_pr AS IsPr " +
+        "s.completed_at AS CompletedAt, s.e1rm_kg AS E1rmKg, s.is_pr AS IsPr, s.duration_seconds AS DurationSeconds, " +
+        "s.distance AS Distance, s.distance_unit AS DistanceUnit " +
         "FROM session_exercises se LEFT JOIN exercises e ON e.id = se.exercise_id " +
         "LEFT JOIN set_logs s ON s.session_exercise_id = se.id AND s.profile_id = se.profile_id " +
         "WHERE se.session_id = ? AND se.profile_id = ? ORDER BY se.position, se.id, s.position, s.id";
@@ -264,20 +280,28 @@ public static class WorkoutLog
                 .ConfigureAwait(false) ?? throw new InvalidOperationException("The exercise is not in this workout.");
             await RequireOpenSessionAsync(tx, profileId, owner.SessionId).ConfigureAwait(false);
             var last = await tx.GetOptional<SetValues>(
-                "SELECT position AS Position, set_type AS SetType, reps AS Reps, weight AS Weight, weight_unit AS WeightUnit " +
-                "FROM set_logs WHERE session_exercise_id = ? AND profile_id = ? ORDER BY position DESC, id DESC LIMIT 1",
+                $"SELECT position AS Position, {SetValueColumns} FROM set_logs WHERE session_exercise_id = ? AND profile_id = ? ORDER BY position DESC, id DESC LIMIT 1",
                 [sessionExerciseId, profileId]).ConfigureAwait(false);
             var values = last is null
                 ? new SetValues { SetType = "working", WeightUnit = loadUnit }
-                : new SetValues { SetType = last.SetType == "warmup" ? "working" : last.SetType, Reps = last.Reps, Weight = last.Weight, WeightUnit = last.WeightUnit };
+                : new SetValues
+                {
+                    SetType = last.SetType == "warmup" ? "working" : last.SetType,
+                    Reps = last.Reps,
+                    Weight = last.Weight,
+                    WeightUnit = last.WeightUnit,
+                    DurationSeconds = last.DurationSeconds,
+                    Distance = last.Distance,
+                    DistanceUnit = last.DistanceUnit,
+                };
             await InsertSetAsync(tx, id, profileId, sessionExerciseId, last is null ? 0 : (int)last.Position + 1, values, clock).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return id;
     }
 
     /// <summary>
-    /// Replaces a set's entry. A completed set is evaluated again: its e1RM, and its records against the other
-    /// completed sets of the exercise.
+    /// Replaces a set's entry, in a workout still in progress. A completed set is evaluated again: its e1RM, and its
+    /// records against the sets completed before it. Returns only records it didn't already hold.
     /// </summary>
     /// <exception cref="ValidationException">The entry fails <see cref="SetEntryValidator"/>; nothing is written.</exception>
     public static Task<IReadOnlyList<NewRecord>> UpdateSetAsync(
@@ -304,26 +328,30 @@ public static class WorkoutLog
         IReadOnlyList<NewRecord> records = [];
         await db.WriteTransaction(async tx =>
         {
-            var current = await tx.GetOptional<StoredSet>(
-                "SELECT set_type AS SetType, reps AS Reps, weight AS Weight, weight_unit AS WeightUnit, rpe AS Rpe, rir AS Rir, " +
-                "completed_at AS CompletedAt FROM set_logs WHERE id = ? AND profile_id = ?",
-                [setId, profileId]).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("The set is not in the local database.");
+            _ = await RequireSetAsync(tx, profileId, setId).ConfigureAwait(false);
+            var current = await tx.Get<StoredSet>(
+                $"SELECT {SetValueColumns}, rpe AS Rpe, rir AS Rir, completed_at AS CompletedAt FROM set_logs WHERE id = ? AND profile_id = ?",
+                [setId, profileId]).ConfigureAwait(false);
             var entry = change(new SetEntry(
                 current.Reps is { } reps ? (int)reps : null,
                 current.Weight,
                 current.WeightUnit ?? "kg",
                 current.Rpe,
                 current.Rir is { } rir ? (int)rir : null,
-                current.SetType));
+                current.SetType,
+                current.DurationSeconds,
+                current.Distance,
+                current.DistanceUnit));
             new SetEntryValidator().ValidateAndThrow(entry);
             var weight = entry.Weight;
             double? weightKg = weight is { } w ? UnitCodes.Convert(w, entry.WeightUnit, "kg") : null;
+            var distanceUnit = entry.Distance is null ? null : entry.DistanceUnit;
+            double? metres = entry.Distance is { } d && distanceUnit is not null ? UnitCodes.Convert(d, distanceUnit, "m") : null;
             await tx.Execute(
-                "UPDATE set_logs SET set_type = ?, reps = ?, weight = ?, weight_unit = ?, weight_kg = ?, rpe = ?, rir = ?, updated_at = ? " +
-                "WHERE id = ? AND profile_id = ?",
+                "UPDATE set_logs SET set_type = ?, reps = ?, weight = ?, weight_unit = ?, weight_kg = ?, rpe = ?, rir = ?, " +
+                "duration_seconds = ?, distance = ?, distance_unit = ?, distance_m = ?, updated_at = ? WHERE id = ? AND profile_id = ?",
                 [entry.SetType, entry.Reps, weight, weight is null ? null : entry.WeightUnit, weightKg, entry.Rpe, entry.Rir,
-                 Timestamps.UtcNow(clock), setId, profileId]).ConfigureAwait(false);
+                 entry.DurationSeconds, entry.Distance, distanceUnit, metres, Timestamps.UtcNow(clock), setId, profileId]).ConfigureAwait(false);
             if (current.CompletedAt is { } completedAt)
             {
                 records = await EvaluateAsync(tx, profileId, setId, completedAt, formula, clock).ConfigureAwait(false);
@@ -334,7 +362,8 @@ public static class WorkoutLog
 
     /// <summary>
     /// Ticks a set off: records when it was done, estimates its e1RM (not for a warm-up) and writes a
-    /// <c>personal_records</c> row for each record it beats. Returns the records, for the logger to celebrate.
+    /// <c>personal_records</c> row for each record it beats against the sets completed before it. Returns the records it
+    /// didn't already hold, for the logger to celebrate. The set's workout must still be in progress.
     /// </summary>
     public static async Task<IReadOnlyList<NewRecord>> CompleteSetAsync(
         IPowerSyncDatabase db, string profileId, string setId, TimeProvider clock, OneRepMaxFormula formula = DefaultFormula)
@@ -345,6 +374,18 @@ public static class WorkoutLog
         await db.WriteTransaction(async tx =>
         {
             var set = await RequireSetAsync(tx, profileId, setId).ConfigureAwait(false);
+            // A timed exercise's set is defined by its time (or, for distance and time, either one): ticking it off
+            // without one would keep a set that says nothing.
+            if (set.TrackingType == "duration" && set.DurationSeconds is null)
+            {
+                throw new InvalidOperationException("Enter the time first.");
+            }
+
+            if (set.TrackingType == "distance_duration" && set.DurationSeconds is null && set.Distance is null)
+            {
+                throw new InvalidOperationException("Enter the distance or the time first.");
+            }
+
             records = await EvaluateAsync(tx, profileId, setId, set.CompletedAt ?? Timestamps.UtcNow(clock), formula, clock).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return records;
@@ -501,16 +542,21 @@ public static class WorkoutLog
         var reps = set.Reps is { } r ? (int)r : (int?)null;
         var e1rm = E1rmFor(set.SetType, completed: true, set.WeightKg, reps, formula);
 
+        var held = await tx.GetAll<HeldRecord>(
+            "SELECT kind AS Kind, value AS Value FROM personal_records WHERE set_log_id = ? AND profile_id = ?", [setId, profileId])
+            .ConfigureAwait(false);
         await tx.Execute("DELETE FROM personal_records WHERE set_log_id = ? AND profile_id = ?", [setId, profileId]).ConfigureAwait(false);
         IReadOnlyList<NewRecord> records = [];
         if (set.SetType != "warmup" && set.WeightKg is { } kg && reps is { } count)
         {
+            // Only sets completed before this one: a record is against what came before it, so editing an older set
+            // never takes away the record it set at the time because of a later, better set.
             var earlier = await tx.GetAll<SetForRecords>(
                 "SELECT s.set_type AS SetType, s.reps AS Reps, s.weight_kg AS WeightKg FROM set_logs s " +
                 "JOIN session_exercises se ON se.id = s.session_exercise_id " +
                 "WHERE s.profile_id = ? AND se.exercise_id = ? AND s.id <> ? AND s.completed_at IS NOT NULL AND s.set_type <> 'warmup' " +
-                "AND s.weight_kg > 0 AND s.reps >= 1",
-                [profileId, set.ExerciseId, setId]).ConfigureAwait(false);
+                "AND s.weight_kg > 0 AND s.reps >= 1 AND (s.completed_at < ? OR (s.completed_at = ? AND s.id < ?))",
+                [profileId, set.ExerciseId, setId, completedAt, completedAt, setId]).ConfigureAwait(false);
             // Earlier estimates are recomputed with this formula, so a record never comes from comparing two formulas.
             var lifted = earlier.Select(s => new LiftedSet(s.WeightKg!.Value, (int)s.Reps!.Value, E1rmFor("working", true, s.WeightKg, (int)s.Reps!.Value, formula)))
                 .ToList();
@@ -532,7 +578,9 @@ public static class WorkoutLog
         await tx.Execute(
             "UPDATE set_logs SET completed_at = ?, e1rm_formula = ?, e1rm_kg = ?, is_pr = ?, updated_at = ? WHERE id = ? AND profile_id = ?",
             [completedAt, e1rm is null ? null : FormulaCode(formula), e1rm, records.Count > 0 ? 1 : 0, now, setId, profileId]).ConfigureAwait(false);
-        return records;
+
+        // What's new: a record the set already held with the same value isn't news when the set is edited.
+        return [.. records.Where(r => !held.Any(h => h.Kind == KindCode(r.Kind) && Quantity.CanonicalEquals(h.Value, r.Value)))];
     }
 
     private static async Task<string> AddExerciseAsync(
@@ -546,7 +594,8 @@ public static class WorkoutLog
 
         // Last time's completed sets, as entered, from the newest other session that has any.
         var last = await tx.GetAll<SetValues>(
-            "SELECT s.position AS Position, s.set_type AS SetType, s.reps AS Reps, s.weight AS Weight, s.weight_unit AS WeightUnit " +
+            "SELECT s.position AS Position, s.set_type AS SetType, s.reps AS Reps, s.weight AS Weight, s.weight_unit AS WeightUnit, " +
+            "s.duration_seconds AS DurationSeconds, s.distance AS Distance, s.distance_unit AS DistanceUnit " +
             "FROM set_logs s WHERE s.profile_id = ? AND s.completed_at IS NOT NULL AND s.session_exercise_id = (" +
             "SELECT se.id FROM session_exercises se JOIN workout_sessions ws ON ws.id = se.session_id " +
             "WHERE se.profile_id = ? AND se.exercise_id = ? AND se.session_id <> ? " +
@@ -579,10 +628,13 @@ public static class WorkoutLog
         var now = Timestamps.UtcNow(clock);
         var unit = values.Weight is null ? null : values.WeightUnit;
         double? kg = values.Weight is { } w && unit is not null ? UnitCodes.Convert(w, unit, "kg") : null;
+        var distanceUnit = values.Distance is null ? null : values.DistanceUnit;
+        double? metres = values.Distance is { } d && distanceUnit is not null ? UnitCodes.Convert(d, distanceUnit, "m") : null;
         await tx.Execute(
-            "INSERT INTO set_logs (id, profile_id, session_exercise_id, position, set_type, reps, weight, weight_unit, weight_kg, is_pr, " +
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
-            [id, profileId, sessionExerciseId, position, values.SetType, values.Reps, values.Weight, unit, kg, now, now]).ConfigureAwait(false);
+            "INSERT INTO set_logs (id, profile_id, session_exercise_id, position, set_type, reps, weight, weight_unit, weight_kg, " +
+            "duration_seconds, distance, distance_unit, distance_m, is_pr, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+            [id, profileId, sessionExerciseId, position, values.SetType, values.Reps, values.Weight, unit, kg, values.DurationSeconds,
+             values.Distance, distanceUnit, metres, now, now]).ConfigureAwait(false);
     }
 
     private static async Task RequireOpenSessionAsync(ITransaction tx, string profileId, string sessionId)
@@ -596,10 +648,18 @@ public static class WorkoutLog
         }
     }
 
-    private static async Task<SetState> RequireSetAsync(ITransaction tx, string profileId, string setId) =>
-        await tx.GetOptional<SetState>(
-            "SELECT completed_at AS CompletedAt FROM set_logs WHERE id = ? AND profile_id = ?", [setId, profileId]).ConfigureAwait(false)
-        ?? throw new InvalidOperationException("The set is not in the local database.");
+    /// <summary>The set, which must be in a workout still in progress: a finished workout's sets and records stay as logged.</summary>
+    private static async Task<SetState> RequireSetAsync(ITransaction tx, string profileId, string setId)
+    {
+        var set = await tx.GetOptional<SetState>(
+            "SELECT s.completed_at AS CompletedAt, s.duration_seconds AS DurationSeconds, s.distance AS Distance, " +
+            "e.tracking_type AS TrackingType, ws.ended_at AS EndedAt FROM set_logs s " +
+            "JOIN session_exercises se ON se.id = s.session_exercise_id JOIN workout_sessions ws ON ws.id = se.session_id " +
+            "LEFT JOIN exercises e ON e.id = se.exercise_id WHERE s.id = ? AND s.profile_id = ?",
+            [setId, profileId]).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The set is not in the local database.");
+        return set.EndedAt is null ? set : throw new InvalidOperationException("The workout has ended.");
+    }
 
     private static void CheckLoadUnit(string loadUnit)
     {
@@ -627,7 +687,10 @@ public static class WorkoutLog
                 r.Rir is { } rir ? (int)rir : null,
                 r.CompletedAt is not null,
                 r.E1rmKg,
-                r.IsPr is 1)).ToList();
+                r.IsPr is 1,
+                r.DurationSeconds,
+                r.Distance,
+                r.DistanceUnit)).ToList();
             exercises.Add(new LoggedExercise(
                 first.SessionExerciseId, first.ExerciseId, first.ExerciseName ?? "Exercise", first.TrackingType ?? "weight_reps",
                 (int)first.ExercisePosition, sets));
@@ -671,6 +734,12 @@ public static class WorkoutLog
         public double? E1rmKg { get; set; }
 
         public long? IsPr { get; set; }
+
+        public double? DurationSeconds { get; set; }
+
+        public double? Distance { get; set; }
+
+        public string? DistanceUnit { get; set; }
     }
 
     internal sealed class SetValues
@@ -684,6 +753,12 @@ public static class WorkoutLog
         public double? Weight { get; set; }
 
         public string? WeightUnit { get; set; }
+
+        public double? DurationSeconds { get; set; }
+
+        public double? Distance { get; set; }
+
+        public string? DistanceUnit { get; set; }
     }
 
     internal sealed class SetForRecords
@@ -709,6 +784,12 @@ public static class WorkoutLog
 
         public string? WeightUnit { get; set; }
 
+        public double? DurationSeconds { get; set; }
+
+        public double? Distance { get; set; }
+
+        public string? DistanceUnit { get; set; }
+
         public double? Rpe { get; set; }
 
         public long? Rir { get; set; }
@@ -716,9 +797,24 @@ public static class WorkoutLog
         public string? CompletedAt { get; set; }
     }
 
+    internal sealed class HeldRecord
+    {
+        public string Kind { get; set; } = "";
+
+        public double Value { get; set; }
+    }
+
     internal sealed class SetState
     {
         public string? CompletedAt { get; set; }
+
+        public double? DurationSeconds { get; set; }
+
+        public double? Distance { get; set; }
+
+        public string? TrackingType { get; set; }
+
+        public string? EndedAt { get; set; }
     }
 
     internal sealed class SessionState

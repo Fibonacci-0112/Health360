@@ -15,6 +15,9 @@ public sealed class WorkoutService(PowerSyncDatabase db, ProfileService profiles
     /// <summary>The profile's lifting unit code (kg or lb), for new sets with nothing to copy.</summary>
     public string LoadUnit => UnitPrefOptions.Load.ToCode(profiles.UnitPrefs.Load);
 
+    /// <summary>The profile's distance unit code (km or mi), for timed sets with nothing to copy.</summary>
+    public string DistanceUnit => UnitPrefOptions.Distance.ToCode(profiles.UnitPrefs.Distance);
+
     /// <summary>Today on this device.</summary>
     public DateOnly Today => DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
 

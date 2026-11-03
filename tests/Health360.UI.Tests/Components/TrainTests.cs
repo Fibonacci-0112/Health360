@@ -21,6 +21,9 @@ public sealed class TrainTests : AppTestContext
             await tx.Execute(
                 "INSERT INTO exercises (id, external_id, name, tracking_type, equipment, primary_muscles, secondary_muscles) " +
                 "VALUES (?, 'Barbell_Squat', 'Barbell Squat', 'weight_reps', '[\"barbell\"]', '[\"quadriceps\"]', '[]')", [Squat]);
+            await tx.Execute(
+                "INSERT INTO exercises (id, name, tracking_type, equipment, primary_muscles, secondary_muscles) " +
+                "VALUES ('60000000-0000-7000-8000-000000000005', 'Rowing machine', 'distance_duration', '[]', '[]', '[]')");
             await tx.Execute("DELETE FROM ps_crud");
         });
         if (seed is not null)
@@ -105,6 +108,31 @@ public sealed class TrainTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Contains("New PR on Barbell Squat", cut.Find(".pr-status").TextContent, StringComparison.Ordinal), Wait);
         Assert.Contains("estimated 1RM 120.0 kg", cut.Find(".pr-status").TextContent, StringComparison.Ordinal);
         cut.WaitForAssertion(() => Assert.NotNull(cut.Find(".badge-pr")), Wait);
+    }
+
+    [Fact]
+    public async Task A_timed_exercise_logs_distance_and_time_not_reps()
+    {
+        var cut = await TrainAsync("{\"load\":\"kg\",\"distance\":\"mi\"}");
+        await ClickAsync(cut, "#start-empty");
+        cut.WaitForAssertion(() => cut.Find("#exercise-search"), Wait);
+        await TypeAsync(cut, "#exercise-search", "rowing");
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Add Rowing machine']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Add Rowing machine']");
+        cut.WaitForAssertion(() => cut.Find("input[aria-label='Rowing machine set 1 time']"), Wait);
+        Assert.Empty(cut.FindAll("input[aria-label='Rowing machine set 1 reps']"));
+
+        await ClickAsync(cut, "button[aria-label='Rowing machine set 1 done']");
+        cut.WaitForAssertion(() => Assert.Equal("Enter the distance or the time first.", cut.Find("[role=alert]").TextContent), Wait);
+        await ChangeAsync(cut, "input[aria-label='Rowing machine set 1 distance in mi']", "1.5");
+        await ChangeAsync(cut, "input[aria-label='Rowing machine set 1 time']", "12:30");
+        await ClickAsync(cut, "button[aria-label='Rowing machine set 1 done']");
+
+        cut.WaitForAssertion(() => Assert.Equal("true", cut.Find("button[aria-label='Rowing machine set 1 done']").GetAttribute("aria-pressed")), Wait);
+        Assert.Equal("12:30", cut.Find("input[aria-label='Rowing machine set 1 time']").GetAttribute("value"));
+        var session = (await WorkoutLog.ActiveSessionAsync(App.Database.Db, ProfileId))!;
+        var set = (await WorkoutLog.ExercisesAsync(App.Database.Db, ProfileId, session.Id)).Single().Sets.Single();
+        Assert.Equal((1.5, "mi", 750.0), (set.Distance!.Value, set.DistanceUnit!, set.DurationSeconds!.Value));
     }
 
     [Fact]

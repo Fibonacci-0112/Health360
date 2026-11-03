@@ -12,6 +12,8 @@ public class WorkoutLogTests
     private const string Profile = "0190a0b0-0000-7000-8000-000000000001";
     private const string Squat = "60000000-0000-7000-8000-000000000001";
     private const string Plank = "60000000-0000-7000-8000-000000000002";
+    private const string Hold = "60000000-0000-7000-8000-000000000003";
+    private const string Row = "60000000-0000-7000-8000-000000000004";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -27,6 +29,12 @@ public class WorkoutLogTests
             await tx.Execute(
                 "INSERT INTO exercises (id, external_id, name, tracking_type, equipment, primary_muscles, secondary_muscles) " +
                 "VALUES (?, 'Plank', 'Plank', 'reps', '[]', '[\"abdominals\"]', '[]')", [Plank]);
+            await tx.Execute(
+                "INSERT INTO exercises (id, name, tracking_type, equipment, primary_muscles, secondary_muscles) " +
+                "VALUES (?, 'Dead hang', 'duration', '[]', '[]', '[]')", [Hold]);
+            await tx.Execute(
+                "INSERT INTO exercises (id, name, tracking_type, equipment, primary_muscles, secondary_muscles) " +
+                "VALUES (?, 'Rowing machine', 'distance_duration', '[]', '[]', '[]')", [Row]);
             await tx.Execute("DELETE FROM ps_crud");
         });
         return t;
@@ -229,6 +237,77 @@ public class WorkoutLogTests
         var after = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session)).Single().Sets.Single();
         Assert.Equal((140.0, "lb", 8, 140 * 0.45359237), (after.Weight!.Value, after.WeightUnit!, after.Reps!.Value, after.WeightKg!.Value));
         await Assert.ThrowsAsync<ValidationException>(() => WorkoutLog.ChangeSetAsync(t.Db, Profile, set.Id, e => e with { Rpe = 11 }, clock));
+    }
+
+    [Fact]
+    public async Task A_finished_workouts_sets_stay_as_logged()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        await LogSessionAsync(t, clock, (100, "kg", 5, "working"));
+        var set = await t.Db.Get<string>("SELECT id FROM set_logs", []);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutLog.ChangeSetAsync(t.Db, Profile, set, e => e with { Reps = 1 }, clock));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutLog.UncompleteSetAsync(t.Db, Profile, set, clock));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutLog.DeleteSetAsync(t.Db, Profile, set));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutLog.CompleteSetAsync(t.Db, Profile, set, clock));
+
+        Assert.Equal(5L, await t.Db.Get<long>("SELECT reps FROM set_logs", []));
+    }
+
+    [Fact]
+    public async Task Editing_an_earlier_set_keeps_the_record_it_set_and_announces_nothing_new()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        await LogSessionAsync(t, clock, (95, "kg", 5, "working"));
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, null, "kg", clock);
+        var exercise = await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Squat, "kg", clock);
+        var first = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session)).Single().Sets.Single().Id;
+        var second = await WorkoutLog.AddSetAsync(t.Db, Profile, exercise, "kg", clock);
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, first, new SetEntry(5, 100, "kg"), clock);
+        Assert.NotEmpty(await WorkoutLog.CompleteSetAsync(t.Db, Profile, first, clock));
+        clock.Advance(TimeSpan.FromMinutes(3));
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, second, new SetEntry(5, 105, "kg"), clock);
+        Assert.NotEmpty(await WorkoutLog.CompleteSetAsync(t.Db, Profile, second, clock));
+
+        // Only the RPE changes; the later, heavier set isn't what the first set is measured against.
+        var announced = await WorkoutLog.ChangeSetAsync(t.Db, Profile, first, e => e with { Rpe = 8 }, clock);
+
+        Assert.Empty(announced);
+        Assert.Equal(3, (await WorkoutLog.RecordsAsync(t.Db, Profile)).Count(r => r.SetLogId == first));
+        Assert.True((await WorkoutLog.ExercisesAsync(t.Db, Profile, session)).Single().Sets[0].IsPr);
+    }
+
+    [Fact]
+    public async Task A_timed_set_needs_its_time_and_keeps_its_distance_as_entered()
+    {
+        await using var t = await OpenAsync();
+        var clock = new SteppingClock();
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, null, "kg", clock);
+        await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Hold, "kg", clock);
+        await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Row, "kg", clock);
+        var exercises = await WorkoutLog.ExercisesAsync(t.Db, Profile, session);
+        var hold = exercises[0].Sets.Single().Id;
+        var row = exercises[1].Sets.Single().Id;
+        Assert.Equal((false, true, false), (exercises[0].TracksReps, exercises[0].TracksTime, exercises[0].TracksDistance));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutLog.CompleteSetAsync(t.Db, Profile, hold, clock));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => WorkoutLog.CompleteSetAsync(t.Db, Profile, row, clock));
+        await WorkoutLog.ChangeSetAsync(t.Db, Profile, hold, e => e with { DurationSeconds = 45 }, clock);
+        await WorkoutLog.ChangeSetAsync(t.Db, Profile, row, e => e with { Distance = 2, DistanceUnit = "km", DurationSeconds = 480 }, clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, hold, clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, row, clock);
+
+        var after = await WorkoutLog.ExercisesAsync(t.Db, Profile, session);
+        Assert.Equal((45.0, true), (after[0].Sets.Single().DurationSeconds!.Value, after[0].Sets.Single().Completed));
+        Assert.Equal((2.0, "km", 480.0), (after[1].Sets.Single().Distance!.Value, after[1].Sets.Single().DistanceUnit!, after[1].Sets.Single().DurationSeconds!.Value));
+        Assert.Equal(2000.0, await t.Db.Get<double>("SELECT distance_m FROM set_logs WHERE id = ?", [row]));
+
+        // The next set copies the time and distance, ready for one tap.
+        var next = await WorkoutLog.AddSetAsync(t.Db, Profile, after[1].Id, "kg", clock);
+        var copied = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[1].Sets.Single(s => s.Id == next);
+        Assert.Equal((2.0, "km", 480.0), (copied.Distance!.Value, copied.DistanceUnit!, copied.DurationSeconds!.Value));
     }
 
     [Fact]

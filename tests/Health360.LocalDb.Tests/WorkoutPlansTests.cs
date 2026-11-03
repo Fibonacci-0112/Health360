@@ -107,6 +107,23 @@ public class WorkoutPlansTests
     }
 
     [Fact]
+    public async Task A_weekly_entry_is_done_on_a_day_with_a_session_of_its_template()
+    {
+        await using var t = await OpenAsync();
+        var legs = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "Legs", [new TemplateExerciseInput(Squat, new SetScheme(3, 5, 5))], Clock);
+        var program = await WorkoutPlans.CreateProgramAsync(t.Db, Profile, "Base", null, new DateOnly(2026, 11, 2), null, Clock);
+        // 3 November 2026 is a Tuesday.
+        await WorkoutPlans.ScheduleWeeklyAsync(t.Db, Profile, program, legs, DayOfWeek.Tuesday, Clock);
+        var day = new DateOnly(2026, 11, 3);
+        Assert.Null(Assert.Single(await WorkoutPlans.PlannedAsync(t.Db, Profile, day, day)).SessionId);
+
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, legs, "kg", Clock);
+
+        Assert.Equal(session, Assert.Single(await WorkoutPlans.PlannedAsync(t.Db, Profile, day, day)).SessionId);
+        Assert.Null(Assert.Single(await WorkoutPlans.PlannedAsync(t.Db, Profile, day.AddDays(7), day.AddDays(7))).SessionId);
+    }
+
+    [Fact]
     public async Task A_program_cannot_end_before_it_starts() =>
         await Assert.ThrowsAsync<ArgumentException>(async () =>
         {

@@ -3,7 +3,7 @@
 -- Runs as `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(41);
+select plan(43);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000000a', 'a@example.com'),
@@ -21,7 +21,8 @@ insert into household_members (household_id, profile_id, role)
 
 insert into exercises (id, external_id, name, tracking_type, equipment, primary_muscles)
   values ('60000000-0000-7000-8000-000000000001', 'Barbell_Squat', 'Barbell squat', 'weight_reps',
-          '["barbell"]', '["quadriceps"]');
+          '["barbell"]', '["quadriceps"]'),
+         ('60000000-0000-7000-8000-000000000002', 'Bench_Press', 'Bench press', 'weight_reps', '["barbell"]', '["chest"]');
 
 create function pg_temp.login(who text) returns void language sql as $$
   select set_config('request.jwt.claims', json_build_object(
@@ -182,6 +183,15 @@ select lives_ok(
                     '65000000-0000-7000-8000-000000000001', '2026-11-02T17:10:00Z', '2026-11-02') $$,
          current_setting('t.a')),
   'A can record a volume PR');
+select lives_ok(
+  format($$ insert into personal_records (id, profile_id, exercise_id, kind, value, weight_kg, reps, set_log_id, achieved_at, local_date)
+            values ('73000000-0000-7000-8000-000000000009', %L, '60000000-0000-7000-8000-000000000002', 'weight', 100, 100, 5,
+                    '65000000-0000-7000-8000-000000000001', '2026-11-02T17:10:00Z', '2026-11-02') $$,
+         current_setting('t.a')),
+  'a record sent with another exercise is accepted');
+select is((select exercise_id from personal_records where id = '73000000-0000-7000-8000-000000000009'),
+  '60000000-0000-7000-8000-000000000001'::uuid, 'but it is filed under the exercise its set was logged under');
+delete from personal_records where id = '73000000-0000-7000-8000-000000000009';
 select throws_ok(
   format($$ insert into personal_records (profile_id, exercise_id, kind, value, weight_kg, reps, set_log_id, achieved_at, local_date)
             values (%L, '60000000-0000-7000-8000-000000000001', 'e1rm', 116.67, 100, 5,

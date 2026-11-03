@@ -271,7 +271,7 @@ Stored on `set_logs.e1rm_kg` with the formula in `e1rm_formula` (the logger uses
 
 ## Personal records
 
-`PersonalRecords.Detect(earlier, set)` in `Training/`. App rules, not from a published source. A completed set (warm-ups left out) is compared with the profile's other completed sets of the same exercise, all in canonical kg:
+`PersonalRecords.Detect(earlier, set)` in `Training/`. App rules, not from a published source. A completed set (warm-ups left out) is compared with the profile's sets of the same exercise completed before it, all in canonical kg. Editing a set later evaluates it against the same earlier sets, so a better set done afterwards never takes its record away:
 
 | Record | Beats the earlier best when |
 | --- | --- |
@@ -282,7 +282,7 @@ Stored on `set_logs.e1rm_kg` with the formula in `e1rm_formula` (the logger uses
 
 - "Greater" is `Quantity.CanonicalGreater` (relative tolerance 1e-9) and "same load" is `Quantity.CanonicalEquals`, so repeating a lift in the other unit is never a record (§2.6).
 - A record needs something to beat: an exercise's first set is a baseline, an e1RM record needs an earlier estimate, and a reps record an earlier set at that load.
-- Each record is a `personal_records` row (kind, canonical value, the set's load and reps, the formula for e1RM, the set). The rows are the history; deleting or un-ticking the set removes its records. Records of other sets aren't recomputed when an earlier set is later deleted.
+- Each record is a `personal_records` row (kind, canonical value, the set's load and reps, the formula for e1RM, the set). The server files it under the set's exercise whatever the client sends. The rows are the history; deleting or un-ticking the set removes its records, and once a workout is finished its sets and records can't be changed. Records of later sets aren't recomputed when an earlier set is deleted or edited.
 
 Golden values: after 100 kg × 5, 102.5 × 5 beats e1RM (119.583), weight and volume (512.5); 100 × 6 then beats reps at 100 kg, e1RM (120) and volume (600); 60 × 9 is a volume record only (540).
 

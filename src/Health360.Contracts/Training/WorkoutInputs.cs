@@ -11,6 +11,9 @@ public static partial class WorkoutCodes
     /// <summary>Lifting units a load or plate may be entered in.</summary>
     public static IReadOnlyList<string> LoadUnits { get; } = ["kg", "lb"];
 
+    /// <summary>Units a set's distance may be entered in.</summary>
+    public static IReadOnlyList<string> DistanceUnits { get; } = ["m", "km", "mi", "yd"];
+
     /// <summary><c>set_logs.set_type</c>, in the order the logger offers them.</summary>
     public static IReadOnlyList<string> SetTypes { get; } = ["working", "warmup", "drop", "backoff", "failure"];
 
@@ -32,7 +35,8 @@ public static partial class WorkoutCodes
 
 /// <summary>
 /// One set as the logger edits it, as entered: reps, the load in <paramref name="WeightUnit"/> (kg or lb), RPE or
-/// RIR, and the set type. Fields left empty are null.
+/// RIR, the set type, and for timed exercises the time in seconds and the distance in
+/// <paramref name="DistanceUnit"/>. Fields left empty are null.
 /// </summary>
 public sealed record SetEntry(
     int? Reps,
@@ -40,7 +44,10 @@ public sealed record SetEntry(
     string WeightUnit,
     double? Rpe = null,
     int? Rir = null,
-    string SetType = "working");
+    string SetType = "working",
+    double? DurationSeconds = null,
+    double? Distance = null,
+    string? DistanceUnit = null);
 
 /// <summary>The <c>set_logs</c> checks, so the logger can say what's wrong before a write would be quarantined.</summary>
 public sealed class SetEntryValidator : AbstractValidator<SetEntry>
@@ -56,6 +63,15 @@ public sealed class SetEntryValidator : AbstractValidator<SetEntry>
             .WithMessage("RPE runs from 0 to 10.");
         RuleFor(x => x.Rir).InclusiveBetween(0, 20).WithMessage("RIR runs from 0 to 20.");
         RuleFor(x => x.SetType).Must(WorkoutCodes.SetTypes.Contains).WithMessage("Choose a set type.");
+        RuleFor(x => x.DurationSeconds)
+            .Must(d => d is null || (double.IsFinite(d.Value) && d.Value is >= 0 and <= 86400))
+            .WithMessage("Enter a time of up to 24 hours.");
+        RuleFor(x => x.Distance)
+            .Must(d => d is null || (double.IsFinite(d.Value) && d.Value is >= 0 and <= 1_000_000))
+            .WithMessage("Enter a distance of 0 or more.");
+        RuleFor(x => x.DistanceUnit)
+            .Must((x, unit) => x.Distance is null || (unit is not null && WorkoutCodes.DistanceUnits.Contains(unit)))
+            .WithMessage("Choose a distance unit.");
     }
 }
 

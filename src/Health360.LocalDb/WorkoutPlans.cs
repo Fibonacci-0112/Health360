@@ -50,7 +50,10 @@ public sealed class ProgramRow
     public string? EndsOn { get; set; }
 }
 
-/// <summary>A workout planned on a day: from a weekly program entry or a dated one.</summary>
+/// <summary>
+/// A workout planned on a day: from a weekly program entry or a dated one. <see cref="SessionId"/> is the session that
+/// did it: a dated entry's own, or for a weekly entry a session of its template on that day.
+/// </summary>
 public sealed record PlannedWorkout(
     DateOnly Date,
     string ScheduledId,
@@ -231,6 +234,12 @@ public static class WorkoutPlans
             "WHERE s.profile_id = ? AND (s.scheduled_on IS NULL OR (s.scheduled_on >= ? AND s.scheduled_on <= ?))",
             [profileId, Day(from), Day(to)]).ConfigureAwait(false);
 
+        // A weekly entry has no session of its own: it counts as done on a day with a session of its template.
+        var sessions = await db.GetAll<SessionOn>(
+            "SELECT id AS Id, template_id AS TemplateId, local_date AS LocalDate FROM workout_sessions " +
+            "WHERE profile_id = ? AND template_id IS NOT NULL AND local_date >= ? AND local_date <= ? ORDER BY started_at, id",
+            [profileId, Day(from), Day(to)]).ConfigureAwait(false);
+
         var planned = new List<PlannedWorkout>();
         foreach (var row in rows)
         {
@@ -254,7 +263,8 @@ public static class WorkoutPlans
             {
                 if (IsoWeekday(day.DayOfWeek) == weekday && day >= starts && (ends is null || day <= ends))
                 {
-                    planned.Add(new PlannedWorkout(day, row.Id, row.TemplateId, row.TemplateName, row.ProgramId, null));
+                    var done = sessions.FirstOrDefault(x => x.TemplateId == row.TemplateId && x.LocalDate == Day(day))?.Id;
+                    planned.Add(new PlannedWorkout(day, row.Id, row.TemplateId, row.TemplateName, row.ProgramId, done));
                 }
             }
         }
@@ -273,6 +283,15 @@ public static class WorkoutPlans
     internal sealed class IdOnly
     {
         public string Id { get; set; } = "";
+    }
+
+    internal sealed class SessionOn
+    {
+        public string Id { get; set; } = "";
+
+        public string TemplateId { get; set; } = "";
+
+        public string LocalDate { get; set; } = "";
     }
 
     internal sealed class ScheduleRow

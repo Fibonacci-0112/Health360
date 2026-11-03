@@ -207,13 +207,34 @@ create index personal_records_set_idx on public.personal_records (set_log_id);
 create trigger personal_records_updated_at before update on public.personal_records
   for each row execute function private.set_updated_at();
 
+-- A record is of the exercise its set was logged under: the trigger copies it from the set (as measurements copy
+-- their category from the metric), so the exercise's record history can't hold another exercise's sets. A set the
+-- writer can't see leaves the value as sent, and the foreign key or RLS rejects the row.
+create function private.personal_records_exercise() returns trigger
+language plpgsql set search_path = '' as $$
+declare
+  set_exercise uuid;
+begin
+  select se.exercise_id into set_exercise
+  from public.set_logs s join public.session_exercises se on se.id = s.session_exercise_id and se.profile_id = s.profile_id
+  where s.id = new.set_log_id and s.profile_id = new.profile_id;
+  if set_exercise is not null then
+    new.exercise_id := set_exercise;
+  end if;
+  return new;
+end $$;
+
+create trigger personal_records_exercise before insert or update of exercise_id, set_log_id on public.personal_records
+  for each row execute function private.personal_records_exercise();
+
 -------------------------------------------------------------------------------
 -- Grants and row level security
 -------------------------------------------------------------------------------
 
 revoke all on function private.is_plate_inventory(jsonb), private.e1rm_kg(double precision, integer, text) from public, anon;
 grant execute on function private.is_plate_inventory(jsonb), private.e1rm_kg(double precision, integer, text) to authenticated;
-revoke all on function private.training_locations_canonical(), private.training_locations_fixed_household() from public, anon;
+revoke all on function private.training_locations_canonical(), private.training_locations_fixed_household(),
+  private.personal_records_exercise() from public, anon;
 
 alter table public.training_locations enable row level security;
 alter table public.programs enable row level security;

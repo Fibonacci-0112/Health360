@@ -160,15 +160,29 @@
     /// </summary>
     private void Follow()
     {
-        if (Workouts.ProfileId is not { } profileId || profileId == watchedProfile)
+        var profileId = Workouts.ProfileId;
+        if (profileId == watchedProfile)
         {
             return;
         }
 
+        // Another profile (or none): nothing of the previous one's stays on screen.
         watch?.Cancel();
         watch?.Dispose();
-        watch = new CancellationTokenSource();
+        watch = null;
         watchedProfile = profileId;
+        loaded = false;
+        active = null;
+        templates = [];
+        planned = [];
+        records = [];
+        recent = [];
+        if (profileId is null)
+        {
+            return;
+        }
+
+        watch = new CancellationTokenSource();
         var token = watch.Token;
         _ = Task.Run(() => WatchAsync(token), CancellationToken.None);
     }
@@ -181,8 +195,11 @@
             {
                 await InvokeAsync(async () =>
                 {
-                    await LoadAsync();
-                    StateHasChanged();
+                    if (!token.IsCancellationRequested)
+                    {
+                        await LoadAsync();
+                        StateHasChanged();
+                    }
                 });
             }
         }
@@ -193,9 +210,12 @@
         {
             await InvokeAsync(() =>
             {
-                error = "Couldn't read your workouts on this device. Leave this tab and come back to try again.";
-                watchedProfile = null;
-                StateHasChanged();
+                if (!token.IsCancellationRequested)
+                {
+                    error = "Couldn't read your workouts on this device. Leave this tab and come back to try again.";
+                    watchedProfile = null;
+                    StateHasChanged();
+                }
             });
         }
     }
@@ -235,6 +255,10 @@
         catch (InvalidOperationException e)
         {
             error = e.Message;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            error = "Couldn't start the workout on this device. Try again.";
         }
         finally
         {

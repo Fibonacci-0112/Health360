@@ -51,7 +51,18 @@
                                 {
                                     <th scope="col">Weight</th>
                                 }
-                                <th scope="col">Reps</th>
+                                @if (exercise.TracksDistance)
+                                {
+                                    <th scope="col">Distance</th>
+                                }
+                                @if (exercise.TracksTime)
+                                {
+                                    <th scope="col">Time</th>
+                                }
+                                @if (exercise.TracksReps)
+                                {
+                                    <th scope="col">Reps</th>
+                                }
                                 <th scope="col">RPE</th>
                                 <th scope="col"><span class="visually-hidden">Done</span></th>
                             </tr>
@@ -90,10 +101,32 @@
                                             </span>
                                         </td>
                                     }
-                                    <td>
-                                        <input class="set-input" inputmode="numeric" aria-label="@($"{label} reps")" value="@set.Reps" disabled="@busy"
-                                               @onchange="e => SaveRepsAsync(set, e.Value as string)" />
-                                    </td>
+                                    @if (exercise.TracksDistance)
+                                    {
+                                        <td>
+                                            <span class="inline">
+                                                <input class="set-input" inputmode="decimal" aria-label="@($"{label} distance in {DistanceUnit(set)}")"
+                                                       value="@Number(set.Distance)" disabled="@busy"
+                                                       @onchange="e => SaveDistanceAsync(set, e.Value as string)" />
+                                                <span class="muted small">@DistanceUnit(set)</span>
+                                            </span>
+                                        </td>
+                                    }
+                                    @if (exercise.TracksTime)
+                                    {
+                                        <td>
+                                            <input class="set-input" inputmode="decimal" placeholder="m:ss" aria-label="@($"{label} time")"
+                                                   value="@Time(set.DurationSeconds)" disabled="@busy"
+                                                   @onchange="e => SaveTimeAsync(set, e.Value as string)" />
+                                        </td>
+                                    }
+                                    @if (exercise.TracksReps)
+                                    {
+                                        <td>
+                                            <input class="set-input" inputmode="numeric" aria-label="@($"{label} reps")" value="@set.Reps" disabled="@busy"
+                                                   @onchange="e => SaveRepsAsync(set, e.Value as string)" />
+                                        </td>
+                                    }
                                     <td>
                                         <input class="set-input" inputmode="decimal" aria-label="@($"{label} RPE")" value="@Number(set.Rpe)" disabled="@busy"
                                                @onchange="e => SaveRpeAsync(set, e.Value as string)" />
@@ -172,6 +205,7 @@
     private IReadOnlyList<LoggedExercise>? exercises;
     private CancellationTokenSource? watch;
     private string? watchedSession;
+    private string? watchedProfile;
     private bool busy;
     private bool confirmingDiscard;
     private string? error;
@@ -185,18 +219,31 @@
 
     protected override void OnParametersSet() => Follow();
 
+    /// <summary>
+    /// Watches this session for the signed-in profile. Another profile (or none) stops the old watch and clears what
+    /// it showed, so one profile's workout never stays on screen for the next.
+    /// </summary>
     private void Follow()
     {
-        if (Workouts.ProfileId is null || watchedSession == SessionId)
+        var profileId = Workouts.ProfileId;
+        if (profileId == watchedProfile && SessionId == watchedSession)
         {
             return;
         }
 
         watch?.Cancel();
         watch?.Dispose();
-        watch = new CancellationTokenSource();
-        watchedSession = SessionId;
+        watch = null;
         exercises = null;
+        results = [];
+        watchedProfile = profileId;
+        watchedSession = SessionId;
+        if (profileId is null)
+        {
+            return;
+        }
+
+        watch = new CancellationTokenSource();
         var token = watch.Token;
         _ = Task.Run(() => WatchAsync(SessionId, token), CancellationToken.None);
     }
@@ -209,8 +256,12 @@
             {
                 await InvokeAsync(() =>
                 {
-                    exercises = batch;
-                    StateHasChanged();
+                    // A batch queued before the watch was replaced belongs to the old profile or session.
+                    if (!token.IsCancellationRequested)
+                    {
+                        exercises = batch;
+                        StateHasChanged();
+                    }
                 });
             }
         }
@@ -221,9 +272,12 @@
         {
             await InvokeAsync(() =>
             {
-                error = "Couldn't read this workout on this device. Leave and come back to try again.";
-                watchedSession = null;
-                StateHasChanged();
+                if (!token.IsCancellationRequested)
+                {
+                    error = "Couldn't read this workout on this device. Leave and come back to try again.";
+                    watchedSession = null;
+                    StateHasChanged();
+                }
             });
         }
     }
@@ -239,6 +293,35 @@
     };
 
     private string Unit(LoggedSet set) => set.WeightUnit ?? Workouts.LoadUnit;
+
+    private string DistanceUnit(LoggedSet set) => set.DistanceUnit ?? Workouts.DistanceUnit;
+
+    private static string? Time(double? seconds) => seconds is { } s ? PaceText.Format(s) : null;
+
+    private Task SaveDistanceAsync(LoggedSet set, string? text)
+    {
+        var unit = DistanceUnit(set);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return SaveAsync(set, e => e with { Distance = null, DistanceUnit = null });
+        }
+
+        return NumberText.Parse(text) is { } distance
+            ? SaveAsync(set, e => e with { Distance = distance, DistanceUnit = unit })
+            : Fail("Enter the distance as a number.");
+    }
+
+    private Task SaveTimeAsync(LoggedSet set, string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return SaveAsync(set, e => e with { DurationSeconds = null });
+        }
+
+        return PaceText.ParseSeconds(text) is { } seconds
+            ? SaveAsync(set, e => e with { DurationSeconds = seconds })
+            : Fail("Enter the time as minutes and seconds, like 1:30.");
+    }
 
     private static string? Number(double? value) =>
         value?.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
@@ -311,10 +394,16 @@
 
     private async Task SearchAsync(ChangeEventArgs e)
     {
-        query = e.Value as string;
+        var typed = e.Value as string;
+        query = typed;
         try
         {
-            results = string.IsNullOrWhiteSpace(query) ? [] : await Workouts.SearchExercisesAsync(query);
+            var found = string.IsNullOrWhiteSpace(typed) ? [] : await Workouts.SearchExercisesAsync(typed);
+            // A slower search for earlier text must not replace the results for what's in the box now.
+            if (query == typed)
+            {
+                results = found;
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
