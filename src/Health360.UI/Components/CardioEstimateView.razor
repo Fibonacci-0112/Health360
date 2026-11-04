@@ -1,0 +1,80 @@
+@using System.Globalization
+@using Health360.Domain.Training
+@inject ProfileService Profiles
+
+<section class="card cardio-estimate" aria-label="Cardio energy estimate">
+    <h2>@Estimate.Activity.Name</h2>
+    <p>@N(Estimate.Entry.DurationSeconds / 60) minutes</p>
+    @if (Estimate.Kcal is { } kcal)
+    {
+        <p class="strong">@N(Energy(kcal.Low))–@N(Energy(kcal.High)) @EnergyUnitCode (estimated)</p>
+    }
+    else
+    {
+        <p class="muted">Energy estimate unavailable</p>
+    }
+    <p class="muted">@Estimate.Method</p>
+    @if (Estimate.DistanceMetres is > 0 && Estimate.Entry.Distance is { } distance)
+    {
+        <p>@N(distance) @Estimate.Entry.DistanceUnit · @PaceText()</p>
+    }
+    @if (Estimate.AerobicSeconds is { } aerobic && Estimate.AnaerobicSeconds is { } anaerobic)
+    {
+        <p>Aerobic @N(aerobic / 60) min · Anaerobic @N(anaerobic / 60) min (intensity estimate)</p>
+        <p class="muted small">These labels describe intensity. Both energy systems work at every intensity.</p>
+    }
+    <details>
+        <summary>Inputs and limitations</summary>
+        <p>Method version @Estimate.Version · Weight @(Estimate.Physiology.WeightKg is { } weight ? $"{N(weight)} kg (trend)" : "unavailable") · Age @Estimate.Physiology.AgeYears · Sex for calculations @Estimate.Physiology.Sex</p>
+        <p>Average HR @Estimate.Entry.AverageHr · Max HR @Estimate.Entry.MaxHr · RPE @Estimate.Entry.Rpe · Intervals @(Estimate.Entry.Intervals ? "yes" : "no")</p>
+        @if (Estimate.Physiology.Vo2Max is { } vo2)
+        {
+            <p>VO₂max @N(vo2.Value) ml/kg/min · @(vo2.IsEstimate ? vo2.Estimate?.Method : vo2.Measurement?.Source.ToString())</p>
+        }
+        @if (Estimate.Physiology.ThresholdHr is { } threshold)
+        {
+            <p>Threshold @Estimate.Physiology.ThresholdMetric: @N(threshold.Value) bpm · @(threshold.IsEstimate ? threshold.Estimate?.Method : $"{threshold.Measurement?.Source}, {threshold.Measurement?.MeasuredOn:yyyy-MM-dd}")</p>
+        }
+        @if (Estimate.Zones is { } zones)
+        {
+            <p>@zones.Method</p>
+            @foreach (var input in zones.Inputs)
+            {
+                <p class="muted small">Zone input @N(input.Value) bpm · @(input.IsEstimate ? input.Estimate?.Method : $"{input.Measurement?.Source}, {input.Measurement?.MeasuredOn:yyyy-MM-dd}")</p>
+            }
+            <table>
+                <thead><tr><th scope="col">Zone</th><th scope="col">Lower bound (bpm)</th><th scope="col">Minutes</th></tr></thead>
+                <tbody>
+                    @for (var i = 0; i < zones.Zones.Count; i++)
+                    {
+                        <tr><th scope="row">@zones.Zones[i].Name</th><td>@N(zones.Zones[i].LowerBpm)</td><td>@(Estimate.Entry.ZoneSeconds is { } times ? N(times[i] / 60) : "Not entered")</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+        @foreach (var note in Estimate.Notes)
+        {
+            <p class="muted small">@note</p>
+        }
+    </details>
+    <p class="muted small">Rough energy range. Not added to your calorie target. Fat/carbohydrate estimates are not available yet.</p>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public CardioEstimate Estimate { get; set; } = null!;
+
+    private static string N(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
+
+    private string EnergyUnitCode => UnitPrefOptions.Energy.ToCode(Profiles.UnitPrefs.Energy);
+
+    private double Energy(double kcal) => UnitCodes.Convert(kcal, "kcal", EnergyUnitCode)!.Value;
+
+    private string PaceText()
+    {
+        var unit = Profiles.UnitPrefs.Pace;
+        var secondsPerKm = Pace.FromDistance(Estimate.DistanceMetres!.Value, Estimate.Entry.DurationSeconds);
+        var seconds = Pace.FromSecondsPerKm(secondsPerKm, unit);
+        return $"{N(seconds / 60)} {(unit == PaceUnit.MinutesPerMile ? "min/mi" : "min/km")}";
+    }
+}

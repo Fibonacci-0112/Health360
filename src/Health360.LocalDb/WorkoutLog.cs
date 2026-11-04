@@ -26,6 +26,9 @@ public sealed class SessionRow
 
     public string LocalDate { get; set; } = "";
 
+    /// <summary>Stored cardio snapshot, read without using the current physiology profile.</summary>
+    public string? EnergyEstimate { get; set; }
+
     public long CompletedSets { get; set; }
 }
 
@@ -117,7 +120,7 @@ public static class WorkoutLog
 
     private const string SessionColumns =
         "ws.id AS Id, ws.template_id AS TemplateId, t.name AS TemplateName, ws.kind AS Kind, ws.started_at AS StartedAt, " +
-        "ws.ended_at AS EndedAt, ws.local_date AS LocalDate, " +
+        "ws.ended_at AS EndedAt, ws.local_date AS LocalDate, ws.energy_estimate AS EnergyEstimate, " +
         "(SELECT count(*) FROM set_logs s JOIN session_exercises se ON se.id = s.session_exercise_id " +
         "WHERE se.session_id = ws.id AND s.completed_at IS NOT NULL) AS CompletedSets";
 

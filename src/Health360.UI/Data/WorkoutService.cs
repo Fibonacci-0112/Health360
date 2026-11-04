@@ -1,4 +1,5 @@
 using Health360.Contracts.Training;
+using Health360.Domain.Physiology;
 using Health360.Domain.Training;
 using Health360.Domain.Units;
 using Health360.LocalDb;
@@ -30,6 +31,15 @@ public sealed class WorkoutService(PowerSyncDatabase db, ProfileService profiles
         WorkoutLog.WatchTrainChanges(db, RequireProfile(), cancellationToken);
 
     public Task<SessionRow[]> RecentSessionsAsync(int limit = 5) => WorkoutLog.RecentSessionsAsync(db, RequireProfile(), limit);
+
+    public Task<CardioZones?> CardioZonesAsync(ZoneSport sport, PhysiologyProfile physiology) =>
+        CardioLog.ZonesAsync(db, RequireProfile(), sport, Today, physiology);
+
+    public Task<string> SaveCardioAsync(CardioEntry entry, CardioPhysiology physiology, CardioZones? zones) =>
+        CardioLog.SaveAsync(db, RequireProfile(), entry, physiology, zones, clock);
+
+    public Task<CardioSessionRow[]> CardioSessionsAsync(DateOnly from, DateOnly to) =>
+        CardioLog.SessionsAsync(db, RequireProfile(), from, to);
 
     public Task<TemplateRow[]> TemplatesAsync() => WorkoutPlans.TemplatesAsync(db, RequireProfile());
 

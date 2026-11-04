@@ -300,6 +300,37 @@ Golden values: after 100 kg × 5, 102.5 × 5 beats e1RM (119.583), weight and vo
 
 Golden values (increment 2.5): linear 100 kg, 3 × 5 done → 102.5; replaying double 8–12 from 60 through 10/9/8, 12/12/12, then 7/7/7, 7/7/6 at 62.5 → 62.5 with two misses, and a further 7/6/6 → 55; third miss at 100 → 90; third miss at 20 → 17.5. With increment 5, third miss at 225 → 200. Double 8–12 at 60: 10/9/8 → 60 (streak reset to 0), 12/12/11 → 60, 12/12/12 → 62.5 (target 8), 9/8/7 → 62.5 with one miss.
 
+## Manual cardio energy (first step 1.2 slice)
+
+`Training/CardioEnergy` estimates **gross** session kcal, including resting expenditure during the session. It never changes the calorie target. `CardioLog` stores the result as a version 1 snapshot on `workout_sessions.energy_estimate`: original session inputs, canonical distance, activity/MET code, the weight trend used, sex and age, resolved VO₂max/max/resting/threshold HR with measured-versus-estimated provenance, zone boundaries and source, method, range and limitations. Only the winning resolved inputs are copied, without passed-over measurement history. The snapshot is never recomputed by a read. Later zone, measurement or preference edits leave it unchanged. Distance stays as entered too; displayed pace uses the current pace preference.
+
+**Source:** Keytel, L. R. et al. (2005). Prediction of energy expenditure from heart rate monitoring during submaximal exercise. *Journal of Sports Sciences* 23(3):289–297, [doi:10.1080/02640410470001730089](https://doi.org/10.1080/02640410470001730089). Checked against the [full primary paper text](https://www.researchgate.net/publication/7777759_Prediction_of_energy_expenditure_from_heart_rate_monitoring_during_submaximal_exercise), mixed-model prediction equations. The printed equation coefficients below are used, rather than the extra digits in the parameter tables. Output is **kJ/min**, converted by division by 4.184, then multiplied by duration in minutes. Inputs are age in years, weight in kg, HR in bpm, and VO₂max in ml/kg/min.
+
+| Model | Equation (kJ/min) |
+| --- | --- |
+| Men, no VO₂max | −55.0969 + 0.6309 × HR + 0.1988 × kg + 0.2017 × age |
+| Women, no VO₂max | −20.4022 + 0.4472 × HR − 0.1263 × kg + 0.074 × age |
+| Men, with VO₂max | −59.3954 − 36.3781 + 0.271 × age + 0.394 × kg + 0.404 × VO₂max + 0.634 × HR |
+| Women, with VO₂max | −59.3954 + 0.274 × age + 0.103 × kg + 0.380 × VO₂max + 0.450 × HR |
+
+The study involved regularly exercising adults aged 18–45, 47–120 kg, during submaximal treadmill/cycle stages (roughly 57–90% HRmax). The app uses it for adults only; other ages, sizes and harder efforts are extrapolations, explicitly disclosed. HR-lowering medication disables Keytel even with measured HR and VO₂max. Missing age/sex also selects METs; missing weight leaves energy unavailable while allowing the session to be logged. Negative regression values at low HR are floored to zero. Invalid/nonfinite session inputs and inconsistent average/max HR are rejected.
+
+Session input priority and **product range policy**, not published confidence intervals:
+
+1. Watch time in zones, when entered, must cover the full duration within 0.01 s, with one non-negative time for every displayed zone. Each occupied zone contributes Keytel(lower HR) × minutes to the low total and Keytel(upper HR) × minutes to the high total. The last zone needs the session max, else the resolved profile max; if neither can bound it, fall back to average HR or METs. Session max caps other upper bounds. The resulting range is widened by 25% on each side, or 40% for intervals. A zone lower bound above recorded max is invalid.
+2. Average HR: steady-state kcal widened by 30% on each side, or 50% for intervals. No threshold time split is inferred for average-HR intervals.
+3. No usable HR energy: MET × kg × hours, widened by 30% on each side. METs are explicitly selected through the activity description, not inferred from the sport alone. RPE is saved but not yet mapped to fuel or intensity fractions.
+
+These deliberately broad policy ranges describe model and summary-input uncertainty; they are not validated individual prediction intervals. Even a measured input yields estimated energy. A zero lower end can occur when a broad low zone includes resting HR.
+
+**MET sources:** verified 2024 Adult Compendium [Running](https://pacompendium.com/running/) and [Bicycling](https://pacompendium.com/bicycling/). Initial codes: 12020 jogging self-selected 7.5; 12030 running 5.0–5.2 mph 8.5; 12050 running 6.0–6.3 mph 9.3; 01010 leisure cycling under 10 mph 4.0; 01030 cycling 12–13.9 mph 8.0; 01200 stationary cycling general 6.8. This is a small catalogue, not all Compendium activities.
+
+**Threshold minutes:** the measured resolved LT2/VT2 HR, otherwise measured LTHR. Time at or above it is labelled anaerobic intensity and time below aerobic intensity, with copy that both energy systems operate at every intensity. For zone summaries, a zone wholly above or below the threshold is assignable; an occupied zone straddling the threshold leaves both totals unavailable. Average HR yields a whole-session steady-state intensity approximation only. An estimated threshold is never used. These labels are product intensity conventions, not measures of energy-system contribution. Sport-specific threshold measurements are not supported by the current measurement schema; these are the profile's all-sports values.
+
+**Golden checks:** male 80 kg/30 y/150 bpm/30 min without VO₂max → 440.9161089866 kcal before widening (308.6412762906–573.1909416826); female 60 kg/40 y/140 bpm → 269.5109942639 (188.6576959847–350.3642925430). With VO₂max 50 and 40 respectively: 424.3056883365 and 257.7289674952 before widening. Male 80 kg/30 y, zones starting at 0/120/150/170, 20 min in zone 2 and 10 min in zone 3 → 262.8321582218–588.8423159656 kcal. No HR, jogging 30 min/80 kg → 300 kcal before widening (210–390). `CardioEnergyTests` pins these independently calculated values; `CardioLogTests` checks snapshot persistence and uploads; `CardioTests` exercises the form and totals.
+
+**Not yet implemented:** fat/carbohydrate kcal/grams (no primary-source population intensity→RER curve has been verified), RPE-derived splits, low/moderate/high minutes, other sports and strength-session MET estimates. A fat/carb split is explicitly unavailable, never fabricated from HR zone numbers. The full §2.9 roadmap remains planned.
+
 ## What the 1.1 exit criterion proves
 
 Step 1.1 proves that entering a lab RMR changes the physiology profile's maintenance estimate at once, and that deleting it falls back to the next value or the estimate. It also proves that a measured max HR replaces the Tanaka estimate, and that the zones derived from max HR follow it (`HeartRateZoneRules.Derive`). Nutrition targets built on this come in step 1.3 and have their own integration test (PLAN.md §3).
