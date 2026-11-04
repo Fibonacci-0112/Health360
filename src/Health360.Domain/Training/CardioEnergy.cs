@@ -162,7 +162,8 @@ public static class CardioEnergy
         return errors;
     }
 
-    private static bool AverageWithinZoneBounds(double average, CardioEntry entry, IReadOnlyList<double> times, CardioZones zones)
+    private static bool AverageWithinZoneBounds(double average, CardioEntry entry, IReadOnlyList<double> times, CardioZones zones,
+        double? fallbackMax = null)
     {
         var low = 0d;
         var high = 0d;
@@ -177,7 +178,7 @@ public static class CardioEnergy
             var zone = zones.Zones[i];
             var fraction = times[i] / entry.DurationSeconds;
             low += fraction * zone.LowerBpm;
-            var upper = zone.UpperBpm ?? entry.MaxHr;
+            var upper = zone.UpperBpm ?? entry.MaxHr ?? fallbackMax;
             if (entry.MaxHr is { } max && upper is { } zoneUpper)
             {
                 upper = Math.Min(zoneUpper, max);
@@ -318,7 +319,11 @@ public static class CardioEnergy
             result[i] = new(z.LowerBpm, Math.Max(z.LowerBpm, high ?? z.LowerBpm));
         }
 
-        return result;
+        // A profile maximum can be estimated or outdated. It must not cap zone energy below the
+        // observed average; use the average-HR path instead when the resolved bounds contradict it.
+        return entry.AverageHr is { } average
+            && !AverageWithinZoneBounds(average, entry, entry.ZoneSeconds!, zones, p.MaxHr?.Value)
+                ? null : result;
     }
 
     private static (double? Aerobic, double? Anaerobic) Split(CardioEntry entry, CardioPhysiology p, CardioZones? zones)

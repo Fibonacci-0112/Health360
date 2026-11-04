@@ -78,6 +78,39 @@ public sealed class CardioTests : AppTestContext
     }
 
     [Fact]
+    public async Task Synced_zone_insert_edit_and_delete_refresh_the_form_and_clear_stale_watch_times()
+    {
+        var cut = await CardioAsync();
+        await App.Database.Db.Execute(
+            "INSERT INTO zone_sets (id, profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from) " +
+            "VALUES ('cardio-zones', ?, 'run', 'hr', 'custom', '[0,100,150]', 'bpm', '[0,100,150]', '2026-01-01')", [ProfileId]);
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Stored HR zones", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal), Wait);
+        await ChangeAsync(cut, "#cardio-duration", "30");
+        for (var i = 1; i <= 3; i++)
+        {
+            await ChangeAsync(cut, $"input[aria-label='Zone {i} minutes']", i == 2 ? "30" : "0");
+        }
+
+        await ClickAsync(cut, "#preview-cardio");
+        Assert.Single(cut.FindAll(".cardio-estimate"));
+        await App.Database.Db.Execute(
+            "UPDATE zone_sets SET boundaries = '[0,130,170]', boundaries_canonical = '[0,130,170]' WHERE id = 'cardio-zones'");
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("130 to <170", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal);
+            Assert.Contains("Zones changed", cut.Markup, StringComparison.Ordinal);
+            Assert.Empty(cut.FindAll(".cardio-estimate"));
+            Assert.All(cut.FindAll("input[aria-label$=' minutes']"), input => Assert.True(string.IsNullOrEmpty(input.GetAttribute("value"))));
+            Assert.Equal("30", cut.Find("#cardio-duration").GetAttribute("value"));
+        }, Wait);
+
+        await App.Database.Db.Execute("DELETE FROM zone_sets WHERE id = 'cardio-zones'");
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Friel", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal), Wait);
+    }
+
+    [Fact]
     public async Task Medication_suppresses_age_based_zones_and_hr_energy()
     {
         var cut = await CardioAsync(medication: true);

@@ -35,6 +35,9 @@ public sealed class WorkoutService(PowerSyncDatabase db, ProfileService profiles
     public Task<CardioZones?> CardioZonesAsync(ZoneSport sport, PhysiologyProfile physiology) =>
         CardioLog.ZonesAsync(db, RequireProfile(), sport, Today, physiology);
 
+    public IAsyncEnumerable<CardioLog.StoredZones[]> WatchCardioZoneChanges(CancellationToken cancellationToken) =>
+        CardioLog.WatchZones(db, RequireProfile(), cancellationToken);
+
     public Task<string> SaveCardioAsync(CardioEntry entry, CardioPhysiology physiology, CardioZones? zones) =>
         CardioLog.SaveAsync(db, RequireProfile(), entry, physiology, zones, clock);
 

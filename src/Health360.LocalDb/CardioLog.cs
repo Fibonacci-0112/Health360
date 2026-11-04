@@ -21,6 +21,16 @@ public sealed class CardioSessionRow
 /// <summary>Manual cardio, written locally as finished sessions with the original estimate snapshot.</summary>
 public static class CardioLog
 {
+    /// <summary>HR zone sets for this profile, now and after local or synced changes.</summary>
+    public static IAsyncEnumerable<StoredZones[]> WatchZones(PowerSyncDatabase db, string profileId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        return db.Watch<StoredZones>(
+            "SELECT id AS Id, basis AS Basis, boundaries_canonical AS Boundaries, sport AS Sport, effective_from AS EffectiveFrom " +
+            "FROM zone_sets WHERE profile_id = ? AND metric = 'hr' ORDER BY id",
+            [profileId], new SQLWatchOptions { Signal = cancellationToken, TriggerImmediately = true });
+    }
+
     /// <summary>Latest effective stored HR zones for the sport, then all-sports, then derived zones.</summary>
     public static async Task<CardioZones?> ZonesAsync(
         IPowerSyncDatabase db, string profileId, ZoneSport sport, DateOnly date, PhysiologyProfile profile)
@@ -107,5 +117,9 @@ public static class CardioLog
         public string Basis { get; set; } = "";
 
         public string Boundaries { get; set; } = "";
+
+        public string Sport { get; set; } = "";
+
+        public string EffectiveFrom { get; set; } = "";
     }
 }

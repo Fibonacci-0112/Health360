@@ -134,6 +134,8 @@
     private bool loading;
     private bool disposed;
     private int refresh;
+    private CancellationTokenSource? zoneWatch;
+    private bool zonesReady;
 
     protected override void OnInitialized()
     {
@@ -157,18 +159,30 @@
         var currentId = Workouts.ProfileId;
         if (profileId != currentId)
         {
+            zoneWatch?.Cancel();
+            zoneWatch?.Dispose();
+            zoneWatch = null;
+            zonesReady = false;
             minutes = distance = averageHr = maxHr = rpe = "";
             intervals = false;
             profileId = currentId;
             zones = null;
             zoneMinutes = [];
             status = error = null;
+            if (currentId is not null)
+            {
+                zoneWatch = new CancellationTokenSource();
+                var token = zoneWatch.Token;
+                // Capture the profile's enumerable before a later account change can select another owner.
+                var changes = Workouts.WatchCardioZoneChanges(token);
+                _ = Task.Run(() => WatchZonesAsync(changes, token), CancellationToken.None);
+            }
         }
 
         preview = null;
         physiology = null;
         var profile = Body.Profile();
-        if (profile is null || currentId is null || Body.Failed)
+        if (profile is null || currentId is null || Body.Failed || !zonesReady)
         {
             loading = false;
             if (Body.Failed)
@@ -227,6 +241,44 @@
     {
         activityCode = e.Value as string ?? CardioEnergy.Activities[0].Code;
         await RefreshAsync();
+    }
+
+    private async Task WatchZonesAsync(IAsyncEnumerable<CardioLog.StoredZones[]> changes, CancellationToken token)
+    {
+        try
+        {
+            await foreach (var _ in changes)
+            {
+                await InvokeAsync(async () =>
+                {
+                    if (!disposed && !token.IsCancellationRequested)
+                    {
+                        // Publish the first form only after the watch is subscribed, so its initial
+                        // notification cannot hide a form the user has already started filling in.
+                        zonesReady = true;
+                        await RefreshAsync();
+                    }
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception e) when (e is not ObjectDisposedException)
+        {
+            await InvokeAsync(() =>
+            {
+                if (!disposed && !token.IsCancellationRequested)
+                {
+                    ++refresh;
+                    physiology = null;
+                    preview = null;
+                    loading = false;
+                    error = "Couldn't read your zones on this device. Leave this page and come back to retry.";
+                    StateHasChanged();
+                }
+            });
+        }
     }
 
     private void ClearPreview() => preview = null;
@@ -300,5 +352,7 @@
         disposed = true;
         Body.Changed -= Changed;
         Profiles.Changed -= Changed;
+        zoneWatch?.Cancel();
+        zoneWatch?.Dispose();
     }
 }

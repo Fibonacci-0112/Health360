@@ -121,6 +121,36 @@ public sealed class CardioEnergyTests
     }
 
     [Theory]
+    [InlineData(false, 200, 0)]
+    [InlineData(true, 200, 0)]
+    [InlineData(false, 178, 900)]
+    [InlineData(true, 178, 900)]
+    public void Profile_maximum_cannot_bound_zone_energy_below_the_observed_average(bool measured, double average, double lowZoneSeconds)
+    {
+        var maximum = measured ? Measured(180) : Resolver.Resolve([], new Estimate(180, "Age prediction"));
+        var p = Male with { MaxHr = maximum };
+        var zones = new CardioZones("Test", [new("1", 0, 170), new("2", 170, null)], []);
+        var entry = new CardioEntry("12020", 1800, average, ZoneSeconds: [lowZoneSeconds, 1800 - lowZoneSeconds]);
+
+        var result = CardioEnergy.Estimate(entry, p, zones);
+        var fromAverage = CardioEnergy.Estimate(entry with { ZoneSeconds = null }, p, zones);
+
+        Assert.Equal("Keytel, average HR", result.Method);
+        Assert.Equal(fromAverage.Kcal, result.Kcal);
+        Assert.Equal(average, result.Entry.AverageHr);
+        Assert.Equal(entry.ZoneSeconds, result.Entry.ZoneSeconds);
+    }
+
+    [Fact]
+    public void Consistent_profile_maximum_still_bounds_the_open_top_zone()
+    {
+        var p = Male with { MaxHr = Measured(180) };
+        var result = CardioEnergy.Estimate(new("12020", 1800, 175, ZoneSeconds: [0, 0, 0, 1800]), p, Zones);
+
+        Assert.Equal("Keytel, time in zones", result.Method);
+    }
+
+    [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
     [InlineData(0)]
