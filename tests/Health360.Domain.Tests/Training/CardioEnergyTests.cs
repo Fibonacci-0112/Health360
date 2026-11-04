@@ -31,11 +31,20 @@ public sealed class CardioEnergyTests
     [Fact]
     public void Time_in_zones_uses_whole_zone_bounds_before_average_hr()
     {
-        var result = CardioEnergy.Estimate(new("12020", 1800, 160, 190, [0, 1200, 600, 0]), Male, Zones);
+        var result = CardioEnergy.Estimate(new("12020", 1800, 150, 190, [0, 1200, 600, 0]), Male, Zones);
 
         Assert.Equal(262.8321582217974, result.Kcal!.Low, 9);
         Assert.Equal(588.8423159655832, result.Kcal.High, 9);
         Assert.Equal("Keytel, time in zones", result.Method);
+    }
+
+    [Fact]
+    public void Average_hr_outside_the_time_weighted_zone_bounds_is_rejected()
+    {
+        var entry = new CardioEntry("12020", 1800, 160, 180, [0, 1800, 0, 0]);
+
+        Assert.Contains(CardioEnergy.Errors(entry, Zones),
+            error => error.Contains("time-weighted range", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -164,5 +173,24 @@ public sealed class CardioEnergyTests
         Assert.Empty(result.Physiology.Vo2Max.PassedOver);
         Assert.Null(result.Physiology.Vo2Max.EstimatePassedOver);
         Assert.Empty(result.Zones!.Inputs[0].PassedOver);
+    }
+
+    [Fact]
+    public void Cardio_uses_pinned_standalone_vt2_before_measured_lthr()
+    {
+        var vt2 = new Measured(Guid.Parse("10000000-0000-7000-8000-000000000002"),
+            172, MeasurementSource.Lab, new(2026, 2, 1));
+        var lthr = new Measured(Guid.Parse("10000000-0000-7000-8000-000000000003"),
+            160, MeasurementSource.FieldTest, new(2026, 3, 1));
+        var profile = PhysiologyProfile.Build(new PhysiologyInputs(new(2026, 10, 31),
+            [new(MetricCodes.Vt2Hr, vt2), new(MetricCodes.Lthr, lthr)],
+            Pins: new Dictionary<string, Pin> { [MetricCodes.Vt2Hr] = Pin.ToMeasurement(vt2.Id) }));
+
+        var cardio = CardioPhysiology.From(profile);
+
+        Assert.Equal(MetricCodes.Vt2Hr, cardio.ThresholdMetric);
+        Assert.Equal(172, cardio.ThresholdHr!.Value);
+        Assert.Same(vt2, cardio.ThresholdHr.Measurement);
+        Assert.True(cardio.ThresholdHr.Pinned);
     }
 }

@@ -44,10 +44,23 @@ public sealed record CardioPhysiology(
     public static CardioPhysiology From(PhysiologyProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
+        var threshold = profile.LowerThreshold is not null ? profile.UpperThreshold : null;
+        threshold ??= StandaloneThreshold(profile.Inputs, MetricCodes.Vt2Hr)
+            ?? StandaloneThreshold(profile.Inputs, MetricCodes.Lt2Hr)
+            ?? profile.UpperThreshold
+            ?? profile.Lthr;
         return new(profile.WeightKg, profile.Inputs.Sex, profile.AgeYears, profile.Vo2Max?.Resolution,
             profile.MaxHr?.Resolution, profile.RestingHr?.Resolution,
-            profile.UpperThreshold?.Resolution ?? profile.Lthr?.Resolution, profile.Inputs.TakesHeartRateLoweringMedication,
-            profile.UpperThreshold?.MetricCode ?? profile.Lthr?.MetricCode);
+            threshold?.Resolution, profile.Inputs.TakesHeartRateLoweringMedication, threshold?.MetricCode);
+    }
+
+    private static ProfileValue? StandaloneThreshold(PhysiologyInputs inputs, string metricCode)
+    {
+        var measurements = inputs.Measurements.Where(m => m.MetricCode == metricCode).Select(m => m.Measured);
+        var pin = inputs.Pins is not null && inputs.Pins.TryGetValue(metricCode, out var value) ? value : null;
+        return Resolver.Resolve(measurements, null, pin) is { } resolution
+            ? new ProfileValue(metricCode, resolution, false)
+            : null;
     }
 
     /// <summary>Only the winning input belongs in a workout snapshot, not unrelated measurement history.</summary>
@@ -140,9 +153,48 @@ public static class CardioEnergy
             {
                 errors.Add("Time in a zone cannot be above the session's max heart rate.");
             }
+            else if (entry.AverageHr is { } average && !AverageWithinZoneBounds(average, entry, times, zones))
+            {
+                errors.Add("Average heart rate must be within the time-weighted range of the entered zones.");
+            }
         }
 
         return errors;
+    }
+
+    private static bool AverageWithinZoneBounds(double average, CardioEntry entry, IReadOnlyList<double> times, CardioZones zones)
+    {
+        var low = 0d;
+        var high = 0d;
+        var hasUpperBound = true;
+        for (var i = 0; i < times.Count; i++)
+        {
+            if (times[i] == 0)
+            {
+                continue;
+            }
+
+            var zone = zones.Zones[i];
+            var fraction = times[i] / entry.DurationSeconds;
+            low += fraction * zone.LowerBpm;
+            var upper = zone.UpperBpm ?? entry.MaxHr;
+            if (entry.MaxHr is { } max && upper is { } zoneUpper)
+            {
+                upper = Math.Min(zoneUpper, max);
+            }
+
+            if (upper is null)
+            {
+                hasUpperBound = false;
+            }
+            else
+            {
+                high += fraction * upper.Value;
+            }
+        }
+
+        return double.IsFinite(low) && average >= low
+            && (!hasUpperBound || (double.IsFinite(high) && average <= high));
     }
 
     public static CardioEstimate Estimate(CardioEntry entry, CardioPhysiology physiology, CardioZones? zones = null)

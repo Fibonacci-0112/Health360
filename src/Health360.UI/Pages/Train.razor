@@ -212,7 +212,17 @@
         Follow();
     }
 
-    private void ProfileChanged() => _ = InvokeAsync(Follow);
+    private void ProfileChanged() => _ = InvokeAsync(() =>
+    {
+        if (Workouts.ProfileId == watchedProfile)
+        {
+            StateHasChanged();
+        }
+        else
+        {
+            Follow();
+        }
+    });
 
     /// <summary>
     /// Watches everything the tab shows; every change (a set ticked off, a workout started or finished, a schedule or
@@ -246,6 +256,37 @@
         watch = new CancellationTokenSource();
         var token = watch.Token;
         _ = Task.Run(() => WatchAsync(token), CancellationToken.None);
+        _ = Task.Run(() => WatchDateAsync(token), CancellationToken.None);
+    }
+
+    private async Task WatchDateAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1), Clock);
+        var date = Workouts.Today;
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                var today = Workouts.Today;
+                if (today == date)
+                {
+                    continue;
+                }
+
+                date = today;
+                await InvokeAsync(async () =>
+                {
+                    if (!token.IsCancellationRequested)
+                    {
+                        await LoadAsync(token);
+                        StateHasChanged();
+                    }
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private async Task WatchAsync(CancellationToken token)
