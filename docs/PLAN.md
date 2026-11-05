@@ -250,7 +250,7 @@ You can enter values from lab tests, field tests or a device. Anything you haven
 **Entry by phase:** by hand in the MVP. Guided field tests come in Phase 2. In Phase 3, DEXA, RMR and metabolic-test PDFs go through `ai-lab-parse` with the same confirm screen as labs, and Health Connect adds VO₂max, resting HR and HR samples as device values.
 
 ### 2.9 Exercise energy: aerobic vs anaerobic, fat vs carbs
-For each cardio session, `Health360.Domain` estimates the energy used, how much of it came from fat and how much from carbohydrate, and how much time was aerobic or anaerobic. It uses the session's heart rate and the physiology profile (§2.8). The result is stored on `workout_sessions.energy_estimate` as a snapshot that records its inputs and method version.
+For each cardio session, `Health360.Domain` estimates the energy used, how much of it came from fat and how much from carbohydrate, and how much time was aerobic or anaerobic. It uses the session's heart rate and the physiology profile (§2.8). The workout row stores a redacted summary; the full input/provenance snapshot is in the owner-only `cardio_estimates` table.
 
 **Session inputs, best first**
 1. HR samples (Phase 3, from Health Connect), giving time in each zone second by second.

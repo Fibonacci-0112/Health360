@@ -3,7 +3,7 @@
 -- `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(39);
+select plan(44);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000000a', 'a@example.com'),
@@ -109,6 +109,16 @@ select lives_ok(
                     '2026-11-02T17:00:00Z', '2026-11-02', 120, 165, '[600, 1200, 300, 0, 0]') $$,
          current_setting('t.a')),
   'A can start a session from the template');
+insert into workout_sessions (id, profile_id, kind, started_at, ended_at, local_date, energy_estimate)
+  values ('63000000-0000-7000-8000-000000000002', current_setting('t.a')::uuid, 'cardio',
+          '2026-11-02T18:00:00Z', '2026-11-02T18:30:00Z', '2026-11-02',
+          '{"version":1,"entry":{"activity_code":"12020","duration_seconds":1800,"average_hr":150,"zone_seconds":[1800]},
+            "activity":{"code":"12020","name":"Jogging","sport":"Run","mets":7.5},"method":"Keytel (VO₂max), average HR",
+            "physiology":{"weight_kg":80},"zones":{"inputs":[{"value":160}]},"notes":["Private input"],"kcal":{"low":10,"high":20}}');
+select is((select estimate -> 'physiology' ->> 'weight_kg' from cardio_estimates where id = '63000000-0000-7000-8000-000000000002'),
+  '80', 'a legacy full estimate is preserved in private storage');
+select is((select count(*) from cardio_estimates where id = '63000000-0000-7000-8000-000000000002'),
+  1::bigint, 'A can read the private cardio estimate');
 select throws_ok(
   format($$ insert into workout_sessions (profile_id, kind, started_at, ended_at, local_date)
             values (%L, 'cardio', '2026-11-02T17:00:00Z', '2026-11-02T16:00:00Z', '2026-11-02') $$, current_setting('t.a')),
@@ -177,7 +187,12 @@ select pg_temp.login('c');
 select is(
   (select count(*) from workout_templates) + (select count(*) from template_exercises) + (select count(*) from workout_sessions)
     + (select count(*) from session_exercises) + (select count(*) from set_logs),
-  6::bigint, 'a workouts grant shows A''s template, session and sets');
+  7::bigint, 'a workouts grant shows A''s template, sessions and sets');
+select is((select count(*) from cardio_estimates), 0::bigint, 'a workouts-only grant cannot read full cardio estimates');
+select is((select energy_estimate ? 'physiology' from workout_sessions where id = '63000000-0000-7000-8000-000000000002'),
+  false, 'a workouts grant sees only the redacted cardio summary');
+select is((select energy_estimate ? 'zones' from workout_sessions where id = '63000000-0000-7000-8000-000000000002'),
+  false, 'the cardio summary does not expose zone provenance');
 select is(pg_temp.affected($$ update set_logs set reps = 1 $$), 0::bigint, 'the grant is read-only');
 
 -------- A member of two households still can't move a custom exercise between them

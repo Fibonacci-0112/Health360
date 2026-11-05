@@ -18,7 +18,7 @@ public sealed class CardioSessionRow
     public CardioEstimate? Estimate => CardioJson.Parse(EnergyEstimate);
 }
 
-/// <summary>Manual cardio, written locally as finished sessions with the original estimate snapshot.</summary>
+/// <summary>Manual cardio sessions and their owner-only full estimate snapshots.</summary>
 public static class CardioLog
 {
     /// <summary>HR zone sets for this profile, now and after local or synced changes.</summary>
@@ -85,15 +85,21 @@ public static class CardioLog
         var end = clock.GetUtcNow();
         var start = end.AddSeconds(-entry.DurationSeconds);
         var startDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(start, clock.LocalTimeZone).DateTime);
-        await db.Execute(
+        await db.WriteTransaction(async tx =>
+        {
+            await tx.Execute(
             "INSERT INTO workout_sessions (id, profile_id, kind, sport, started_at, ended_at, local_date, avg_hr, max_hr, " +
             "zone_seconds, energy_estimate, rpe, created_at, updated_at) VALUES (?, ?, 'cardio', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [id, profileId, SportCode(estimate.Activity.Sport),
                 start.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture),
                 end.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture),
                 startDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), entry.AverageHr, entry.MaxHr,
-                entry.ZoneSeconds is { } times ? CardioJson.SerializeTimes(times) : null, CardioJson.Serialize(estimate), entry.Rpe,
-                Timestamps.UtcNow(clock), Timestamps.UtcNow(clock)]).ConfigureAwait(false);
+                entry.ZoneSeconds is { } times ? CardioJson.SerializeTimes(times) : null,
+                CardioJson.SerializeWorkoutSummary(estimate), entry.Rpe, Timestamps.UtcNow(clock), Timestamps.UtcNow(clock)]).ConfigureAwait(false);
+            await tx.Execute(
+                "INSERT INTO cardio_estimates (id, profile_id, estimate, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                [id, profileId, CardioJson.Serialize(estimate), Timestamps.UtcNow(clock), Timestamps.UtcNow(clock)]).ConfigureAwait(false);
+        }).ConfigureAwait(false);
         return id;
     }
 
@@ -102,9 +108,10 @@ public static class CardioLog
     {
         ArgumentNullException.ThrowIfNull(db);
         return db.GetAll<CardioSessionRow>(
-            "SELECT id AS Id, local_date AS LocalDate, energy_estimate AS EnergyEstimate FROM workout_sessions " +
-            "WHERE profile_id = ? AND kind = 'cardio' AND ended_at IS NOT NULL AND local_date BETWEEN ? AND ? " +
-            "ORDER BY started_at DESC, id DESC",
+            "SELECT ws.id AS Id, ws.local_date AS LocalDate, coalesce(ce.estimate, ws.energy_estimate) AS EnergyEstimate " +
+            "FROM workout_sessions ws LEFT JOIN cardio_estimates ce ON ce.id = ws.id AND ce.profile_id = ws.profile_id " +
+            "WHERE ws.profile_id = ? AND ws.kind = 'cardio' AND ws.ended_at IS NOT NULL AND ws.local_date BETWEEN ? AND ? " +
+            "ORDER BY ws.started_at DESC, ws.id DESC",
             [profileId, from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)]);
     }
 

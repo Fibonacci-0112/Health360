@@ -120,7 +120,9 @@ public static class WorkoutLog
 
     private const string SessionColumns =
         "ws.id AS Id, ws.template_id AS TemplateId, t.name AS TemplateName, ws.kind AS Kind, ws.started_at AS StartedAt, " +
-        "ws.ended_at AS EndedAt, ws.local_date AS LocalDate, ws.energy_estimate AS EnergyEstimate, " +
+        "ws.ended_at AS EndedAt, ws.local_date AS LocalDate, " +
+        "coalesce((SELECT ce.estimate FROM cardio_estimates ce WHERE ce.id = ws.id AND ce.profile_id = ws.profile_id), " +
+        "ws.energy_estimate) AS EnergyEstimate, " +
         "(SELECT count(*) FROM set_logs s JOIN session_exercises se ON se.id = s.session_exercise_id " +
         "WHERE se.session_id = ws.id AND s.completed_at IS NOT NULL) AS CompletedSets";
 
@@ -172,8 +174,9 @@ public static class WorkoutLog
             "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM programs WHERE profile_id = ?) || " +
             "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM scheduled_workouts WHERE profile_id = ?) || " +
             "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM personal_records WHERE profile_id = ?) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM cardio_estimates WHERE profile_id = ?) || " +
             "(SELECT count(*) FROM exercises) AS Stamp",
-            [profileId, profileId, profileId, profileId, profileId, profileId, profileId],
+            [profileId, profileId, profileId, profileId, profileId, profileId, profileId, profileId],
             new SQLWatchOptions { Signal = cancellationToken, TriggerImmediately = true });
     }
 

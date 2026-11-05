@@ -32,16 +32,33 @@ public sealed class CardioLogTests
         Assert.Equal(json, reopened.EnergyEstimate);
         Assert.Equal(id, reopened.Id);
         Assert.Equal(4828.032, reopened.Estimate!.DistanceMetres);
+        Assert.Equal(80, reopened.Estimate.Physiology.WeightKg);
+        var workoutSummary = await t.Db.Get<EnergyEstimateRow>("SELECT energy_estimate AS Value FROM workout_sessions WHERE id = ?", [id]);
+        using (var summary = System.Text.Json.JsonDocument.Parse(workoutSummary.Value))
+        {
+            var root = summary.RootElement;
+            Assert.False(root.TryGetProperty("physiology", out _));
+            Assert.False(root.TryGetProperty("zones", out _));
+            Assert.False(root.TryGetProperty("notes", out _));
+            Assert.DoesNotContain("VO₂max", root.GetProperty("method").GetString());
+            var parsedSummary = CardioJson.Parse(workoutSummary.Value)!;
+            Assert.Null(parsedSummary.Physiology.WeightKg);
+            Assert.Null(parsedSummary.Zones);
+            Assert.Equal(150, parsedSummary.Entry.AverageHr);
+        }
         Assert.Null(await WorkoutLog.ActiveSessionAsync(t.Db, Profile));
         var writer = new FakeWriter();
         await Uploads.UploadPendingAsync(t.Db, writer, Clock, cancellationToken: TestContext.Current.CancellationToken);
-        var upload = Assert.Single(writer.Writes);
-        Assert.Equal(("PUT", "workout_sessions", id), (upload.Op, upload.Table, upload.Id));
-        Assert.Equal("cardio", upload.Data!["kind"]!.GetValue<string>());
-        Assert.Equal("run", upload.Data["sport"]!.GetValue<string>());
-        Assert.Equal(6, upload.Data["rpe"]!.GetValue<double>());
-        Assert.Equal("2026-11-04T11:30:00.000Z", upload.Data["started_at"]!.GetValue<string>());
-        Assert.Equal(1, upload.Data["energy_estimate"]!["version"]!.GetValue<int>());
+        var sessionUpload = Assert.Single(writer.Writes, write => write.Table == "workout_sessions");
+        Assert.Equal(("PUT", "workout_sessions", id), (sessionUpload.Op, sessionUpload.Table, sessionUpload.Id));
+        Assert.Equal("cardio", sessionUpload.Data!["kind"]!.GetValue<string>());
+        Assert.Equal("run", sessionUpload.Data["sport"]!.GetValue<string>());
+        Assert.Equal(6, sessionUpload.Data["rpe"]!.GetValue<double>());
+        Assert.Equal("2026-11-04T11:30:00.000Z", sessionUpload.Data["started_at"]!.GetValue<string>());
+        Assert.Equal(1, sessionUpload.Data["energy_estimate"]!["version"]!.GetValue<int>());
+        var privateUpload = Assert.Single(writer.Writes, write => write.Table == "cardio_estimates");
+        Assert.Equal(("PUT", "cardio_estimates", id), (privateUpload.Op, privateUpload.Table, privateUpload.Id));
+        Assert.Equal(80, privateUpload.Data!["estimate"]!["physiology"]!["weight_kg"]!.GetValue<double>());
     }
 
     [Fact]
@@ -113,6 +130,11 @@ public sealed class CardioLogTests
     [InlineData("not json")]
     [InlineData("{\"version\":999}")]
     public void Unreadable_or_future_snapshots_are_not_displayed(string? json) => Assert.Null(CardioJson.Parse(json));
+
+    private sealed class EnergyEstimateRow
+    {
+        public string Value { get; set; } = "";
+    }
 
     private static Task<PowerSync.Common.DB.NonQueryResult> AddZonesAsync(TestDatabase t, string id, string profile, string sport, string date, string boundaries, string basis = "custom") =>
         t.Db.Execute("INSERT INTO zone_sets (id, profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from) " +

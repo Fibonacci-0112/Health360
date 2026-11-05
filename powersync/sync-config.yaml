@@ -31,6 +31,7 @@ streams:
       - SELECT * FROM workout_templates WHERE profile_id IN my_profiles
       - SELECT * FROM template_exercises WHERE profile_id IN my_profiles
       - SELECT * FROM workout_sessions WHERE profile_id IN my_profiles
+      - SELECT * FROM cardio_estimates WHERE profile_id IN my_profiles
       - SELECT * FROM session_exercises WHERE profile_id IN my_profiles
       - SELECT * FROM set_logs WHERE profile_id IN my_profiles
       - SELECT * FROM programs WHERE profile_id IN my_profiles
