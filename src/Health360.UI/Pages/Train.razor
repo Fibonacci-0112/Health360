@@ -1,4 +1,5 @@
 @page "/train"
+@using Health360.Contracts.Training
 @using Health360.Domain.Training
 @implements IDisposable
 @inject WorkoutService Workouts
@@ -43,6 +44,7 @@
                 <h2 id="start-title">Start a workout</h2>
                 <div class="inline">
                     <button type="button" class="primary" id="start-empty" disabled="@busy" @onclick="() => StartAsync(null, null)">Empty workout</button>
+                    <NavLink class="top-link" href="train/cardio">Log cardio</NavLink>
                 </div>
             </section>
         }
@@ -108,6 +110,41 @@
             }
         </section>
 
+        <section class="card" aria-labelledby="cardio-week-title">
+            <h2 id="cardio-week-title">Cardio this week</h2>
+            @if (cardio.Length == 0)
+            {
+                <p class="muted">No cardio logged this week.</p>
+            }
+            else
+            {
+                var estimates = cardio.Select(c => c.Estimate).OfType<CardioEstimate>().ToArray();
+                var withEnergy = estimates.Where(e => e.Kcal is not null).ToArray();
+                var withSplit = estimates.Where(e => e.AerobicSeconds is not null && e.AnaerobicSeconds is not null).ToArray();
+                <p>@cardio.Length sessions · @Number(estimates.Sum(e => e.Entry.DurationSeconds) / 60) minutes logged (@estimates.Length of @cardio.Length sessions readable)</p>
+                @if (withEnergy.Length > 0)
+                {
+                    <p>@Number(Energy(withEnergy.Sum(e => e.Kcal!.Low)))–@Number(Energy(withEnergy.Sum(e => e.Kcal!.High))) @EnergyUnitCode (estimated, @withEnergy.Length of @cardio.Length sessions)</p>
+                }
+                @if (withSplit.Length > 0)
+                {
+                    <p>Aerobic @Number(withSplit.Sum(e => e.AerobicSeconds!.Value) / 60) min · Anaerobic @Number(withSplit.Sum(e => e.AnaerobicSeconds!.Value) / 60) min (@withSplit.Length of @cardio.Length sessions)</p>
+                    <p class="muted small">These labels describe intensity; both energy systems work at every intensity.</p>
+                }
+                <p class="muted small">Saved session estimates; later physiology or zone changes leave them unchanged. Not added to your calorie target. Fat/carbohydrate estimates are not available yet.</p>
+                @foreach (var session in cardio)
+                {
+                    @if (session.Estimate is { } estimate)
+                    {
+                        <details @key="session.Id">
+                            <summary>@session.LocalDate · @estimate.Activity.Name</summary>
+                            <CardioEstimateView Estimate="estimate" />
+                        </details>
+                    }
+                }
+            }
+        </section>
+
         <section class="card" aria-labelledby="records-title">
             <h2 id="records-title">Personal records</h2>
             @if (records.Length == 0)
@@ -140,8 +177,12 @@
                     {
                         <li @key="session.Id" class="measurement">
                             <div class="measurement-text">
-                                <span class="strong">@(session.TemplateName ?? "Workout")</span>
-                                <span class="muted small">@session.LocalDate · @Sets(session.CompletedSets)</span>
+                                <span class="strong">@(session.TemplateName ?? (session.Kind == "cardio" ? "Cardio" : "Workout"))</span>
+                                <span class="muted small">@session.LocalDate @(session.Kind == "cardio" ? "" : $"· {Sets(session.CompletedSets)}")</span>
+                                @if (session.Kind == "cardio" && CardioJson.Parse(session.EnergyEstimate) is { } estimate)
+                                {
+                                    <details><summary>Session estimate</summary><CardioEstimateView Estimate="estimate" /></details>
+                                }
                             </div>
                         </li>
                     }
@@ -160,6 +201,7 @@
     private IReadOnlyList<PlannedWorkout> planned = [];
     private PersonalRecordRow[] records = [];
     private SessionRow[] recent = [];
+    private CardioSessionRow[] cardio = [];
 
     private CancellationTokenSource? watch;
     private string? watchedProfile;
@@ -170,7 +212,17 @@
         Follow();
     }
 
-    private void ProfileChanged() => _ = InvokeAsync(Follow);
+    private void ProfileChanged() => _ = InvokeAsync(() =>
+    {
+        if (Workouts.ProfileId == watchedProfile)
+        {
+            StateHasChanged();
+        }
+        else
+        {
+            Follow();
+        }
+    });
 
     /// <summary>
     /// Watches everything the tab shows; every change (a set ticked off, a workout started or finished, a schedule or
@@ -195,6 +247,7 @@
         planned = [];
         records = [];
         recent = [];
+        cardio = [];
         if (profileId is null)
         {
             return;
@@ -203,6 +256,37 @@
         watch = new CancellationTokenSource();
         var token = watch.Token;
         _ = Task.Run(() => WatchAsync(token), CancellationToken.None);
+        _ = Task.Run(() => WatchDateAsync(token), CancellationToken.None);
+    }
+
+    private async Task WatchDateAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1), Clock);
+        var date = Workouts.Today;
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                var today = Workouts.Today;
+                if (today == date)
+                {
+                    continue;
+                }
+
+                date = today;
+                await InvokeAsync(async () =>
+                {
+                    if (!token.IsCancellationRequested)
+                    {
+                        await LoadAsync(token);
+                        StateHasChanged();
+                    }
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private async Task WatchAsync(CancellationToken token)
@@ -256,12 +340,16 @@
             var newPlanned = await Workouts.PlannedAsync(Workouts.Today, Workouts.Today.AddDays(6));
             var newRecords = await Workouts.RecordsAsync();
             var newRecent = await Workouts.RecentSessionsAsync();
+            var today = Workouts.Today;
+            var monday = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
+            var newCardio = await Workouts.CardioSessionsAsync(monday, monday.AddDays(6));
             if (token.IsCancellationRequested)
             {
                 return;
             }
 
             (active, templates, planned, records, recent) = (newActive, newTemplates, newPlanned, newRecords, newRecent);
+            cardio = newCardio;
             loaded = true;
             error = null;
         }
@@ -307,6 +395,12 @@
     };
 
     private static string Formula(string? code) => code == "brzycki" ? "Brzycki" : "Epley";
+
+    private static string Number(double value) => value.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+    private string EnergyUnitCode => UnitPrefOptions.Energy.ToCode(Profiles.UnitPrefs.Energy);
+
+    private double Energy(double kcal) => UnitCodes.Convert(kcal, "kcal", EnergyUnitCode)!.Value;
 
     private static string Sets(long count) => count == 1 ? "1 set" : $"{count} sets";
 

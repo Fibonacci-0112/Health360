@@ -1,6 +1,9 @@
 using Bunit;
 using Health360.Contracts.Training;
+using Health360.Domain.Training;
+using Health360.Domain.Units;
 using Health360.LocalDb;
+using Health360.UI.Data;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -68,6 +71,41 @@ public sealed class TrainTests : AppTestContext
         Assert.Equal("Train", cut.Find("h1").TextContent);
         Assert.Contains("Nothing planned for the next 7 days.", cut.Markup, StringComparison.Ordinal);
         Assert.Contains("None yet.", cut.Find("[aria-labelledby=records-title]").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Cardio_week_reloads_after_a_local_date_rollover_without_a_database_change()
+    {
+        var cut = await TrainAsync(seed: async () =>
+        {
+            App.Clock.Now = new DateTimeOffset(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
+            await CardioLog.SaveAsync(App.Database.Db, ProfileId, new CardioEntry("12020", 1800),
+                new CardioPhysiology(80, null, null), null, App.Clock);
+            App.Clock.Now = new DateTimeOffset(2026, 11, 1, 23, 59, 0, TimeSpan.Zero);
+        });
+        cut.WaitForAssertion(() =>
+            Assert.Contains("No cardio logged this week.", cut.Find("[aria-labelledby=cardio-week-title]").TextContent), Wait);
+
+        App.Clock.Now = new DateTimeOffset(2026, 11, 2, 0, 0, 0, TimeSpan.Zero);
+        App.Clock.Advance(TimeSpan.FromMinutes(1));
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("1 sessions", cut.Find("[aria-labelledby=cardio-week-title]").TextContent), Wait);
+    }
+
+    [Fact]
+    public async Task Energy_unit_changes_rerender_saved_cardio_estimates_on_train()
+    {
+        var cut = await TrainAsync(seed: () => CardioLog.SaveAsync(App.Database.Db, ProfileId,
+            new CardioEntry("12020", 1800), new CardioPhysiology(80, null, null), null, App.Clock));
+        cut.WaitForAssertion(() =>
+            Assert.Contains("kcal", cut.Find("[aria-labelledby=cardio-week-title]").TextContent), Wait);
+
+        var profiles = Services.GetRequiredService<ProfileService>();
+        await profiles.SetUnitPrefsAsync(profiles.UnitPrefs with { Energy = EnergyUnit.Kilojoule });
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("kJ", cut.Find("[aria-labelledby=cardio-week-title]").TextContent), Wait);
     }
 
     [Fact]

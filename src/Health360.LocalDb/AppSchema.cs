@@ -167,8 +167,8 @@ public static class AppSchema
         ("progression", ColumnType.Text));
 
     /// <summary>
-    /// U: one workout as performed. <c>energy_estimate</c> is a stored snapshot (PLAN.md §2.9), so later zone edits
-    /// leave past sessions unchanged. <c>ended_at</c> is null while the session is in progress.
+    /// U: one workout as performed. <c>energy_estimate</c> is a redacted summary; full cardio snapshots live in
+    /// <see cref="CardioEstimates"/>. <c>ended_at</c> is null while the session is in progress.
     /// </summary>
     public static Table WorkoutSessions { get; } = Synced("workout_sessions",
         ("profile_id", ColumnType.Text),
@@ -183,6 +183,11 @@ public static class AppSchema
         ("zone_seconds", ColumnType.Text),
         ("energy_estimate", ColumnType.Text),
         ("rpe", ColumnType.Real));
+
+    /// <summary>U: full cardio estimate inputs and provenance, private to the profile owner.</summary>
+    public static Table CardioEstimates { get; } = Synced("cardio_estimates",
+        ("profile_id", ColumnType.Text),
+        ("estimate", ColumnType.Text));
 
     /// <summary>
     /// U: one exercise in a session, in order, with the template row it was planned from (null when added by hand;
@@ -317,7 +322,7 @@ public static class AppSchema
         [
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
             MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, Exercises, WorkoutTemplates,
-            TemplateExercises, WorkoutSessions, SessionExercises, SetLogs, TrainingLocations, Programs, ScheduledWorkouts,
+            TemplateExercises, WorkoutSessions, CardioEstimates, SessionExercises, SetLogs, TrainingLocations, Programs, ScheduledWorkouts,
             PersonalRecords, FailedUploadsTable, PhotoUploadsTable,
             PhotoDeletionsTable,
         ];
@@ -366,6 +371,10 @@ public static class AppSchema
                 ["zone_seconds"] = ServerColumnType.Json,
                 ["energy_estimate"] = ServerColumnType.Json,
             },
+            ["cardio_estimates"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
+            {
+                ["estimate"] = ServerColumnType.Json,
+            },
             ["set_logs"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
             {
                 ["is_pr"] = ServerColumnType.Boolean,
@@ -401,7 +410,7 @@ public static class AppSchema
             [
                 "profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins",
                 "progress_photos", "exercises", "workout_templates", "template_exercises", "workout_sessions",
-                "session_exercises", "set_logs", "training_locations", "programs", "scheduled_workouts", "personal_records",
+                "session_exercises", "set_logs", "cardio_estimates", "training_locations", "programs", "scheduled_workouts", "personal_records",
             ],
             StringComparer.Ordinal);
 
