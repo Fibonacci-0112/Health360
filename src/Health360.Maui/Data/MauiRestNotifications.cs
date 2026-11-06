@@ -4,6 +4,7 @@ using Android.App;
 using Android.Content;
 using AndroidX.Core.App;
 #elif WINDOWS
+using System.Runtime.InteropServices;
 using Microsoft.Windows.AppNotifications;
 using Windows.Data.Xml.Dom;
 using Windows.UI.Notifications;
@@ -61,12 +62,36 @@ public sealed class MauiRestNotifications : IRestNotifications
         return Task.CompletedTask;
     }
 #elif WINDOWS
+    // Unpackaged desktop apps have no package identity, so toasts need an explicit, registered AppUserModelID.
+    // AppNotificationManager.Register() registers the process's explicit ID (with its activator) under
+    // HKCU\Software\Classes\AppUserModelId, and every toast call below uses the same ID.
+    internal const string AppUserModelId = "Health360.Desktop";
+    private static bool appIdSet;
     private bool registered;
-    private void Register()
+
+    /// <summary>Call once at startup, before any window is shown.</summary>
+    public static void UseAppUserModelId()
     {
+        try
+        {
+            NativeMethods.SetCurrentProcessExplicitAppUserModelID(AppUserModelId);
+            appIdSet = true;
+        }
+        catch (COMException)
+        {
+            // Reminders report themselves unavailable rather than preventing startup.
+        }
+    }
+
+    private bool Register()
+    {
+        if (!appIdSet)
+        {
+            return false;
+        }
         if (registered)
         {
-            return;
+            return true;
         }
         AppNotificationManager.Default.NotificationInvoked += (_, _) => MainThread.BeginInvokeOnMainThread(() =>
         {
@@ -77,12 +102,16 @@ public sealed class MauiRestNotifications : IRestNotifications
         });
         AppNotificationManager.Default.Register();
         registered = true;
+        return true;
     }
 
     public Task<bool> ScheduleAsync(DateTimeOffset deadline)
     {
-        Register();
-        var notifier = ToastNotificationManager.CreateToastNotifier();
+        if (!Register())
+        {
+            return Task.FromResult(false);
+        }
+        var notifier = ToastNotificationManager.CreateToastNotifier(AppUserModelId);
         if (notifier.Setting != NotificationSetting.Enabled)
         {
             return Task.FromResult(false);
@@ -95,14 +124,24 @@ public sealed class MauiRestNotifications : IRestNotifications
 
     public Task CancelAsync()
     {
-        Register();
-        var notifier = ToastNotificationManager.CreateToastNotifier();
+        if (!Register())
+        {
+            return Task.CompletedTask;
+        }
+        var notifier = ToastNotificationManager.CreateToastNotifier(AppUserModelId);
         foreach (var item in notifier.GetScheduledToastNotifications().Where(n => n.Tag == "rest" && n.Group == "health360"))
         {
             notifier.RemoveFromSchedule(item);
         }
-        ToastNotificationManager.History.Remove("rest", "health360");
+        ToastNotificationManager.History.Remove("rest", "health360", AppUserModelId);
         return Task.CompletedTask;
+    }
+
+    private static class NativeMethods
+    {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        internal static extern void SetCurrentProcessExplicitAppUserModelID(string appId);
     }
 #else
     public Task<bool> ScheduleAsync(DateTimeOffset deadline) => Task.FromResult(false);

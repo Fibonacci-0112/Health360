@@ -381,8 +381,15 @@
         try { entry = Entry(); }
         catch (ArgumentException e) { error = e.Message; return; }
         if (entry.EndedAt > Clock.GetUtcNow()) { error = "A completed session cannot end in the future."; return; }
+        var shownZones = ZoneKey(zones);
         await RefreshAsync();
         if (physiology is null || loading || error is not null || Body.Failed || !zonesReady || profileId != Workouts.ProfileId) return;
+        // The start date can move onto another zone set without a refresh; never swap watch times for a fallback.
+        if (entry.ZoneSeconds is not null && (ZoneKey(zones) != shownZones || zoneMinutes.All(string.IsNullOrWhiteSpace)))
+        {
+            error = "Zones changed for this session's start date. Enter your watch times again using the boundaries shown.";
+            return;
+        }
         entry = Entry();
         var errors = CardioEnergy.Errors(entry, zones);
         if (errors.Count > 0)

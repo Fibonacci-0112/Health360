@@ -111,6 +111,37 @@ public sealed class CardioTests : AppTestContext
     }
 
     [Fact]
+    public async Task Save_stops_when_the_duration_moves_watch_times_onto_another_zone_set()
+    {
+        var cut = await CardioAsync();
+        await App.Database.Db.Execute(
+            "INSERT INTO zone_sets (id, profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from) " +
+            "VALUES ('cardio-zones', ?, 'run', 'hr', 'custom', '[0,100,150]', 'bpm', '[0,100,150]', ?)",
+            [ProfileId, Today.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)]);
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Stored HR zones", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal), Wait);
+        await CheckAsync(cut, "input[type=checkbox]", true);
+        cut.WaitForAssertion(() => cut.Find("#cardio-time"), Wait);
+        await ChangeAsync(cut, "#cardio-time", "00:10");
+        for (var i = 1; i <= 3; i++)
+        {
+            await TypeAsync(cut, $"input[aria-label='Zone {i} minutes']", i == 2 ? "30" : "0");
+        }
+
+        // Thirty minutes before 00:10 starts yesterday, before the stored zones took effect.
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await SubmitAsync(cut);
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Enter your watch times again", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal);
+            Assert.Contains("Friel", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal);
+        }, Wait);
+        Assert.Empty(cut.FindAll(".cardio-estimate"));
+        Assert.Empty(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today.AddDays(-1), Today));
+    }
+
+    [Fact]
     public async Task Medication_suppresses_age_based_zones_and_hr_energy()
     {
         var cut = await CardioAsync(medication: true);

@@ -22,6 +22,23 @@ public sealed class TrainingCompletionTests
         Assert.Equal(20, PlateLoading.Calculate(10, 20, []).TotalKg);
     }
 
+    [Fact]
+    public void Plates_heavier_than_100_in_their_own_unit_remain_usable()
+    {
+        var load = PlateLoading.Calculate(120, 20, [new(110, "lb", 2), new(1000, "lb", 2)]);
+        Assert.Equal(20 + 220 * 0.45359237, load.TotalKg, 10);
+        Assert.Throws<ArgumentException>(() => PlateLoading.Calculate(120, 20, [new(1000.5, "kg", 2)]));
+    }
+
+    [Fact]
+    public void A_heavier_near_equal_total_does_not_hide_a_combination_that_fits()
+    {
+        // 5.512 lb is about 2.50018 kg, sharing a gram bucket with 2.5 kg but leaving no room for 1.25 kg.
+        var load = PlateLoading.Calculate(27.5, 20, [new(5.512, "lb", 2), new(2.5, "kg", 2), new(1.25, "kg", 2)]);
+        Assert.Equal(27.5, load.TotalKg, 10);
+        Assert.Equal([new LoadedPlate(2.5, "kg", 1), new LoadedPlate(1.25, "kg", 1)], load.Plates);
+    }
+
     // Table 2, Péronnet & Massicotte 1991 (the revised table, not Lusk 1924).
     [Theory]
     [InlineData(0.7036, 1)]

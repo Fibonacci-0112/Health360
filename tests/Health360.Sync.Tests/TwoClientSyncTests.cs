@@ -97,11 +97,13 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         var exercise = await ExerciseLibrary.AddCustomAsync(A1.Db, household, "Sync test squat", "weight_reps", ["barbell"], ["quadriceps"], TimeProvider.System);
         var session = await WorkoutLog.StartAsync(A1.Db, profile, null, "kg", TimeProvider.System);
         await WorkoutLog.AddExerciseAsync(A1.Db, profile, session, exercise, "kg", TimeProvider.System);
-        var set = Assert.Single(Assert.Single(await WorkoutLog.ExercisesAsync(A1.Db, profile, session)).Sets);
+        var logged = Assert.Single(await WorkoutLog.ExercisesAsync(A1.Db, profile, session));
+        var set = Assert.Single(logged.Sets);
         await WorkoutLog.UpdateSetAsync(A1.Db, profile, set.Id, new SetEntry(5, 225, "lb"), TimeProvider.System);
         await WorkoutLog.CompleteSetAsync(A1.Db, profile, set.Id, TimeProvider.System);
         await WorkoutLog.FinishAsync(A1.Db, profile, session, TimeProvider.System);
-        var cardio = await CardioLog.SaveAsync(A1.Db, profile, new CardioEntry("18240", 1800, Rpe: 5), new CardioPhysiology(80, null, null), null, TimeProvider.System);
+        var cardio = await CardioLog.SaveAsync(A1.Db, profile, new CardioEntry("18240", 1800, Rpe: 5, Elevation: 120, ElevationUnit: "ft"),
+            new CardioPhysiology(80, null, null), null, TimeProvider.System);
         var day = DateOnly.FromDateTime(TimeProvider.System.GetLocalNow().DateTime);
         var expected = (await CardioLog.SessionsAsync(A1.Db, profile, day.AddDays(-1), day)).Single(s => s.Id == cardio).Estimate!;
         await A1.ConnectAsync();
@@ -115,11 +117,20 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         Assert.Equal(expected.Fuel, actual.Fuel);
         Assert.Equal(expected.Kcal, actual.Kcal);
         Assert.Equal(2, actual.Version);
+        // The summary another device sees must keep the version-2 fields the server's privacy trigger rewrites.
+        var summary = CardioJson.Parse(await A2.Db.Get<string>("SELECT energy_estimate FROM workout_sessions WHERE id = ?", [cardio]))!;
+        Assert.NotNull(summary.Fuel);
+        Assert.NotNull(summary.Intensity);
+        Assert.Equal((expected.Fuel, expected.Intensity, expected.ElevationMetres, expected.Entry.Elevation, expected.Entry.ElevationUnit),
+            (summary.Fuel, summary.Intensity, summary.ElevationMetres, summary.Entry.Elevation, summary.Entry.ElevationUnit));
         var marker = await B.AddWeightAsync(70);
         await B.SyncedAsync("measurements", marker);
         Assert.Empty(await IdsAsync(B, "SELECT id AS Id FROM workout_sessions WHERE id IN (?, ?)", session, cardio));
         Assert.Empty(await IdsAsync(B, "SELECT id AS Id FROM cardio_estimates WHERE id = ?", cardio));
-        Assert.Empty(await FailedAsync(A1, profile));
+        foreach (var id in new[] { exercise, session, logged.Id, set.Id, cardio })
+        {
+            Assert.Empty(await FailedAsync(A1, id));
+        }
     }
 
     [Fact]

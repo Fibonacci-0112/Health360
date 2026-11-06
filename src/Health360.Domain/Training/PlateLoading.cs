@@ -9,22 +9,27 @@ public sealed record PlateLoad(double TotalKg, IReadOnlyList<LoadedPlate> Plates
 /// <summary>Balanced pairs from a finite inventory, rounded down so a suggestion never adds unplanned load.</summary>
 public static class PlateLoading
 {
+    /// <summary>Matches the stored location inventory's limit, in the plate's own unit.</summary>
+    public const double MaxPlateWeight = 1000;
+
     public static PlateLoad Calculate(double targetKg, double barKg, IReadOnlyList<AvailablePlate> inventory)
     {
         if (!double.IsFinite(targetKg) || targetKg < 0 || !double.IsFinite(barKg) || barKg < 0
-            || inventory.Count > 40 || inventory.Any(p => !double.IsFinite(p.Weight) || p.Weight <= 0 || p.Weight > 100
+            || inventory.Count > 40 || inventory.Any(p => !double.IsFinite(p.Weight) || p.Weight <= 0 || p.Weight > MaxPlateWeight
                 || p.Unit is not ("kg" or "lb") || p.Count is < 1 or > 100))
         {
             throw new ArgumentException("Choose a finite load, bar and valid plate inventory.");
         }
 
         // One gram resolution bounds work to 1,000,001 states even with unusual mixed-unit inventories.
-        // The final total uses exact canonical weights and is checked against the requested load.
+        // Each bucket keeps its lightest exact total, so any plate that fits a heavier near-equal total also fits it;
+        // the heaviest exact candidate seen is the answer. Every candidate is checked against the requested load.
         var plates = inventory.GroupBy(p => (p.Weight, p.Unit))
             .Select(g => new AvailablePlate(g.Key.Weight, g.Key.Unit, g.Sum(p => p.Count)))
             .OrderByDescending(p => UnitCodes.Convert(p.Weight, p.Unit, "kg")).ToArray();
         var capacity = Math.Min(1_000_000, (int)Math.Ceiling(Math.Max(0, Math.Min(1000, (targetKg - barKg) / 2) * 1000)));
         var states = new Dictionary<int, (double Kg, int[] Counts)> { [0] = (0, new int[plates.Length]) };
+        var best = states[0];
         for (var i = 0; i < plates.Length; i++)
         {
             var kg = UnitCodes.Convert(plates[i].Weight, plates[i].Unit, "kg")!.Value;
@@ -37,17 +42,24 @@ public static class PlateLoading
                     if (barKg + 2 * total > targetKg + 1e-9) break;
                     var key = (int)Math.Round(total * 1000);
                     if (key > capacity) break;
-                    if (!states.TryGetValue(key, out var old) || total > old.Kg)
+                    var keep = !states.TryGetValue(key, out var old) || total < old.Kg;
+                    if (keep || total > best.Kg)
                     {
                         var counts = (int[])Counts.Clone();
                         counts[i] = count;
-                        states[key] = (total, counts);
+                        if (keep)
+                        {
+                            states[key] = (total, counts);
+                        }
+                        if (total > best.Kg)
+                        {
+                            best = (total, counts);
+                        }
                     }
                 }
             }
         }
 
-        var best = states.Values.MaxBy(s => s.Kg);
         return new(barKg + 2 * best.Kg,
             [.. plates.Select((p, i) => new LoadedPlate(p.Weight, p.Unit, best.Counts[i])).Where(p => p.PerSide > 0)]);
     }
