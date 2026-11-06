@@ -407,13 +407,16 @@
             return;
         }
 
+        var estimate = preview;
+        var owner = profileId;
         busy = true;
         try
         {
             await draftSave;
-            await Workouts.SaveCardioAsync(preview.Entry, preview.Physiology, preview.Zones);
-            if (profileId == Workouts.ProfileId) await Workouts.DeleteStateAsync("cardio");
-            if (!disposed && profileId == Workouts.ProfileId)
+            if (disposed || owner != Workouts.ProfileId) return;
+            await Workouts.SaveCardioAsync(estimate.Entry, estimate.Physiology, estimate.Zones);
+            if (!disposed && owner == Workouts.ProfileId) await Workouts.DeleteStateAsync("cardio");
+            if (!disposed && owner == Workouts.ProfileId)
             {
                 Navigation.NavigateTo("train");
             }
