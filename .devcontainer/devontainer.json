@@ -1,0 +1,24 @@
+{
+  "name": "Health360 Development",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/dotnet:2": {
+      "version": "10.0.403"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:4": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csharp",
+        "ms-dotnettools.csdevkit"
+      ]
+    }
+  },
+  "forwardPorts": [
+    54321,
+    54323,
+    8080
+  ],
+  "postCreateCommand": "dotnet restore Health360.Core.slnf -p:ContinuousIntegrationBuild=true"
+}
