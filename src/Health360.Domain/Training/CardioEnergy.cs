@@ -465,7 +465,8 @@ public static class CardioEnergy
     private static IntensityMinutes? Intensity(CardioEntry entry, CardioPhysiology p, CardioZones? zones)
     {
         if (p.LowerThresholdHr is { IsEstimate: false, Value: > 0 } lower
-            && p.ThresholdHr is { IsEstimate: false } upper && upper.Value > lower.Value)
+            && p.ThresholdHr is { IsEstimate: false } upper && upper.Value > lower.Value
+            && ((entry.ZoneSeconds is not null && zones is not null) || (entry.AverageHr is not null && !entry.Intervals)))
         {
             double low = 0, moderate = 0, high = 0;
             if (entry.ZoneSeconds is { } times && zones is not null)
