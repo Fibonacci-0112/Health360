@@ -5,13 +5,13 @@
 <details class="card">
     <summary>Plate calculator</summary>
     <p class="muted">Choose a location's bar and plates. The result uses matching pairs and stays at or below the requested weight; the empty bar is the minimum.</p>
-    <div class="field"><label for="plate-location">Location</label><select id="plate-location" @bind="locationId" @bind:after="Calculate">
+    <div class="field"><label for="@($"{controlId}-location")">Location</label><select id="@($"{controlId}-location")" @bind="locationId" @bind:after="Calculate">
         <option value="">Choose location</option>
         @foreach (var location in locations) { <option value="@location.Id">@location.Name</option> }
     </select></div>
     <div class="inline">
-        <div class="field"><label for="plate-target">Total weight including bar</label><input id="plate-target" inputmode="decimal" @bind="target" @bind:event="oninput" @bind:after="Calculate" /></div>
-        <div class="field"><label for="plate-unit">Weight unit</label><select id="plate-unit" @bind="unit" @bind:after="Calculate"><option>kg</option><option>lb</option></select></div>
+        <div class="field"><label for="@($"{controlId}-target")">Total weight including bar</label><input id="@($"{controlId}-target")" inputmode="decimal" @bind="target" @bind:event="oninput" @bind:after="Calculate" /></div>
+        <div class="field"><label for="@($"{controlId}-unit")">Weight unit</label><select id="@($"{controlId}-unit")" @bind="unit" @bind:after="Calculate"><option>kg</option><option>lb</option></select></div>
     </div>
     @if (result is not null)
     {
@@ -26,6 +26,7 @@
 @code {
     [Parameter] public EventCallback<double> ApplyKg { get; set; }
     [Parameter] public double? SuggestedKg { get; set; }
+    private readonly string controlId = "plate-" + Guid.NewGuid().ToString("N");
     private TrainingLocationRow[] locations = [];
     private string locationId = "", target = "100", unit = "kg";
     private PlateLoad? result;
