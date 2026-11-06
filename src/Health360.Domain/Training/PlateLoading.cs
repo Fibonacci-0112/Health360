@@ -23,7 +23,7 @@ public static class PlateLoading
         var plates = inventory.GroupBy(p => (p.Weight, p.Unit))
             .Select(g => new AvailablePlate(g.Key.Weight, g.Key.Unit, g.Sum(p => p.Count)))
             .OrderByDescending(p => UnitCodes.Convert(p.Weight, p.Unit, "kg")).ToArray();
-        var capacity = Math.Min(1_000_000, (int)Math.Max(0, Math.Min(1000, (targetKg - barKg) / 2) * 1000));
+        var capacity = Math.Min(1_000_000, (int)Math.Ceiling(Math.Max(0, Math.Min(1000, (targetKg - barKg) / 2) * 1000)));
         var states = new Dictionary<int, (double Kg, int[] Counts)> { [0] = (0, new int[plates.Length]) };
         for (var i = 0; i < plates.Length; i++)
         {
