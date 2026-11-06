@@ -35,6 +35,8 @@ public static class UiServices
         services.AddSingleton<SyncState>();
         services.AddSingleton<BodyData>();
         services.AddSingleton<WorkoutService>();
+        services.TryAddSingleton<IRestNotifications, InAppRestNotifications>();
+        services.AddSingleton<RestTimerService>();
         return services;
     }
 }

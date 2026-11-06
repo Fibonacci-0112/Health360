@@ -4,6 +4,7 @@ public partial class App : MauiWinUIApplication
 {
     public App()
     {
+        Health360.Maui.Data.MauiRestNotifications.UseAppUserModelId();
         InitializeComponent();
     }
 

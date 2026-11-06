@@ -72,7 +72,7 @@ public sealed record PlannedWorkout(
 /// Templates, programs and the schedule (<c>workout_templates</c>, <c>template_exercises</c>, <c>programs</c>,
 /// <c>scheduled_workouts</c>, all U) in the local database.
 /// </summary>
-public static class WorkoutPlans
+public static partial class WorkoutPlans
 {
     /// <summary>The profile's templates, by name.</summary>
     public static async Task<TemplateRow[]> TemplatesAsync(IPowerSyncDatabase db, string profileId)
@@ -380,9 +380,14 @@ public static class WorkoutPlans
         ArgumentNullException.ThrowIfNull(clock);
         var id = ExerciseLibrary.NewId(clock);
         var now = Timestamps.UtcNow(clock);
-        await db.Execute(
-            "INSERT INTO scheduled_workouts (id, profile_id, program_id, template_id, weekday, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [id, profileId, programId, templateId, IsoWeekday(weekday), now, now]).ConfigureAwait(false);
+        if (!Enum.IsDefined(weekday)) throw new ArgumentOutOfRangeException(nameof(weekday));
+        await db.WriteTransaction(async tx =>
+        {
+            await RequireScheduleParentsAsync(tx, profileId, templateId, programId).ConfigureAwait(false);
+            await tx.Execute(
+                "INSERT INTO scheduled_workouts (id, profile_id, program_id, template_id, weekday, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [id, profileId, programId, templateId, IsoWeekday(weekday), now, now]).ConfigureAwait(false);
+        }).ConfigureAwait(false);
         return id;
     }
 
@@ -396,9 +401,13 @@ public static class WorkoutPlans
         ArgumentNullException.ThrowIfNull(clock);
         var id = ExerciseLibrary.NewId(clock);
         var now = Timestamps.UtcNow(clock);
-        await db.Execute(
-            "INSERT INTO scheduled_workouts (id, profile_id, program_id, template_id, scheduled_on, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [id, profileId, programId, templateId, Day(date), now, now]).ConfigureAwait(false);
+        await db.WriteTransaction(async tx =>
+        {
+            await RequireScheduleParentsAsync(tx, profileId, templateId, programId).ConfigureAwait(false);
+            await tx.Execute(
+                "INSERT INTO scheduled_workouts (id, profile_id, program_id, template_id, scheduled_on, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [id, profileId, programId, templateId, Day(date), now, now]).ConfigureAwait(false);
+        }).ConfigureAwait(false);
         return id;
     }
 

@@ -57,7 +57,7 @@ public sealed record LoggedExercise(
     string Name,
     string TrackingType,
     int Position,
-    IReadOnlyList<LoggedSet> Sets)
+    IReadOnlyList<LoggedSet> Sets, string? Superset = null)
 {
     public bool TracksLoad => TrackingType == "weight_reps";
 
@@ -113,7 +113,7 @@ public sealed class E1rmPoint
 /// <c>e1rm_kg</c> are computed exactly as the server's trigger recomputes them, and PRs compare canonical kg
 /// (<see cref="PersonalRecords"/>).
 /// </summary>
-public static class WorkoutLog
+public static partial class WorkoutLog
 {
     /// <summary>The formula the logger estimates e1RM with (docs/calculations.md).</summary>
     public const OneRepMaxFormula DefaultFormula = OneRepMaxFormula.Epley;
@@ -136,11 +136,13 @@ public static class WorkoutLog
 
     private const string SetsSql =
         "SELECT se.id AS SessionExerciseId, se.exercise_id AS ExerciseId, e.name AS ExerciseName, e.tracking_type AS TrackingType, " +
+        "json_extract(CASE WHEN json_valid(te.set_scheme) THEN te.set_scheme ELSE '{}' END, '$.superset') AS Superset, " +
         "se.position AS ExercisePosition, s.id AS SetId, s.position AS SetPosition, s.set_type AS SetType, s.reps AS Reps, " +
         "s.weight AS Weight, s.weight_unit AS WeightUnit, s.weight_kg AS WeightKg, s.rpe AS Rpe, s.rir AS Rir, " +
         "s.completed_at AS CompletedAt, s.e1rm_kg AS E1rmKg, s.is_pr AS IsPr, s.duration_seconds AS DurationSeconds, " +
         "s.distance AS Distance, s.distance_unit AS DistanceUnit " +
         "FROM session_exercises se LEFT JOIN exercises e ON e.id = se.exercise_id " +
+        "LEFT JOIN template_exercises te ON te.id = se.template_exercise_id AND te.profile_id = se.profile_id " +
         "LEFT JOIN set_logs s ON s.session_exercise_id = se.id AND s.profile_id = se.profile_id " +
         "WHERE se.session_id = ? AND se.profile_id = ? ORDER BY se.position, se.id, s.position, s.id";
 
@@ -262,7 +264,7 @@ public static class WorkoutLog
         ArgumentException.ThrowIfNullOrEmpty(profileId);
         ArgumentNullException.ThrowIfNull(clock);
         CheckLoadUnit(loadUnit);
-        string id = "";
+        var id = "";
         await db.WriteTransaction(async tx =>
         {
             await RequireOpenSessionAsync(tx, profileId, sessionId).ConfigureAwait(false);
@@ -380,9 +382,9 @@ public static class WorkoutLog
             }
 
             var weight = entry.Weight;
-            double? weightKg = weight is { } w ? UnitCodes.Convert(w, entry.WeightUnit, "kg") : null;
+            var weightKg = weight is { } w ? UnitCodes.Convert(w, entry.WeightUnit, "kg") : null;
             var distanceUnit = entry.Distance is null ? null : entry.DistanceUnit;
-            double? metres = entry.Distance is { } d && distanceUnit is not null ? UnitCodes.Convert(d, distanceUnit, "m") : null;
+            var metres = entry.Distance is { } d && distanceUnit is not null ? UnitCodes.Convert(d, distanceUnit, "m") : null;
             await tx.Execute(
                 "UPDATE set_logs SET set_type = ?, reps = ?, weight = ?, weight_unit = ?, weight_kg = ?, rpe = ?, rir = ?, " +
                 "duration_seconds = ?, distance = ?, distance_unit = ?, distance_m = ?, updated_at = ? WHERE id = ? AND profile_id = ?",
@@ -444,8 +446,11 @@ public static class WorkoutLog
         }).ConfigureAwait(false);
     }
 
-    /// <summary>Ends the session now. Sets still only planned are dropped, then exercises left without sets.</summary>
-    public static async Task FinishAsync(IPowerSyncDatabase db, string profileId, string sessionId, TimeProvider clock)
+    /// <summary>
+    /// Ends the session now. Sets still only planned are dropped, then exercises left without sets. With physiology, the strength
+    /// energy estimate covers the start to the last completed set (none without a completed set, or beyond 24 hours).
+    /// </summary>
+    public static async Task FinishAsync(IPowerSyncDatabase db, string profileId, string sessionId, TimeProvider clock, CardioPhysiology? physiology = null)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(clock);
@@ -461,8 +466,36 @@ public static class WorkoutLog
                 "AND NOT EXISTS (SELECT 1 FROM set_logs s WHERE s.session_exercise_id = session_exercises.id)",
                 [sessionId, profileId]).ConfigureAwait(false);
             var now = Timestamps.UtcNow(clock);
-            await tx.Execute("UPDATE workout_sessions SET ended_at = ?, updated_at = ? WHERE id = ? AND profile_id = ?",
-                [now, now, sessionId, profileId]).ConfigureAwait(false);
+            string? energy = null;
+            if (physiology is not null)
+            {
+                // Lifting time runs to the last completed set, not to when Finish is tapped: a workout left open isn't billed for the wait.
+                var session = await tx.Get<SessionRow>("SELECT started_at AS StartedAt FROM workout_sessions WHERE id = ? AND profile_id = ?", [sessionId, profileId]).ConfigureAwait(false);
+                var completed = await tx.GetAll<CompletedAt>(
+                    "SELECT s.completed_at AS Value FROM set_logs s JOIN session_exercises se ON se.id = s.session_exercise_id AND se.profile_id = s.profile_id " +
+                    "WHERE se.session_id = ? AND s.profile_id = ? AND s.completed_at IS NOT NULL", [sessionId, profileId]).ConfigureAwait(false);
+                DateTimeOffset? end = null;
+                foreach (var set in completed)
+                {
+                    if (DateTimeOffset.TryParse(set.Value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var at)
+                        && (end is null || at > end))
+                    {
+                        end = at;
+                    }
+                }
+
+                if (end is { } last
+                    && DateTimeOffset.TryParse(session.StartedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var start))
+                {
+                    var duration = (last - start).TotalSeconds;
+                    if (duration is > 0 and <= 86400)
+                    {
+                        energy = CardioJson.SerializeWorkoutSummary(CardioEnergy.Estimate(new("02054", duration), physiology));
+                    }
+                }
+            }
+            await tx.Execute("UPDATE workout_sessions SET ended_at = ?, energy_estimate = coalesce(?, energy_estimate), updated_at = ? WHERE id = ? AND profile_id = ?",
+                [now, energy, now, sessionId, profileId]).ConfigureAwait(false);
         }).ConfigureAwait(false);
     }
 
@@ -525,7 +558,7 @@ public static class WorkoutLog
         return await db.GetAll<E1rmPoint>(
             "SELECT ws.local_date AS LocalDate, max(s.e1rm_kg) AS E1rmKg FROM set_logs s " +
             "JOIN session_exercises se ON se.id = s.session_exercise_id JOIN workout_sessions ws ON ws.id = se.session_id " +
-            "WHERE s.profile_id = ? AND se.exercise_id = ? AND s.e1rm_kg IS NOT NULL GROUP BY ws.local_date ORDER BY ws.local_date",
+            "WHERE s.profile_id = ? AND se.exercise_id = ? AND ws.ended_at IS NOT NULL AND s.e1rm_formula = 'epley' AND s.e1rm_kg IS NOT NULL GROUP BY ws.local_date ORDER BY ws.local_date",
             [profileId, exerciseId]).ConfigureAwait(false);
     }
 
@@ -719,9 +752,9 @@ public static class WorkoutLog
     {
         var now = Timestamps.UtcNow(clock);
         var unit = values.Weight is null ? null : values.WeightUnit;
-        double? kg = values.Weight is { } w && unit is not null ? UnitCodes.Convert(w, unit, "kg") : null;
+        var kg = values.Weight is { } w && unit is not null ? UnitCodes.Convert(w, unit, "kg") : null;
         var distanceUnit = values.Distance is null ? null : values.DistanceUnit;
-        double? metres = values.Distance is { } d && distanceUnit is not null ? UnitCodes.Convert(d, distanceUnit, "m") : null;
+        var metres = values.Distance is { } d && distanceUnit is not null ? UnitCodes.Convert(d, distanceUnit, "m") : null;
         await tx.Execute(
             "INSERT INTO set_logs (id, profile_id, session_exercise_id, position, set_type, reps, weight, weight_unit, weight_kg, " +
             "duration_seconds, distance, distance_unit, distance_m, is_pr, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
@@ -785,7 +818,7 @@ public static class WorkoutLog
                 r.DistanceUnit)).ToList();
             exercises.Add(new LoggedExercise(
                 first.SessionExerciseId, first.ExerciseId, first.ExerciseName ?? "Exercise", first.TrackingType ?? "weight_reps",
-                (int)first.ExercisePosition, sets));
+                (int)first.ExercisePosition, sets, first.Superset));
         }
 
         return exercises;
@@ -799,6 +832,7 @@ public static class WorkoutLog
 
     internal sealed class FlatSetRow
     {
+        public string? Superset { get; set; }
         public string SessionExerciseId { get; set; } = "";
 
         public string ExerciseId { get; set; } = "";
@@ -930,5 +964,10 @@ public static class WorkoutLog
     internal sealed class Count
     {
         public long N { get; set; }
+    }
+
+    internal sealed class CompletedAt
+    {
+        public string Value { get; set; } = "";
     }
 }

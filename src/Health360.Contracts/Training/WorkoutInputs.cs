@@ -125,11 +125,12 @@ public sealed class TrainingLocationInputValidator : AbstractValidator<TrainingL
 /// <c>{"sets": 3, "min_reps": 8, "max_reps": 12}</c>, plus <c>"load"</c> and <c>"load_unit"</c> when a starting load
 /// is given.
 /// </summary>
-public sealed record SetScheme(int Sets, int MinReps, int MaxReps, double? Load = null, string? LoadUnit = null)
+public sealed record SetScheme(int Sets, int MinReps, int MaxReps, double? Load = null, string? LoadUnit = null, string? Superset = null)
 {
     public string ToJson()
     {
         var json = new JsonObject { ["sets"] = Sets, ["min_reps"] = MinReps, ["max_reps"] = MaxReps };
+        if (Superset is not null) json["superset"] = Superset;
         if (Load is { } load && LoadUnit is { } unit)
         {
             json["load"] = load;
@@ -156,7 +157,8 @@ public sealed record SetScheme(int Sets, int MinReps, int MaxReps, double? Load 
                 o["min_reps"]!.GetValue<int>(),
                 o["max_reps"]!.GetValue<int>(),
                 o["load"]?.GetValueKind() == JsonValueKind.Number ? o["load"]!.GetValue<double>() : null,
-                o["load_unit"]?.GetValueKind() == JsonValueKind.String ? o["load_unit"]!.GetValue<string>() : null);
+                o["load_unit"]?.GetValueKind() == JsonValueKind.String ? o["load_unit"]!.GetValue<string>() : null,
+                o["superset"]?.GetValueKind() == JsonValueKind.String ? o["superset"]!.GetValue<string>() : null);
             return new SetSchemeValidator().Validate(scheme).IsValid ? scheme : null;
         }
         catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException)
@@ -171,6 +173,8 @@ public sealed class SetSchemeValidator : AbstractValidator<SetScheme>
 {
     public SetSchemeValidator()
     {
+        RuleFor(x => x.Superset).Must(s => s is null || (s.Length is >= 1 and <= 12 && s.All(char.IsAsciiLetterOrDigit)))
+            .WithMessage("A superset group uses up to 12 letters or numbers.");
         RuleFor(x => x.Sets).InclusiveBetween(1, 20).WithMessage("From 1 to 20 sets.");
         RuleFor(x => x.MinReps).InclusiveBetween(1, 100).WithMessage("At least 1 rep.");
         RuleFor(x => x.MaxReps).GreaterThanOrEqualTo(x => x.MinReps).WithMessage("The top of the rep range can't be below the bottom.")

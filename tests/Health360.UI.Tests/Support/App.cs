@@ -65,6 +65,8 @@ public sealed class App : IAsyncDisposable
         context.Services.AddSingleton<SyncState>();
         context.Services.AddSingleton<BodyData>();
         context.Services.AddSingleton<WorkoutService>();
+        context.Services.AddSingleton<IRestNotifications, InAppRestNotifications>();
+        context.Services.AddSingleton<RestTimerService>();
         context.Services.AddSingleton(Photos);
         context.Services.AddSingleton(new PhotoLibrary(PhotoFiles, PhotoStorage, Photos));
         context.Services.AddSingleton<IPhotoCapture>(Camera);

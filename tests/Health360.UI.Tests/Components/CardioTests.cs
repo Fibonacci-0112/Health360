@@ -39,10 +39,10 @@ public sealed class CardioTests : AppTestContext
         var cut = await CardioAsync();
         Assert.Equal("mi", cut.Find("select[aria-label='Distance unit']").GetAttribute("value"));
         Assert.Contains("Friel", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal);
-        await ChangeAsync(cut, "#cardio-duration", "30");
-        await ChangeAsync(cut, "#cardio-average", "150");
-        await ChangeAsync(cut, "#cardio-max", "185");
-        await ChangeAsync(cut, "#cardio-distance", "3");
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-average", "150");
+        await TypeAsync(cut, "#cardio-max", "185");
+        await TypeAsync(cut, "#cardio-distance", "3");
         await ClickAsync(cut, "#preview-cardio");
 
         Assert.Contains("Keytel, average HR", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
@@ -62,17 +62,17 @@ public sealed class CardioTests : AppTestContext
     public async Task Watch_totals_must_cover_the_whole_session_before_saving()
     {
         var cut = await CardioAsync();
-        await ChangeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-duration", "30");
         for (var i = 1; i <= 5; i++)
         {
-            await ChangeAsync(cut, $"input[aria-label='Zone {i} minutes']", i == 2 ? "20" : "0");
+            await TypeAsync(cut, $"input[aria-label='Zone {i} minutes']", i == 2 ? "20" : "0");
         }
 
         await SubmitAsync(cut);
         Assert.Contains("add up to the session duration", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal);
         Assert.Empty(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
 
-        await ChangeAsync(cut, "input[aria-label='Zone 3 minutes']", "10");
+        await TypeAsync(cut, "input[aria-label='Zone 3 minutes']", "10");
         await ClickAsync(cut, "#preview-cardio");
         Assert.Contains("Keytel, time in zones", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
     }
@@ -86,10 +86,10 @@ public sealed class CardioTests : AppTestContext
             "VALUES ('cardio-zones', ?, 'run', 'hr', 'custom', '[0,100,150]', 'bpm', '[0,100,150]', '2026-01-01')", [ProfileId]);
         cut.WaitForAssertion(() =>
             Assert.Contains("Stored HR zones", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal), Wait);
-        await ChangeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-duration", "30");
         for (var i = 1; i <= 3; i++)
         {
-            await ChangeAsync(cut, $"input[aria-label='Zone {i} minutes']", i == 2 ? "30" : "0");
+            await TypeAsync(cut, $"input[aria-label='Zone {i} minutes']", i == 2 ? "30" : "0");
         }
 
         await ClickAsync(cut, "#preview-cardio");
@@ -111,12 +111,62 @@ public sealed class CardioTests : AppTestContext
     }
 
     [Fact]
+    public async Task Save_stops_when_the_duration_moves_watch_times_onto_another_zone_set()
+    {
+        var cut = await CardioAsync();
+        await App.Database.Db.Execute(
+            "INSERT INTO zone_sets (id, profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from) " +
+            "VALUES ('cardio-zones', ?, 'run', 'hr', 'custom', '[0,100,150]', 'bpm', '[0,100,150]', ?)",
+            [ProfileId, Today.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)]);
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Stored HR zones", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal), Wait);
+        await CheckAsync(cut, "input[type=checkbox]", true);
+        cut.WaitForAssertion(() => cut.Find("#cardio-time"), Wait);
+        await ChangeAsync(cut, "#cardio-time", "00:10");
+        for (var i = 1; i <= 3; i++)
+        {
+            await TypeAsync(cut, $"input[aria-label='Zone {i} minutes']", i == 2 ? "30" : "0");
+        }
+
+        // Thirty minutes before 00:10 starts yesterday, before the stored zones took effect.
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await SubmitAsync(cut);
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Enter your watch times again", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal);
+            Assert.Contains("Friel", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal);
+        }, Wait);
+        Assert.Empty(cut.FindAll(".cardio-estimate"));
+        Assert.Empty(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today.AddDays(-1), Today));
+    }
+
+    [Fact]
+    public async Task A_saved_session_whose_draft_cannot_be_cleared_is_not_saved_again_on_retry()
+    {
+        var cut = await CardioAsync();
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-rpe", "5");
+        await App.Database.Db.Execute("CREATE TEMP TRIGGER fail_draft_delete INSTEAD OF DELETE ON workout_state BEGIN SELECT RAISE(ABORT, 'disk busy'); END");
+        await SubmitAsync(cut);
+
+        cut.WaitForAssertion(() => Assert.Contains("was saved", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Single(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
+        Assert.True(cut.Find("#cardio-duration").HasAttribute("disabled"));
+
+        await App.Database.Db.Execute("DROP TRIGGER temp.fail_draft_delete");
+        await SubmitAsync(cut);
+        cut.WaitForAssertion(() => cut.Find("[aria-labelledby=cardio-week-title] details"), Wait);
+        Assert.Single(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
+    }
+
+    [Fact]
     public async Task Medication_suppresses_age_based_zones_and_hr_energy()
     {
         var cut = await CardioAsync(medication: true);
         Assert.Contains("No HR zones available", cut.Markup, StringComparison.Ordinal);
-        await ChangeAsync(cut, "#cardio-duration", "30");
-        await ChangeAsync(cut, "#cardio-average", "150");
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-average", "150");
         await ClickAsync(cut, "#preview-cardio");
 
         Assert.Contains("2024 Compendium METs", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
@@ -128,7 +178,7 @@ public sealed class CardioTests : AppTestContext
     public async Task Missing_weight_is_explained_without_blocking_a_session_log()
     {
         var cut = await CardioAsync(weight: false);
-        await ChangeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-duration", "30");
         await ClickAsync(cut, "#preview-cardio");
         Assert.Contains("Energy estimate unavailable", cut.Markup, StringComparison.Ordinal);
         Assert.Contains("Enter a body weight", cut.Markup, StringComparison.Ordinal);
@@ -139,11 +189,31 @@ public sealed class CardioTests : AppTestContext
     }
 
     [Fact]
+    public async Task Unfinished_text_and_elevation_resume_when_the_page_is_recreated()
+    {
+        var cut = await CardioAsync();
+        await TypeAsync(cut, "#cardio-duration", "45");
+        await TypeAsync(cut, "#cardio-elevation", "125.5");
+        await TypeAsync(cut, "#cardio-average", "unfinished");
+        var navigation = Services.GetRequiredService<NavigationManager>();
+        navigation.NavigateTo("train");
+        cut.WaitForAssertion(() => cut.Find("#start-empty"), Wait);
+        navigation.NavigateTo("train/cardio");
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal("45", cut.Find("#cardio-duration").GetAttribute("value"));
+            Assert.Equal("125.5", cut.Find("#cardio-elevation").GetAttribute("value"));
+            Assert.Equal("unfinished", cut.Find("#cardio-average").GetAttribute("value"));
+        }, Wait);
+        Assert.Empty(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
+    }
+
+    [Fact]
     public async Task Invalid_optional_numbers_are_rejected_instead_of_becoming_missing_inputs()
     {
         var cut = await CardioAsync();
-        await ChangeAsync(cut, "#cardio-duration", "30");
-        await ChangeAsync(cut, "#cardio-average", "oops");
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-average", "oops");
         await SubmitAsync(cut);
 
         Assert.Contains("Heart rate must be", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal);

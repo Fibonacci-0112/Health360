@@ -82,8 +82,10 @@ public static class CardioLog
         ArgumentNullException.ThrowIfNull(clock);
         var estimate = CardioEnergy.Estimate(entry, physiology, zones);
         var id = ExerciseLibrary.NewId(clock);
-        var end = clock.GetUtcNow();
+        var end = entry.EndedAt?.ToUniversalTime() ?? clock.GetUtcNow();
+        if (end > clock.GetUtcNow().AddSeconds(1)) throw new ArgumentException("A completed session cannot end in the future.", nameof(entry));
         var start = end.AddSeconds(-entry.DurationSeconds);
+        estimate = estimate with { Entry = estimate.Entry with { EndedAt = end } };
         var startDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(start, clock.LocalTimeZone).DateTime);
         await db.WriteTransaction(async tx =>
         {

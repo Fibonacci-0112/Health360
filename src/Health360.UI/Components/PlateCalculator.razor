@@ -1,0 +1,57 @@
+@using System.Globalization
+@using Health360.Domain.Training
+@inject WorkoutService Workouts
+
+<details class="card">
+    <summary>Plate calculator</summary>
+    <p class="muted">Choose a location's bar and plates. The result uses matching pairs and stays at or below the requested weight; the empty bar is the minimum.</p>
+    <div class="field"><label for="@($"{controlId}-location")">Location</label><select id="@($"{controlId}-location")" @bind="locationId" @bind:after="Calculate">
+        <option value="">Choose location</option>
+        @foreach (var location in locations) { <option value="@location.Id">@location.Name</option> }
+    </select></div>
+    <div class="inline">
+        <div class="field"><label for="@($"{controlId}-target")">Total weight including bar</label><input id="@($"{controlId}-target")" inputmode="decimal" @bind="target" @bind:event="oninput" @bind:after="Calculate" /></div>
+        <div class="field"><label for="@($"{controlId}-unit")">Weight unit</label><select id="@($"{controlId}-unit")" @bind="unit" @bind:after="Calculate"><option>kg</option><option>lb</option></select></div>
+    </div>
+    @if (result is not null)
+    {
+        <p role="status">Load @Workouts.Load(result.TotalKg) in total.</p>
+        @if (result.Plates.Count == 0) { <p>Empty bar.</p> }
+        else { <p>On each side: @string.Join(" + ", result.Plates.Select(p => $"{p.PerSide} × {p.Weight.ToString("0.###", CultureInfo.InvariantCulture)} {p.Unit}"))</p> }
+        @if (ApplyKg.HasDelegate) { <button type="button" class="secondary" @onclick="() => ApplyKg.InvokeAsync(result.TotalKg)">Use this load for unfinished work sets</button> }
+    }
+    @if (error is not null) { <p role="alert">@error</p> }
+</details>
+
+@code {
+    [Parameter] public EventCallback<double> ApplyKg { get; set; }
+    [Parameter] public double? SuggestedKg { get; set; }
+    private readonly string controlId = "plate-" + Guid.NewGuid().ToString("N");
+    private TrainingLocationRow[] locations = [];
+    private string locationId = "", target = "100", unit = "kg";
+    private PlateLoad? result;
+    private string? error;
+    protected override async Task OnInitializedAsync()
+    {
+        var owner = Workouts.ProfileId;
+        try
+        {
+            var loaded = await Workouts.LocationsAsync();
+            if (owner == Workouts.ProfileId) locations = loaded;
+            unit = Workouts.LoadUnit;
+            if (SuggestedKg is { } kg) target = UnitCodes.Convert(kg, "kg", unit)!.Value.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+        catch (Exception e) when (e is not OperationCanceledException) { error = "Couldn't load locations. Reopen the calculator to retry."; }
+    }
+    private void Calculate()
+    {
+        result = null; error = null;
+        var location = locations.FirstOrDefault(l => l.Id == locationId);
+        if (location is null) return;
+        if (location.BarWeightKg is not { } bar) { error = "Set this location's bar weight in Training setup first."; return; }
+        if (!double.TryParse(target, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) || !double.IsFinite(value) || value is < 0 or > 2000)
+        { error = "Enter a total weight from 0 to 2000."; return; }
+        try { result = PlateLoading.Calculate(UnitCodes.Convert(value, unit, "kg")!.Value, bar, location.Plates.Select(p => new AvailablePlate(p.Weight, p.Unit, p.Count)).ToArray()); }
+        catch (ArgumentException) { error = "Check the location's bar and plate inventory in Training setup."; }
+    }
+}

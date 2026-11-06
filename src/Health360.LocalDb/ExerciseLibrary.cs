@@ -195,7 +195,7 @@ public sealed class TrainingLocationRow
 }
 
 /// <summary>A household's training locations (<c>training_locations</c>, H) in the local database.</summary>
-public static class TrainingLocations
+public static partial class TrainingLocations
 {
     private const string Columns =
         "id AS Id, household_id AS HouseholdId, name AS Name, equipment AS Equipment, plate_inventory AS PlateInventory, " +
@@ -219,7 +219,7 @@ public static class TrainingLocations
         new TrainingLocationInputValidator().ValidateAndThrow(input);
         var id = ExerciseLibrary.NewId(clock);
         var now = Timestamps.UtcNow(clock);
-        double? barKg = input.BarWeight is { } bar ? UnitCodes.Convert(bar, input.BarUnit!, "kg") : null;
+        var barKg = input.BarWeight is { } bar ? UnitCodes.Convert(bar, input.BarUnit!, "kg") : null;
         await db.Execute(
             "INSERT INTO training_locations (id, household_id, name, equipment, plate_inventory, bar_weight, bar_unit, bar_weight_kg, " +
             "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

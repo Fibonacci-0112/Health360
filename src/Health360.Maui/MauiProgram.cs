@@ -19,6 +19,7 @@ public static class MauiProgram
         builder.Services.AddSingleton(AppEndpoints.FromBuild());
         builder.Services.AddSingleton<ISessionStore, SecureSessionStore>();
         builder.Services.AddSingleton<IPhotoCapture, MauiPhotoCapture>();
+        builder.Services.AddSingleton<IRestNotifications, MauiRestNotifications>();
         builder.Services.AddMauiLocalDatabase();
         builder.Services.AddHealth360Ui();
 

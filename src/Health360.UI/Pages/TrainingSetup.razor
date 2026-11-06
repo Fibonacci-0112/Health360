@@ -1,0 +1,271 @@
+@page "/train/setup"
+@using System.Globalization
+@using FluentValidation
+@using Health360.Contracts.Training
+@implements IDisposable
+@inject WorkoutService Workouts
+@inject ProfileService Profiles
+@inject NavigationManager Navigation
+
+<div class="page">
+    <div class="page-head"><h1>Training setup</h1><NavLink href="train">Train</NavLink></div>
+    @if (error is not null) { <p class="error" role="alert">@error</p> }
+    <p role="status">@status</p>
+    @if (loaded && owner == Workouts.ProfileId)
+    {
+        <section class="card" aria-labelledby="locations-title">
+            <h2 id="locations-title">Training locations</h2>
+            <p class="muted">Locations and equipment are shared with your household. Plate counts include both sides of the bar.</p>
+            @foreach (var location in locations)
+            {
+                <div class="measurement" @key="location.Id">
+                    <span>@location.Name</span>
+                    <button type="button" class="secondary compact" aria-label="@($"Edit {location.Name}")" @onclick="() => EditLocation(location)">Edit</button>
+                    <button type="button" class="secondary compact" aria-label="@($"Delete {location.Name}")" @onclick="() => confirmLocation = location.Id">Delete</button>
+                    @if (confirmLocation == location.Id)
+                    {
+                        <div role="alertdialog" aria-label="Delete location">
+                            <p>Delete @location.Name? Programs keep their schedules without this location.</p>
+                            <button type="button" class="danger" disabled="@busy" @onclick="() => RunAsync(() => Workouts.DeleteLocationAsync(location.Id))">Confirm delete location</button>
+                            <button type="button" class="secondary" @onclick="() => confirmLocation = null">Cancel</button>
+                        </div>
+                    }
+                </div>
+            }
+            <form class="form" aria-label="Location" @onsubmit="SaveLocationAsync" @onsubmit:preventDefault>
+                <h3>@(locationId is null ? "New location" : "Edit location")</h3>
+                <div class="field"><label for="location-name">Location name</label><input id="location-name" @bind="locationName" maxlength="120" /></div>
+                @if (locationId is null)
+                {
+                    <div class="field"><label for="location-household">Household</label><select id="location-household" @bind="householdId">
+                        @foreach (var household in households) { <option value="@household.Id">@household.Name</option> }
+                    </select></div>
+                }
+                <fieldset><legend>Available equipment</legend>
+                    @foreach (var code in EquipmentOptions.Concat(equipment).Distinct(StringComparer.Ordinal))
+                    { <label class="check"><input type="checkbox" checked="@equipment.Contains(code)" @onchange="e => SetEquipment(code, e.Value is true)" /> @Label(code)</label> }
+                </fieldset>
+                <div class="inline">
+                    <div class="field"><label for="location-bar">Bar weight (optional)</label><input id="location-bar" inputmode="decimal" @bind="bar" /></div>
+                    <div class="field"><label for="location-unit">Bar unit</label><select id="location-unit" @bind="barUnit"><option>kg</option><option>lb</option></select></div>
+                </div>
+                <h3>Plates</h3>
+                @for (var i = 0; i < plates.Count; i++)
+                {
+                    var index = i; var plate = plates[i];
+                    <div class="inline" @key="plate">
+                        <input inputmode="decimal" aria-label="@($"Plate {i + 1} weight")" @bind="plate.Weight" />
+                        <select aria-label="@($"Plate {i + 1} unit")" @bind="plate.Unit"><option>kg</option><option>lb</option></select>
+                        <input inputmode="numeric" aria-label="@($"Plate {i + 1} count")" @bind="plate.Count" />
+                        <button type="button" class="secondary compact" aria-label="@($"Remove plate {i + 1}")" @onclick="() => plates.RemoveAt(index)">Remove</button>
+                    </div>
+                }
+                <button type="button" class="secondary" @onclick="() => plates.Add(new())">Add plate size</button>
+                <div class="inline"><button type="submit" class="primary" id="save-location" disabled="@busy">Save location</button>
+                    <button type="button" class="secondary" @onclick="NewLocation">New location</button></div>
+            </form>
+        </section>
+        <section class="card" aria-labelledby="custom-exercise-title">
+            <h2 id="custom-exercise-title">Custom exercise</h2>
+            <p class="muted">Add an exercise to your household library. Choose its primary muscle and how to log it.</p>
+            <form class="form" @onsubmit="SaveCustomAsync" @onsubmit:preventDefault>
+                <div class="field"><label for="custom-name">Exercise name</label><input id="custom-name" @bind="customName" maxlength="120" /></div>
+                <div class="field"><label for="custom-tracking">Track</label><select id="custom-tracking" @bind="customTracking">
+                    <option value="weight_reps">Weight and reps</option><option value="reps">Reps</option><option value="duration">Time</option><option value="distance_duration">Distance and time</option>
+                </select></div>
+                <div class="field"><label for="custom-muscle">Primary muscle</label><select id="custom-muscle" @bind="customMuscle">
+                    @foreach (var muscle in new[] { "quadriceps", "hamstrings", "glutes", "calves", "chest", "lats", "middle_back", "lower_back", "shoulders", "biceps", "triceps", "forearms", "abdominals", "traps", "other" })
+                    { <option value="@muscle">@Label(muscle)</option> }
+                </select></div>
+                <div class="field"><label for="custom-household">Household</label><select id="custom-household" @bind="householdId">
+                    @foreach (var household in households) { <option value="@household.Id">@household.Name</option> }
+                </select></div>
+                <p class="muted small">Uses the equipment selected in the location form above.</p>
+                <button class="primary" type="submit" id="save-custom" disabled="@busy">Add custom exercise</button>
+            </form>
+        </section>
+        <section class="card" aria-labelledby="programs-title">
+            <h2 id="programs-title">Programs</h2>
+            @foreach (var program in programs)
+            {
+                <div class="measurement" @key="program.Id">
+                    <span>@program.Name · @program.StartsOn – @(program.EndsOn ?? "ongoing")</span>
+                    <button type="button" class="secondary compact" aria-label="@($"Edit {program.Name}")" @onclick="() => EditProgramAsync(program)">Edit</button>
+                    <button type="button" class="secondary compact" aria-label="@($"Delete {program.Name}")" @onclick="() => confirmProgram = program.Id">Delete</button>
+                    @if (confirmProgram == program.Id)
+                    {
+                        <div role="alertdialog" aria-label="Delete program"><p>Delete @program.Name and its schedule? Logged sessions stay.</p>
+                            <button type="button" class="danger" disabled="@busy" @onclick="() => RunAsync(() => Workouts.DeleteProgramAsync(program.Id))">Confirm delete program</button>
+                            <button type="button" class="secondary" @onclick="() => confirmProgram = null">Cancel</button>
+                        </div>
+                    }
+                </div>
+            }
+            <form class="form" aria-label="Program" @onsubmit="SaveProgramAsync" @onsubmit:preventDefault>
+                <h3>@(programId is null ? "New program" : "Edit program")</h3>
+                <div class="field"><label for="program-name">Program name</label><input id="program-name" @bind="programName" maxlength="120" /></div>
+                <div class="field"><label for="program-location">Location</label><select id="program-location" @bind="programLocation"><option value="">None</option>
+                    @foreach (var location in locations) { <option value="@location.Id">@location.Name</option> }
+                </select></div>
+                <div class="inline">
+                    <div class="field"><label for="program-start">Starts on</label><input id="program-start" type="date" @bind="startsOn" /></div>
+                    <div class="field"><label for="program-end">Ends on (optional)</label><input id="program-end" type="date" @bind="endsOn" /></div>
+                </div>
+                <div class="inline"><button type="submit" class="primary" id="save-program" disabled="@busy">Save program</button>
+                    <button type="button" class="secondary" @onclick="NewProgramAsync">New program</button></div>
+            </form>
+        </section>
+        <section class="card" aria-labelledby="schedule-title">
+            <h2 id="schedule-title">@(programId is null ? "One-off workouts" : $"Schedule for {programName}")</h2>
+            @foreach (var entry in schedule)
+            {
+                <div class="measurement" @key="entry.Id"><span>@entry.TemplateName · @(entry.ScheduledOn ?? Weekday(entry.Weekday))</span>
+                    <button type="button" class="secondary compact" aria-label="@($"Remove scheduled {entry.TemplateName}")" disabled="@busy" @onclick="() => RunAsync(() => Workouts.DeleteScheduleAsync(entry.Id))">Remove</button></div>
+            }
+            <form class="form" aria-label="Schedule" @onsubmit="AddScheduleAsync" @onsubmit:preventDefault>
+                <div class="field"><label for="schedule-template">Template</label><select id="schedule-template" @bind="templateId"><option value="">Choose template</option>
+                    @foreach (var template in templates) { <option value="@template.Id">@template.Name</option> }
+                </select></div>
+                @if (programId is not null)
+                {
+                    <label class="check"><input type="checkbox" @bind="weekly" /> Repeat weekly within program dates</label>
+                }
+                @if (weekly && programId is not null)
+                {
+                    <div class="field"><label for="schedule-weekday">Weekday</label><select id="schedule-weekday" @bind="weekday">
+                        @foreach (var day in Enum.GetValues<DayOfWeek>()) { <option value="@day">@day</option> }
+                    </select></div>
+                }
+                else
+                {
+                    <div class="field"><label for="schedule-date">Date</label><input id="schedule-date" type="date" @bind="scheduledOn" /></div>
+                }
+                <button type="submit" class="primary" id="add-schedule" disabled="@busy">Schedule workout</button>
+            </form>
+        </section>
+        <section class="card" aria-labelledby="calendar-title">
+            <div class="inline"><h2 id="calendar-title">Calendar</h2>
+                <button type="button" class="secondary" @onclick="() => MoveCalendarAsync(-28)">Previous 4 weeks</button>
+                <button type="button" class="secondary" @onclick="() => MoveCalendarAsync(28)">Next 4 weeks</button></div>
+            <p>@calendarStart.ToString("d", CultureInfo.CurrentCulture) – @calendarStart.AddDays(27).ToString("d", CultureInfo.CurrentCulture)</p>
+            @if (calendar.Count == 0) { <p class="muted">No workouts scheduled in these four weeks.</p> }
+            @foreach (var day in calendar.GroupBy(c => c.Date))
+            {
+                <p>@day.Key.ToString("ddd, d MMM", CultureInfo.CurrentCulture): @string.Join(", ", day.Select(c => c.TemplateName + (c.SessionId is null ? "" : " · logged")))</p>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    private string? owner, error, status, locationId, programId, confirmLocation, confirmProgram;
+    private static readonly string[] EquipmentOptions = ["barbell", "dumbbell", "bench", "cable", "machine", "body_only", "kettlebells", "bands", "exercise_ball", "e_z_curl_bar", "medicine_ball", "other"];
+    private readonly HashSet<string> equipment = new(StringComparer.Ordinal);
+    private string locationName = "", bar = "", barUnit = "kg", householdId = "";
+    private string customName = "", customTracking = "weight_reps", customMuscle = "quadriceps";
+    private static string Label(string code) => CultureInfo.CurrentCulture.TextInfo.ToTitleCase(code.Replace('_', ' '));
+    private void SetEquipment(string code, bool present) { if (present) equipment.Add(code); else equipment.Remove(code); }
+    private string programName = "", programLocation = "", templateId = "";
+    private DateOnly startsOn, scheduledOn, calendarStart;
+    private DateOnly? endsOn;
+    private bool loaded, busy, weekly;
+    private DayOfWeek weekday = DayOfWeek.Monday;
+    private WorkoutService.HouseholdChoice[] households = [];
+    private TrainingLocationRow[] locations = [];
+    private ProgramRow[] programs = [];
+    private TemplateRow[] templates = [];
+    private ScheduleEntryRow[] schedule = [];
+    private IReadOnlyList<PlannedWorkout> calendar = [];
+    private readonly List<PlateEditor> plates = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        owner = Workouts.ProfileId;
+        startsOn = scheduledOn = calendarStart = Workouts.Today;
+        Profiles.Changed += ProfileChanged;
+        await LoadAsync();
+    }
+
+    private void ProfileChanged() => _ = InvokeAsync(() =>
+    {
+        if (owner != Workouts.ProfileId) { loaded = false; Navigation.NavigateTo("train"); }
+    });
+
+    private async Task LoadAsync()
+    {
+        households = await Workouts.HouseholdsAsync();
+        var nextLocations = await Workouts.LocationsAsync();
+        var nextPrograms = await Workouts.ProgramsAsync();
+        var nextTemplates = await Workouts.TemplatesAsync();
+        if (programId is not null && !nextPrograms.Any(p => p.Id == programId))
+        {
+            programId = null; programName = programLocation = ""; endsOn = null; weekly = false;
+        }
+        if (locationId is not null && !nextLocations.Any(l => l.Id == locationId)) NewLocation();
+        var nextSchedule = await Workouts.ScheduleAsync(programId);
+        var nextCalendar = await Workouts.PlannedAsync(calendarStart, calendarStart.AddDays(27));
+        if (owner != Workouts.ProfileId) return;
+        (locations, programs, templates, schedule, calendar) = (nextLocations, nextPrograms, nextTemplates, nextSchedule, nextCalendar);
+        householdId = string.IsNullOrEmpty(householdId) ? households.FirstOrDefault()?.Id ?? "" : householdId;
+        loaded = true;
+    }
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        if (busy || owner != Workouts.ProfileId) return;
+        busy = true; error = status = null;
+        try { await action(); if (owner == Workouts.ProfileId) { await LoadAsync(); status = "Saved on this device, ready to sync."; } }
+        catch (FormatException) { error = "Enter plate weights, counts and bar weight as numbers."; }
+        catch (OverflowException) { error = "Enter smaller plate weights, counts and bar weight."; }
+        catch (ValidationException e) { error = string.Join(" ", e.Errors.Select(x => x.ErrorMessage)); }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException) { error = e.Message; }
+        catch (Exception e) when (e is not OperationCanceledException) { error = "Couldn't save training setup. Try again."; }
+        finally { busy = false; }
+    }
+
+    private void EditLocation(TrainingLocationRow row)
+    {
+        locationId = row.Id; locationName = row.Name; equipment.Clear(); equipment.UnionWith(row.EquipmentCodes);
+        bar = row.BarWeight?.ToString(CultureInfo.InvariantCulture) ?? ""; barUnit = row.BarUnit ?? "kg";
+        plates.Clear(); plates.AddRange(row.Plates.Select(p => new PlateEditor { Weight = p.Weight.ToString(CultureInfo.InvariantCulture), Unit = p.Unit, Count = p.Count.ToString(CultureInfo.InvariantCulture) }));
+    }
+    private void NewLocation() { locationId = null; locationName = bar = ""; equipment.Clear(); plates.Clear(); }
+    private Task SaveCustomAsync() => RunAsync(async () =>
+    {
+        if (string.IsNullOrEmpty(householdId)) throw new ArgumentException("Choose a household first.");
+        await Workouts.CreateCustomExerciseAsync(householdId, customName, customTracking, equipment.Order(StringComparer.Ordinal).ToArray(), [customMuscle]);
+        customName = "";
+    });
+    private Task SaveLocationAsync() => RunAsync(async () =>
+    {
+        var input = new TrainingLocationInput(locationName, equipment.Order(StringComparer.Ordinal).ToArray(),
+            plates.Select(p => new PlateInput(double.Parse(p.Weight, CultureInfo.InvariantCulture), p.Unit, int.Parse(p.Count, CultureInfo.InvariantCulture))).ToArray(),
+            string.IsNullOrWhiteSpace(bar) ? null : double.Parse(bar, CultureInfo.InvariantCulture), string.IsNullOrWhiteSpace(bar) ? null : barUnit);
+        if (locationId is null) locationId = await Workouts.CreateLocationAsync(householdId, input);
+        else await Workouts.UpdateLocationAsync(locationId, input);
+    });
+    private async Task EditProgramAsync(ProgramRow row)
+    {
+        programId = row.Id; programName = row.Name; programLocation = row.LocationId ?? "";
+        startsOn = DateOnly.Parse(row.StartsOn, CultureInfo.InvariantCulture);
+        endsOn = row.EndsOn is null ? null : DateOnly.Parse(row.EndsOn, CultureInfo.InvariantCulture);
+        await LoadAsync();
+    }
+    private async Task NewProgramAsync() { programId = null; programName = programLocation = ""; startsOn = Workouts.Today; endsOn = null; weekly = false; await LoadAsync(); }
+    private Task SaveProgramAsync() => RunAsync(async () =>
+    {
+        var location = string.IsNullOrEmpty(programLocation) ? null : programLocation;
+        if (programId is null) programId = await Workouts.CreateProgramAsync(programName, location, startsOn, endsOn);
+        else await Workouts.UpdateProgramAsync(programId, programName, location, startsOn, endsOn);
+    });
+    private Task AddScheduleAsync() => RunAsync(async () =>
+    {
+        if (string.IsNullOrEmpty(templateId)) throw new ArgumentException("Choose a template first.");
+        if (weekly && programId is not null) await Workouts.ScheduleWeeklyAsync(programId, templateId, weekday);
+        else await Workouts.ScheduleOnAsync(templateId, scheduledOn, programId);
+    });
+    private async Task MoveCalendarAsync(int days) { calendarStart = calendarStart.AddDays(days); await LoadAsync(); }
+    private static string Weekday(long? day) => day is >= 1 and <= 7 ? ((DayOfWeek)(day.Value % 7)).ToString() : "Unknown day";
+    public void Dispose() => Profiles.Changed -= ProfileChanged;
+    private sealed class PlateEditor { public string Weight { get; set; } = "20"; public string Unit { get; set; } = "kg"; public string Count { get; set; } = "2"; }
+}

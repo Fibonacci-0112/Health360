@@ -1,5 +1,6 @@
 @page "/body/physiology"
 @using Health360.Domain.Physiology
+@using Health360.Domain.Training
 @implements IDisposable
 @inject BodyData Data
 @inject ProfileService Profiles
@@ -109,10 +110,12 @@
             {
                 <p class="muted small">
                     @zones.Method. @ZoneBasisText(zones)
+                    Fuel ranges use a small study of fasted trained cyclists; individual use differs. Carbohydrate supplies the remaining share.
+                    Body-fat change depends on energy balance over days and weeks.
                 </p>
                 <table class="zones">
                     <thead>
-                        <tr><th scope="col">Zone</th><th scope="col">From</th><th scope="col">Up to</th></tr>
+                        <tr><th scope="col">Zone</th><th scope="col">From</th><th scope="col">Up to</th><th scope="col">Estimated fat share of energy</th></tr>
                     </thead>
                     <tbody>
                         @foreach (var zone in zones.Zones)
@@ -121,6 +124,7 @@
                                 <th scope="row">@zone.Name</th>
                                 <td>@MetricDisplay.Format(zone.LowerBpm, "bpm")</td>
                                 <td>@(zone.UpperBpm is { } upper ? MetricDisplay.Format(upper, "bpm") : "and above")</td>
+                                <td>@ZoneFuel(zone)</td>
                             </tr>
                         }
                     </tbody>
@@ -244,6 +248,15 @@
     }
 
     protected override void OnParametersSet() => profile = Data.Profile();
+
+    private string ZoneFuel(HeartRateZone zone)
+    {
+        if (profile is null || profile.Inputs.TakesHeartRateLoweringMedication || profile.MaxHr?.Resolution.Value is not { } max || max <= 0) return "Unavailable";
+        double Fraction(double hr) => profile.RestingHr?.Resolution.Value is { } rest && max > rest && profile.Vo2Max?.Resolution.Value is > 3.5 and var vo2
+            ? (((hr - rest) / (max - rest)) * (vo2 - 3.5) + 3.5) / vo2 : hr / max;
+        var rq = CardioSubstrates.RqRange(Fraction(zone.LowerBpm), Fraction(Math.Max(zone.LowerBpm, zone.UpperBpm ?? max)));
+        return $"{CardioSubstrates.FatFraction(rq.High) * 100:0}–{CardioSubstrates.FatFraction(rq.Low) * 100:0}% (population proxy)";
+    }
 
     private HeartRateZones? Zones() =>
         profile?.ZonesFor(Enum.GetValues<ZoneSport>().First(s => HeartRateZoneRules.Code(s) == sport));
