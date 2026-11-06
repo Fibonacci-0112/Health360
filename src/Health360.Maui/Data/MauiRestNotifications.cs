@@ -29,13 +29,13 @@ public sealed class MauiRestNotifications : IRestNotifications
     public async Task<bool> ScheduleAsync(DateTimeOffset deadline)
     {
         if (OperatingSystem.IsAndroidVersionAtLeast(33)
-            && await MainThread.InvokeOnMainThreadAsync(Permissions.RequestAsync<RestNotificationPermission>) != PermissionStatus.Granted)
+            && await MainThread.InvokeOnMainThreadAsync(Permissions.RequestAsync<RestNotificationAccess>) != PermissionStatus.Granted)
         {
             return false;
         }
 
         var context = Android.App.Application.Context;
-        if (!NotificationManagerCompat.From(context).AreNotificationsEnabled())
+        if (NotificationManagerCompat.From(context)?.AreNotificationsEnabled() != true)
         {
             return false;
         }
@@ -58,7 +58,7 @@ public sealed class MauiRestNotifications : IRestNotifications
         var context = Android.App.Application.Context;
         using var pending = AlarmIntent();
         ((AlarmManager)context.GetSystemService(Context.AlarmService)!).Cancel(pending);
-        NotificationManagerCompat.From(context).Cancel(NotificationId);
+        NotificationManagerCompat.From(context)?.Cancel(NotificationId);
         return Task.CompletedTask;
     }
 #elif WINDOWS
@@ -95,7 +95,8 @@ public sealed class MauiRestNotifications : IRestNotifications
         }
         AppNotificationManager.Default.NotificationInvoked += (_, _) => MainThread.BeginInvokeOnMainThread(() =>
         {
-            if (Microsoft.Maui.Controls.Application.Current?.Windows.FirstOrDefault()?.Handler?.PlatformView is Microsoft.UI.Xaml.Window window)
+            if (Microsoft.Maui.Controls.Application.Current?.Windows is { Count: > 0 } windows
+                && windows[0].Handler?.PlatformView is Microsoft.UI.Xaml.Window window)
             {
                 window.Activate();
             }
@@ -150,7 +151,7 @@ public sealed class MauiRestNotifications : IRestNotifications
 }
 
 #if ANDROID
-public sealed class RestNotificationPermission : Permissions.BasePlatformPermission
+public sealed class RestNotificationAccess : Permissions.BasePlatformPermission
 {
     public override (string androidPermission, bool isRuntime)[] RequiredPermissions =>
         OperatingSystem.IsAndroidVersionAtLeast(33) ? [(Android.Manifest.Permission.PostNotifications, true)] : [];
@@ -161,7 +162,7 @@ public sealed class RestAlarmReceiver : BroadcastReceiver
 {
     public override void OnReceive(Context? context, Intent? intent)
     {
-        if (context is null || !NotificationManagerCompat.From(context).AreNotificationsEnabled())
+        if (context is null || NotificationManagerCompat.From(context)?.AreNotificationsEnabled() != true)
         {
             return;
         }
@@ -177,14 +178,13 @@ public sealed class RestAlarmReceiver : BroadcastReceiver
         }
         var launch = context.PackageManager?.GetLaunchIntentForPackage(context.PackageName!);
         var tap = launch is null ? null : PendingIntent.GetActivity(context, 0, launch, PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable);
-        var notification = new NotificationCompat.Builder(context, MauiRestNotifications.ChannelId)
-            .SetContentTitle("Health360")
-            .SetContentText("Rest complete")
-            .SetSmallIcon(Android.Resource.Drawable.IcLockIdleAlarm)
-            .SetContentIntent(tap)
-            .SetAutoCancel(true)
-            .Build();
-        NotificationManagerCompat.From(context).Notify(MauiRestNotifications.NotificationId, notification);
+        using var builder = new NotificationCompat.Builder(context, MauiRestNotifications.ChannelId);
+        builder.SetContentTitle("Health360");
+        builder.SetContentText("Rest complete");
+        builder.SetSmallIcon(Android.Resource.Drawable.IcLockIdleAlarm);
+        builder.SetContentIntent(tap);
+        builder.SetAutoCancel(true);
+        NotificationManagerCompat.From(context)?.Notify(MauiRestNotifications.NotificationId, builder.Build()!);
     }
 }
 #endif
