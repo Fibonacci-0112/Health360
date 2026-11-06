@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Health360.Contracts.Training;
+using Health360.Domain.Training;
 using Health360.Domain.Units;
 using Health360.Sync.Tests.Support;
 
@@ -83,6 +85,41 @@ public sealed class TwoClientSyncTests(SyncFixture fx) : IClassFixture<SyncFixtu
         Assert.Empty(await IdsAsync(B, "SELECT id AS Id FROM profiles WHERE id = ?", fx.Alex.ProfileId));
         Assert.Empty(await IdsAsync(B, "SELECT row_id AS Id FROM ps_oplog WHERE row_id = ?", alexs));
         Assert.DoesNotContain(await A2.MeasurementsAsync(), r => r.Id == blakes);
+    }
+
+    [Fact]
+    public async Task OfflineWorkoutsAndCardioSnapshotsSyncOnlyToTheOwner()
+    {
+        await A1.DrainAsync();
+        await A1.DisconnectAsync();
+        var profile = fx.Alex.ProfileId;
+        var household = (await IdsAsync(A1, "SELECT household_id AS Id FROM household_members WHERE profile_id = ?", profile)).First();
+        var exercise = await ExerciseLibrary.AddCustomAsync(A1.Db, household, "Sync test squat", "weight_reps", ["barbell"], ["quadriceps"], TimeProvider.System);
+        var session = await WorkoutLog.StartAsync(A1.Db, profile, null, "kg", TimeProvider.System);
+        await WorkoutLog.AddExerciseAsync(A1.Db, profile, session, exercise, "kg", TimeProvider.System);
+        var set = Assert.Single(Assert.Single(await WorkoutLog.ExercisesAsync(A1.Db, profile, session)).Sets);
+        await WorkoutLog.UpdateSetAsync(A1.Db, profile, set.Id, new SetEntry(5, 225, "lb"), TimeProvider.System);
+        await WorkoutLog.CompleteSetAsync(A1.Db, profile, set.Id, TimeProvider.System);
+        await WorkoutLog.FinishAsync(A1.Db, profile, session, TimeProvider.System);
+        var cardio = await CardioLog.SaveAsync(A1.Db, profile, new CardioEntry("18240", 1800, Rpe: 5), new CardioPhysiology(80, null, null), null, TimeProvider.System);
+        var day = DateOnly.FromDateTime(TimeProvider.System.GetLocalNow().DateTime);
+        var expected = (await CardioLog.SessionsAsync(A1.Db, profile, day.AddDays(-1), day)).Single(s => s.Id == cardio).Estimate!;
+        await A1.ConnectAsync();
+        await A1.DrainAsync();
+        await A2.SyncedAsync("set_logs", set.Id);
+        await A2.SyncedAsync("cardio_estimates", cardio);
+        var actualSet = Assert.Single(Assert.Single(await WorkoutLog.ExercisesAsync(A2.Db, profile, session)).Sets);
+        Assert.True(Quantity.CanonicalEquals(225 * 0.45359237, actualSet.WeightKg!.Value));
+        Assert.True(actualSet.Completed);
+        var actual = (await CardioLog.SessionsAsync(A2.Db, profile, day.AddDays(-1), day)).Single(s => s.Id == cardio).Estimate!;
+        Assert.Equal(expected.Fuel, actual.Fuel);
+        Assert.Equal(expected.Kcal, actual.Kcal);
+        Assert.Equal(2, actual.Version);
+        var marker = await B.AddWeightAsync(70);
+        await B.SyncedAsync("measurements", marker);
+        Assert.Empty(await IdsAsync(B, "SELECT id AS Id FROM workout_sessions WHERE id IN (?, ?)", session, cardio));
+        Assert.Empty(await IdsAsync(B, "SELECT id AS Id FROM cardio_estimates WHERE id = ?", cardio));
+        Assert.Empty(await FailedAsync(A1, profile));
     }
 
     [Fact]

@@ -94,7 +94,7 @@ public sealed partial class BodyData : IDisposable
     public DateOnly Today => DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
 
     /// <summary>The profile as of today; null until the profile, its measurements and its pins have loaded.</summary>
-    public PhysiologyProfile? Profile()
+    public PhysiologyProfile? Profile(DateOnly? asOf = null)
     {
         var profile = profiles.Profile;
         var rows = Measurements;
@@ -105,7 +105,7 @@ public sealed partial class BodyData : IDisposable
         }
 
         return PhysiologyProfile.Build(new PhysiologyInputs(
-            Today,
+            asOf ?? Today,
             [.. rows.Select(r => r.ToMetricValue()).OfType<MetricValue>()],
             profile.SexForCalcs switch
             {

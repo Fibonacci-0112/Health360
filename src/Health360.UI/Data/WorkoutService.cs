@@ -11,7 +11,7 @@ namespace Health360.UI.Data;
 /// The Train tab's and the logger's access to the signed-in user's workouts in the local database. Every write is
 /// local first and uploads when online, so the logger works offline and a session survives the app being killed.
 /// </summary>
-public sealed class WorkoutService(PowerSyncDatabase db, ProfileService profiles, TimeProvider clock)
+public sealed partial class WorkoutService(PowerSyncDatabase db, ProfileService profiles, TimeProvider clock)
 {
     /// <summary>The profile's lifting unit code (kg or lb), for new sets with nothing to copy.</summary>
     public string LoadUnit => UnitPrefOptions.Load.ToCode(profiles.UnitPrefs.Load);
@@ -32,8 +32,8 @@ public sealed class WorkoutService(PowerSyncDatabase db, ProfileService profiles
 
     public Task<SessionRow[]> RecentSessionsAsync(int limit = 5) => WorkoutLog.RecentSessionsAsync(db, RequireProfile(), limit);
 
-    public Task<CardioZones?> CardioZonesAsync(ZoneSport sport, PhysiologyProfile physiology) =>
-        CardioLog.ZonesAsync(db, RequireProfile(), sport, Today, physiology);
+    public Task<CardioZones?> CardioZonesAsync(ZoneSport sport, PhysiologyProfile physiology, DateOnly? date = null) =>
+        CardioLog.ZonesAsync(db, RequireProfile(), sport, date ?? Today, physiology);
 
     public IAsyncEnumerable<CardioLog.StoredZones[]> WatchCardioZoneChanges(CancellationToken cancellationToken) =>
         CardioLog.WatchZones(db, RequireProfile(), cancellationToken);
@@ -92,7 +92,7 @@ public sealed class WorkoutService(PowerSyncDatabase db, ProfileService profiles
 
     public Task DeleteSetAsync(string setId) => WorkoutLog.DeleteSetAsync(db, RequireProfile(), setId);
 
-    public Task FinishAsync(string sessionId) => WorkoutLog.FinishAsync(db, RequireProfile(), sessionId, clock);
+    public Task FinishAsync(string sessionId, CardioPhysiology? physiology = null) => WorkoutLog.FinishAsync(db, RequireProfile(), sessionId, clock, physiology);
 
     public Task DiscardAsync(string sessionId) => WorkoutLog.DiscardAsync(db, RequireProfile(), sessionId, clock);
 

@@ -8,6 +8,7 @@
 @inject BodyData Body
 @inject ProfileService Profiles
 @inject NavigationManager Navigation
+@inject TimeProvider Clock
 
 <div class="page">
     <div class="page-head">
@@ -19,7 +20,7 @@
         <p class="error" role="alert">@error</p>
     }
     <p role="status">@status</p>
-    @if (physiology is null || loading)
+    @if (physiology is null)
     {
         <p class="muted" role="status">Loading your physiology and zones</p>
     }
@@ -27,8 +28,17 @@
     {
         <form class="form" @onsubmit="SaveAsync" @onsubmit:preventDefault>
             <section class="card" aria-labelledby="cardio-session-title">
-                <h2 id="cardio-session-title">Session just completed</h2>
-                <p class="muted">Saved as ending now. Choose the activity that best matches your session; its MET value is used when HR can't estimate energy.</p>
+                <h2 id="cardio-session-title">Completed session</h2>
+                <p class="muted">Choose the activity that best matches your session; its MET value is used when HR can't estimate energy.</p>
+                <label class="check"><input type="checkbox" @bind="backdated" @bind:after="DatesChangedAsync" /> Enter an earlier session</label>
+                @if (backdated)
+                {
+                    <div class="inline">
+                        <div class="field"><label for="cardio-date">Date ended (device local time)</label><input id="cardio-date" type="date" @bind="endDate" @bind:after="DatesChangedAsync" /></div>
+                        <div class="field"><label for="cardio-time">Time ended</label><input id="cardio-time" type="time" value="@endTime" @onchange="TimeChangedAsync" /></div>
+                    </div>
+                }
+                else { <p class="muted">Saved as ending now.</p> }
                 <div class="field">
                     <label for="cardio-activity">Activity</label>
                     <select id="cardio-activity" value="@activityCode" @onchange="ActivityChangedAsync" disabled="@busy">
@@ -40,13 +50,13 @@
                 </div>
                 <div class="field">
                     <label for="cardio-duration">Duration (minutes)</label>
-                    <input id="cardio-duration" inputmode="decimal" @bind="minutes" @bind:after="ClearPreview" disabled="@busy" />
+                    <input id="cardio-duration" inputmode="decimal" @bind="minutes" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" />
                 </div>
                 <div class="field">
                     <label for="cardio-distance">Distance (optional)</label>
                     <div class="inline">
-                        <input id="cardio-distance" inputmode="decimal" @bind="distance" @bind:after="ClearPreview" disabled="@busy" />
-                        <select aria-label="Distance unit" @bind="distanceUnit" @bind:after="ClearPreview" disabled="@busy">
+                        <input id="cardio-distance" inputmode="decimal" @bind="distance" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" />
+                        <select aria-label="Distance unit" @bind="distanceUnit" @bind:after="FormChangedAsync" disabled="@busy">
                             @foreach (var unit in WorkoutCodes.DistanceUnits)
                             {
                                 <option value="@unit">@unit</option>
@@ -54,19 +64,24 @@
                         </select>
                     </div>
                 </div>
+                <div class="field"><label for="cardio-elevation">Elevation gain (optional)</label><div class="inline">
+                    <input id="cardio-elevation" inputmode="decimal" @bind="elevation" @bind:event="oninput" @bind:after="FormChangedAsync" />
+                    <select aria-label="Elevation unit" @bind="elevationUnit" @bind:after="FormChangedAsync"><option>m</option><option>ft</option></select>
+                </div></div>
                 <div class="field">
                     <label for="cardio-average">Average HR (bpm, optional)</label>
-                    <input id="cardio-average" inputmode="decimal" @bind="averageHr" @bind:after="ClearPreview" disabled="@busy" />
+                    <input id="cardio-average" inputmode="decimal" @bind="averageHr" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" />
                 </div>
                 <div class="field">
                     <label for="cardio-max">Max HR (bpm, optional)</label>
-                    <input id="cardio-max" inputmode="decimal" @bind="maxHr" @bind:after="ClearPreview" disabled="@busy" />
+                    <input id="cardio-max" inputmode="decimal" @bind="maxHr" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" />
                 </div>
                 <div class="field">
-                    <label for="cardio-rpe">RPE (0–10, optional)</label>
-                    <input id="cardio-rpe" inputmode="decimal" @bind="rpe" @bind:after="ClearPreview" disabled="@busy" />
+                    <label for="cardio-rpe">Perceived effort (modified Borg 0–10, optional)</label>
+                    <input id="cardio-rpe" inputmode="decimal" @bind="rpe" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" />
                 </div>
-                <label class="check"><input type="checkbox" @bind="intervals" @bind:after="ClearPreview" disabled="@busy" /> This session included intervals</label>
+                <p class="muted small">0: rest · 2–3: light · 4–5: moderate · 6–7: vigorous · 8–10: very hard. One rating cannot divide interval time.</p>
+                <label class="check"><input type="checkbox" @bind="intervals" @bind:after="FormChangedAsync" disabled="@busy" /> This session included intervals</label>
             </section>
             <section class="card" aria-labelledby="cardio-zones-title">
                 <h2 id="cardio-zones-title">Heart-rate zones</h2>
@@ -93,7 +108,7 @@
                                     <th scope="row">@zone.Name</th>
                                     <td>@Bounds(zone)</td>
                                     <td><input class="set-input" inputmode="decimal" aria-label="@($"Zone {zone.Name} minutes")"
-                                               @bind="zoneMinutes[index]" @bind:after="ClearPreview" disabled="@busy" /></td>
+                                               @bind="zoneMinutes[index]" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" /></td>
                                 </tr>
                             }
                         </tbody>
@@ -105,7 +120,7 @@
                 <button type="button" class="secondary" id="preview-cardio" disabled="@busy" @onclick="Preview">Estimate</button>
                 <button type="submit" class="primary" id="save-cardio" disabled="@busy">Save cardio</button>
             </div>
-            <p class="muted small">Save records this completed session on this device, ready to sync. Unsaved form entries are lost when you leave.</p>
+            <p class="muted small">Save records this completed session on this device, ready to sync. Unfinished entries are saved on this device as you type. They resume here after a restart.</p>
         </form>
         @if (preview is not null)
         {
@@ -115,6 +130,11 @@
 </div>
 
 @code {
+    private string elevation = "", elevationUnit = "m", endTime = "";
+    private DateOnly endDate;
+    private bool backdated;
+    private CardioDraft? restoring;
+    private Task draftSave = Task.CompletedTask;
     private string activityCode = CardioEnergy.Activities[0].Code;
     private string minutes = "";
     private string distance = "";
@@ -140,6 +160,7 @@
     protected override void OnInitialized()
     {
         distanceUnit = Workouts.DistanceUnit;
+        endDate = Workouts.Today; endTime = Clock.GetLocalNow().ToString("HH:mm", CultureInfo.InvariantCulture);
         Body.EnsureWatching();
         Body.Changed += Changed;
         Profiles.Changed += Changed;
@@ -163,14 +184,26 @@
             zoneWatch?.Dispose();
             zoneWatch = null;
             zonesReady = false;
-            minutes = distance = averageHr = maxHr = rpe = "";
+            minutes = distance = averageHr = maxHr = rpe = elevation = "";
+            backdated = false; restoring = null;
             intervals = false;
             profileId = currentId;
             zones = null;
+            physiology = null;
             zoneMinutes = [];
             status = error = null;
             if (currentId is not null)
             {
+                var draft = CardioJson.ParseDraft(await Workouts.ReadStateAsync("cardio"));
+                if (currentId != Workouts.ProfileId || disposed) return;
+                if (draft is not null && CardioEnergy.Activities.Any(a => a.Code == draft.ActivityCode))
+                {
+                    restoring = draft;
+                    (activityCode, minutes, distance, distanceUnit, averageHr, maxHr, rpe, intervals, elevation, elevationUnit, backdated, endTime) =
+                        (draft.ActivityCode, draft.Minutes, draft.Distance, draft.DistanceUnit, draft.AverageHr, draft.MaxHr, draft.Rpe, draft.Intervals,
+                         draft.Elevation, draft.ElevationUnit, draft.Backdated, draft.EndTime);
+                    if (DateOnly.TryParseExact(draft.EndDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)) endDate = date;
+                }
                 zoneWatch = new CancellationTokenSource();
                 var token = zoneWatch.Token;
                 // Capture the profile's enumerable before a later account change can select another owner.
@@ -180,8 +213,8 @@
         }
 
         preview = null;
-        physiology = null;
-        var profile = Body.Profile();
+        var dateForInputs = StartedOn();
+        var profile = Body.Profile(dateForInputs);
         if (profile is null || currentId is null || Body.Failed || !zonesReady)
         {
             loading = false;
@@ -199,7 +232,7 @@
         try
         {
             var sport = CardioEnergy.Activities.Single(a => a.Code == activityCode).Sport;
-            var loaded = await Workouts.CardioZonesAsync(sport, profile);
+            var loaded = await Workouts.CardioZonesAsync(sport, profile, dateForInputs);
             if (disposed || refresh != generation || Workouts.ProfileId != currentId)
             {
                 return;
@@ -217,6 +250,12 @@
             }
 
             zones = loaded;
+            if (restoring is { } draft)
+            {
+                if (draft.ZoneKey == ZoneKey(zones) && draft.ZoneMinutes.Length == zoneMinutes.Length) zoneMinutes = draft.ZoneMinutes;
+                else if (draft.ZoneMinutes.Any(t => !string.IsNullOrWhiteSpace(t))) status = "Zones changed. Re-enter the watch times using these boundaries.";
+                restoring = null;
+            }
             physiology = CardioPhysiology.From(profile);
             error = null;
         }
@@ -241,6 +280,7 @@
     {
         activityCode = e.Value as string ?? CardioEnergy.Activities[0].Code;
         await RefreshAsync();
+        await FormChangedAsync();
     }
 
     private async Task WatchZonesAsync(IAsyncEnumerable<CardioLog.StoredZones[]> changes, CancellationToken token)
@@ -281,16 +321,53 @@
         }
     }
 
-    private void ClearPreview() => preview = null;
+    private Task FormChangedAsync()
+    {
+        preview = null;
+        if (profileId is null || profileId != Workouts.ProfileId || physiology is null) return Task.CompletedTask;
+        var owner = profileId;
+        var json = CardioJson.SerializeDraft(new(activityCode, minutes, distance, distanceUnit, averageHr, maxHr, rpe, intervals,
+            [.. zoneMinutes], ZoneKey(zones), elevation, elevationUnit, backdated, endDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), endTime));
+        return draftSave = SaveAfterAsync(owner, json);
+    }
+    private async Task SaveAfterAsync(string owner, string json)
+    {
+        if (owner != Workouts.ProfileId) return;
+        try { await Workouts.SaveStateAsync("cardio", json); }
+        catch (Exception e) when (e is not OperationCanceledException) { error = "Couldn't save the unfinished form on this device. Keep this page open and retry."; }
+    }
+    private static string ZoneKey(CardioZones? value) => value is null ? "none" : value.Method + "/" + value.StoredId + "/" +
+        string.Join(',', value.Zones.Select(z => z.LowerBpm.ToString("R", CultureInfo.InvariantCulture)));
+    private DateTimeOffset? EndedAt()
+    {
+        if (!backdated) return null;
+        if (!TimeOnly.TryParseExact(endTime, ["HH:mm", "HH:mm:ss"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
+            throw new ArgumentException("Enter a valid ending time.");
+        var local = endDate.ToDateTime(time, DateTimeKind.Unspecified);
+        if (Clock.LocalTimeZone.IsInvalidTime(local) || Clock.LocalTimeZone.IsAmbiguousTime(local))
+            throw new ArgumentException("This local time is skipped or repeated by a clock change. Choose an unambiguous ending time.");
+        return new DateTimeOffset(local, Clock.LocalTimeZone.GetUtcOffset(local));
+    }
+    private DateOnly StartedOn()
+    {
+        try
+        {
+            var seconds = Number(minutes) is { } m && double.IsFinite(m) && m is > 0 and <= 1440 ? m * 60 : 0;
+            return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime((EndedAt() ?? Clock.GetUtcNow()).AddSeconds(-seconds), Clock.LocalTimeZone).DateTime);
+        }
+        catch (ArgumentException) { return Workouts.Today; }
+    }
+    private async Task DatesChangedAsync() { await RefreshAsync(); await FormChangedAsync(); }
+    private async Task TimeChangedAsync(ChangeEventArgs e) { endTime = e.Value as string ?? ""; await DatesChangedAsync(); }
 
     private CardioEntry Entry() => new(activityCode, (Number(minutes) ?? 0) * 60, Number(averageHr), Number(maxHr),
         zoneMinutes.Any(t => !string.IsNullOrWhiteSpace(t)) ? zoneMinutes.Select(t => (Number(t) ?? double.NaN) * 60).ToArray() : null,
-        Number(rpe), intervals, Number(distance), distanceUnit);
+        Number(rpe), intervals, Number(distance), distanceUnit, Number(elevation), elevationUnit, EndedAt());
 
     private static double? Number(string? value) => string.IsNullOrWhiteSpace(value) ? null
         : double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) ? number : double.NaN;
 
-    private void Preview()
+    private async Task Preview()
     {
         preview = null;
         error = null;
@@ -300,7 +377,13 @@
             return;
         }
 
-        var entry = Entry();
+        CardioEntry entry;
+        try { entry = Entry(); }
+        catch (ArgumentException e) { error = e.Message; return; }
+        if (entry.EndedAt > Clock.GetUtcNow()) { error = "A completed session cannot end in the future."; return; }
+        await RefreshAsync();
+        if (physiology is null || loading || profileId != Workouts.ProfileId) return;
+        entry = Entry();
         var errors = CardioEnergy.Errors(entry, zones);
         if (errors.Count > 0)
         {
@@ -318,7 +401,7 @@
             return;
         }
 
-        Preview();
+        await Preview();
         if (preview is null)
         {
             return;
@@ -327,7 +410,9 @@
         busy = true;
         try
         {
+            await draftSave;
             await Workouts.SaveCardioAsync(preview.Entry, preview.Physiology, preview.Zones);
+            if (profileId == Workouts.ProfileId) await Workouts.DeleteStateAsync("cardio");
             if (!disposed && profileId == Workouts.ProfileId)
             {
                 Navigation.NavigateTo("train");

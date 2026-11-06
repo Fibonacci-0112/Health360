@@ -55,7 +55,7 @@ public sealed class CardioLogTests
         Assert.Equal("run", sessionUpload.Data["sport"]!.GetValue<string>());
         Assert.Equal(6, sessionUpload.Data["rpe"]!.GetValue<double>());
         Assert.Equal("2026-11-04T11:30:00.000Z", sessionUpload.Data["started_at"]!.GetValue<string>());
-        Assert.Equal(1, sessionUpload.Data["energy_estimate"]!["version"]!.GetValue<int>());
+        Assert.Equal(CardioEnergy.MethodVersion, sessionUpload.Data["energy_estimate"]!["version"]!.GetValue<int>());
         var privateUpload = Assert.Single(writer.Writes, write => write.Table == "cardio_estimates");
         Assert.Equal(("PUT", "cardio_estimates", id), (privateUpload.Op, privateUpload.Table, privateUpload.Id));
         Assert.Equal(80, privateUpload.Data!["estimate"]!["physiology"]!["weight_kg"]!.GetValue<double>());

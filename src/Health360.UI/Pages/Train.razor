@@ -12,6 +12,7 @@
 <div class="page">
     <div class="page-head">
         <h1>Train</h1>
+        <NavLink href="train/setup">Programs, locations and calendar</NavLink>
     </div>
 
     @if (error is not null)
@@ -131,7 +132,17 @@
                     <p>Aerobic @Number(withSplit.Sum(e => e.AerobicSeconds!.Value) / 60) min · Anaerobic @Number(withSplit.Sum(e => e.AnaerobicSeconds!.Value) / 60) min (@withSplit.Length of @cardio.Length sessions)</p>
                     <p class="muted small">These labels describe intensity; both energy systems work at every intensity.</p>
                 }
-                <p class="muted small">Saved session estimates; later physiology or zone changes leave them unchanged. Not added to your calorie target. Fat/carbohydrate estimates are not available yet.</p>
+                var withFuel = estimates.Where(e => e.Fuel is not null).ToArray();
+                var withIntensity = estimates.Where(e => e.Intensity is not null).ToArray();
+                @if (withFuel.Length > 0)
+                {
+                    <p>Fat @Number(Energy(withFuel.Sum(e => e.Fuel!.FatKcal.Low)))–@Number(Energy(withFuel.Sum(e => e.Fuel!.FatKcal.High))) @EnergyUnitCode · Carbohydrate @Number(Energy(withFuel.Sum(e => e.Fuel!.CarbKcal.Low)))–@Number(Energy(withFuel.Sum(e => e.Fuel!.CarbKcal.High))) @EnergyUnitCode (@withFuel.Length of @cardio.Length sessions)</p>
+                }
+                @if (withIntensity.Length > 0)
+                {
+                    <p>Low @Number(withIntensity.Sum(e => e.Intensity!.LowSeconds) / 60) min · Moderate @Number(withIntensity.Sum(e => e.Intensity!.ModerateSeconds) / 60) min · High @Number(withIntensity.Sum(e => e.Intensity!.HighSeconds) / 60) min (@withIntensity.Length of @cardio.Length sessions)</p>
+                }
+                <p class="muted small">Saved session estimates; later physiology or zone changes leave them unchanged. Not added to your calorie target.</p>
                 @foreach (var session in cardio)
                 {
                     @if (session.Estimate is { } estimate)
@@ -145,6 +156,23 @@
             }
         </section>
 
+        <section class="card" aria-labelledby="volume-title">
+            <h2 id="volume-title">Training this week</h2>
+            @if (volume.Length == 0) { <p class="muted">No completed work sets this week.</p> }
+            else
+            {
+                <table><thead><tr><th scope="col">Primary muscle</th><th scope="col">Sets</th><th scope="col">Volume (@Workouts.LoadUnit × reps)</th></tr></thead>
+                    <tbody>@foreach (var muscle in volume) { <tr><th scope="row">@muscle.Muscle.Replace('_', ' ')</th><td>@muscle.Sets</td><td>@Number(UnitCodes.Convert(muscle.VolumeKg, "kg", Workouts.LoadUnit)!.Value)</td></tr> }</tbody>
+                </table>
+                <p class="muted small">Completed non-warm-up sets from finished workouts, Monday–Sunday. A set counts for every primary muscle; these are not additive across muscles. Volume is external weight × reps.</p>
+            }
+            <div class="field"><label for="history-exercise">Estimated 1RM history</label><select id="history-exercise" @bind="historyExercise" @bind:after="LoadHistoryAsync">
+                <option value="">Choose exercise</option>
+                @foreach (var exercise in records.GroupBy(r => r.ExerciseId)) { <option value="@exercise.Key">@exercise.First().ExerciseName</option> }
+            </select></div>
+            @if (!string.IsNullOrEmpty(historyExercise)) { <E1rmChart Points="history" Unit="@Workouts.LoadUnit" Name="@(records.FirstOrDefault(r => r.ExerciseId == historyExercise)?.ExerciseName ?? "Exercise")" /> }
+        </section>
+        <PlateCalculator @key="watchedProfile" />
         <section class="card" aria-labelledby="records-title">
             <h2 id="records-title">Personal records</h2>
             @if (records.Length == 0)
@@ -179,7 +207,7 @@
                             <div class="measurement-text">
                                 <span class="strong">@(session.TemplateName ?? (session.Kind == "cardio" ? "Cardio" : "Workout"))</span>
                                 <span class="muted small">@session.LocalDate @(session.Kind == "cardio" ? "" : $"· {Sets(session.CompletedSets)}")</span>
-                                @if (session.Kind == "cardio" && CardioJson.Parse(session.EnergyEstimate) is { } estimate)
+                                @if (CardioJson.Parse(session.EnergyEstimate) is { } estimate)
                                 {
                                     <details><summary>Session estimate</summary><CardioEstimateView Estimate="estimate" /></details>
                                 }
@@ -202,6 +230,16 @@
     private PersonalRecordRow[] records = [];
     private SessionRow[] recent = [];
     private CardioSessionRow[] cardio = [];
+    private MuscleVolumeRow[] volume = [];
+    private E1rmPoint[] history = [];
+    private string historyExercise = "";
+    private async Task LoadHistoryAsync()
+    {
+        var profile = Workouts.ProfileId;
+        var exercise = historyExercise;
+        var loaded = string.IsNullOrEmpty(exercise) ? [] : await Workouts.E1rmHistoryAsync(exercise);
+        if (profile == Workouts.ProfileId && exercise == historyExercise) history = loaded;
+    }
 
     private CancellationTokenSource? watch;
     private string? watchedProfile;
@@ -241,6 +279,7 @@
         watch?.Dispose();
         watch = null;
         watchedProfile = profileId;
+        volume = []; history = []; historyExercise = "";
         loaded = false;
         active = null;
         templates = [];
@@ -343,6 +382,8 @@
             var today = Workouts.Today;
             var monday = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
             var newCardio = await Workouts.CardioSessionsAsync(monday, monday.AddDays(6));
+            var newVolume = await Workouts.MuscleVolumeAsync(monday, monday.AddDays(6));
+            await LoadHistoryAsync();
             if (token.IsCancellationRequested)
             {
                 return;
@@ -350,6 +391,7 @@
 
             (active, templates, planned, records, recent) = (newActive, newTemplates, newPlanned, newRecords, newRecent);
             cardio = newCardio;
+            volume = newVolume;
             loaded = true;
             error = null;
         }

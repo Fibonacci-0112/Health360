@@ -16,7 +16,10 @@ public sealed record CardioEntry(
     double? Rpe = null,
     bool Intervals = false,
     double? Distance = null,
-    string? DistanceUnit = null);
+    string? DistanceUnit = null,
+    double? Elevation = null,
+    string? ElevationUnit = null,
+    DateTimeOffset? EndedAt = null);
 
 /// <summary>The exact zones used, including their source, detached from future profile edits.</summary>
 public sealed record CardioZones(
@@ -39,7 +42,8 @@ public sealed record CardioPhysiology(
     Resolution? RestingHr = null,
     Resolution? ThresholdHr = null,
     bool TakesHeartRateLoweringMedication = false,
-    string? ThresholdMetric = null)
+    string? ThresholdMetric = null,
+    Resolution? LowerThresholdHr = null)
 {
     public static CardioPhysiology From(PhysiologyProfile profile)
     {
@@ -51,7 +55,7 @@ public sealed record CardioPhysiology(
             ?? profile.Lthr;
         return new(profile.WeightKg, profile.Inputs.Sex, profile.AgeYears, profile.Vo2Max?.Resolution,
             profile.MaxHr?.Resolution, profile.RestingHr?.Resolution,
-            threshold?.Resolution, profile.Inputs.TakesHeartRateLoweringMedication, threshold?.MetricCode);
+            threshold?.Resolution, profile.Inputs.TakesHeartRateLoweringMedication, threshold?.MetricCode, profile.LowerThreshold?.Resolution);
     }
 
     private static ProfileValue? StandaloneThreshold(PhysiologyInputs inputs, string metricCode)
@@ -73,7 +77,7 @@ public sealed record EnergyRange(double Low, double High);
 
 /// <summary>
 /// Versioned, immutable-by-storage snapshot. Time above threshold describes intensity; both energy systems work
-/// at every intensity. No substrate split is produced until a population curve is sourced.
+/// at every intensity. Fuel ranges retain their source and method alongside the session inputs.
 /// </summary>
 public sealed record CardioEstimate(
     int Version,
@@ -86,11 +90,17 @@ public sealed record CardioEstimate(
     double? AerobicSeconds,
     double? AnaerobicSeconds,
     double? DistanceMetres,
-    IReadOnlyList<string> Notes);
+    IReadOnlyList<string> Notes,
+    IntensityMinutes? Intensity = null,
+    FuelEstimate? Fuel = null,
+    double? ElevationMetres = null);
+
+public sealed record IntensityMinutes(double LowSeconds, double ModerateSeconds, double HighSeconds, string Method);
+public sealed record FuelEstimate(EnergyRange FatKcal, EnergyRange CarbKcal, EnergyRange FatGrams, EnergyRange CarbGrams, string Method);
 
 public static class CardioEnergy
 {
-    public const int MethodVersion = 1;
+    public const int MethodVersion = 2;
 
     public static IReadOnlyList<CardioActivity> Activities { get; } =
     [
@@ -100,6 +110,21 @@ public static class CardioEnergy
         new("01010", "Cycling, under 10 mph (16 km/h), leisure", ZoneSport.Bike, 4),
         new("01030", "Cycling, 12–13.9 mph (19–22 km/h)", ZoneSport.Bike, 8),
         new("01200", "Stationary cycling, general", ZoneSport.Bike, 6.8),
+        new("17151", "Walking, under 2 mph (3.2 km/h)", ZoneSport.Other, 2.3),
+        new("17190", "Walking, moderate pace, level", ZoneSport.Other, 3.8),
+        new("17200", "Walking, brisk pace, level", ZoneSport.Other, 4.8),
+        new("17080", "Hiking, cross country", ZoneSport.Other, 6),
+        new("02048", "Elliptical, moderate effort", ZoneSport.Other, 5),
+        new("02049", "Elliptical, vigorous effort", ZoneSport.Other, 9),
+        new("02071", "Rowing machine, under 100 watts", ZoneSport.Row, 5),
+        new("02072", "Rowing machine, 100–149 watts", ZoneSport.Row, 7.5),
+        new("02073", "Rowing machine, 150–199 watts", ZoneSport.Row, 11),
+        new("18240", "Swimming freestyle, slow, recreational", ZoneSport.Swim, 5.8),
+        new("18230", "Swimming freestyle, fast, vigorous", ZoneSport.Swim, 9.8),
+        new("18255", "Swimming backstroke, recreational", ZoneSport.Swim, 4.8),
+        new("18265", "Swimming breaststroke, recreational", ZoneSport.Swim, 5.3),
+        new("18100", "Kayaking, moderate effort", ZoneSport.Other, 5),
+        new("02054", "Strength training, multiple exercises, 8–15 reps", ZoneSport.Other, 3.5),
     ];
 
     /// <summary>Input errors for manual logging. Kept here so UI and local writes enforce the same invariants.</summary>
@@ -140,6 +165,11 @@ public static class CardioEnergy
             || (entry.Distance is not null && entry.DistanceUnit is not ("m" or "km" or "mi" or "yd")))
         {
             errors.Add("Enter a distance of 0 or more and choose its unit.");
+        }
+
+        if (!Optional(entry.Elevation, 0, 20000) || (entry.Elevation is not null && entry.ElevationUnit is not ("m" or "ft")))
+        {
+            errors.Add("Enter elevation gain from 0 to 20,000, in m or ft.");
         }
 
         if (entry.ZoneSeconds is { } times)
@@ -214,19 +244,20 @@ public static class CardioEnergy
             MaxHr = CardioPhysiology.Snapshot(physiology.MaxHr),
             RestingHr = CardioPhysiology.Snapshot(physiology.RestingHr),
             ThresholdHr = CardioPhysiology.Snapshot(physiology.ThresholdHr),
+            LowerThresholdHr = CardioPhysiology.Snapshot(physiology.LowerThresholdHr),
         };
         // Copy collections: callers may keep editing the form's arrays after a preview is calculated.
         entry = entry with { ZoneSeconds = entry.ZoneSeconds?.ToArray() };
         zones = zones is null ? null : zones with
         {
-            Zones = zones.Zones.ToArray(),
-            Inputs = zones.Inputs.Select(i => CardioPhysiology.Snapshot(i)!).ToArray(),
+            Zones = [.. zones.Zones],
+            Inputs = [.. zones.Inputs.Select(i => CardioPhysiology.Snapshot(i)!)],
         };
         List<string> notes = ["Rough population estimate, not a confidence interval. Not added to your calorie target.",
-            "Fat/carbohydrate estimates are not available yet."];
+            "Fuel shares are a broad population proxy, not measured oxidation. Body-fat change depends on energy balance over days and weeks."];
         var method = "Unavailable";
         EnergyRange? kcal = null;
-        var canUseHr = !physiology.TakesHeartRateLoweringMedication && physiology.Sex is not null
+        var canUseHr = activity.Code != "02054" && !physiology.TakesHeartRateLoweringMedication && physiology.Sex is not null
             && physiology.AgeYears is >= 18 and <= 100 && Positive(physiology.WeightKg);
         var hasVo2 = Positive(physiology.Vo2Max?.Value);
 
@@ -275,13 +306,31 @@ public static class CardioEnergy
         }
 
         var (aerobic, anaerobic) = Split(entry, physiology, zones);
+        if (aerobic is not null && physiology.ThresholdHr?.IsEstimate == true)
+        {
+            notes.Add("Intensity uses an estimated LTHR, not a measured threshold.");
+        }
+        var intensity = Intensity(entry, physiology, zones);
+        if (aerobic is null && intensity?.Method == "RPE categories")
+        {
+            aerobic = intensity.LowSeconds + intensity.ModerateSeconds;
+            anaerobic = intensity.HighSeconds;
+            notes.Add("RPE categories are a rough perceived-intensity proxy, not a measured lactate threshold.");
+        }
+        if (activity.Code == "02054")
+        {
+            aerobic = anaerobic = null;
+            intensity = null;
+            notes.Add("Strength is mainly anaerobic and carbohydrate-heavy. HR is unsuitable for estimating lifting energy; no numeric fuel split.");
+        }
         if (aerobic is null)
         {
-            notes.Add("Intensity split needs a measured threshold and HR that can be compared with it.");
+            notes.Add("Intensity split needs a usable threshold and comparable HR, or a steady session with perceived effort.");
         }
 
         return new(MethodVersion, entry, activity, physiology, zones, method, kcal, aerobic, anaerobic,
-            entry.Distance is { } distance ? UnitCodes.Convert(distance, entry.DistanceUnit!, "m") : null, notes);
+            entry.Distance is { } distance ? UnitCodes.Convert(distance, entry.DistanceUnit!, "m") : null, notes, intensity, Fuel(entry, physiology, zones, kcal),
+            entry.Elevation is { } gain ? UnitCodes.Convert(gain, entry.ElevationUnit!, "m") : null);
     }
 
     /// <summary>Keytel's printed mixed-model equations, kJ/min converted to kcal/min (4.184 kJ/kcal).</summary>
@@ -328,7 +377,8 @@ public static class CardioEnergy
 
     private static (double? Aerobic, double? Anaerobic) Split(CardioEntry entry, CardioPhysiology p, CardioZones? zones)
     {
-        if (p.ThresholdHr is not { IsEstimate: false, Value: > 0 } threshold || !double.IsFinite(threshold.Value))
+        if (p.ThresholdHr is not { Value: > 0 } threshold || !double.IsFinite(threshold.Value)
+            || (p.TakesHeartRateLoweringMedication && threshold.IsEstimate))
         {
             return (null, null);
         }
@@ -365,6 +415,92 @@ public static class CardioEnergy
         }
 
         return (entry.DurationSeconds - high, high);
+    }
+
+    private static FuelEstimate? Fuel(CardioEntry entry, CardioPhysiology p, CardioZones? zones, EnergyRange? kcal)
+    {
+        if (kcal is null || entry.ActivityCode == "02054") return null;
+        var canUseHr = !p.TakesHeartRateLoweringMedication && Positive(p.MaxHr?.Value);
+        EnergyRange? RqForHr(double low, double high)
+        {
+            if (!canUseHr) return null;
+            double Fraction(double hr) => Positive(p.RestingHr?.Value) && p.MaxHr!.Value > p.RestingHr!.Value
+                && p.Vo2Max?.Value is > 3.5 and var vo2 && double.IsFinite(vo2)
+                    ? (((hr - p.RestingHr.Value) / (p.MaxHr.Value - p.RestingHr.Value)) * (vo2 - 3.5) + 3.5) / vo2
+                    : hr / p.MaxHr!.Value;
+            return CardioSubstrates.RqRange(Fraction(low), Fraction(high), entry.Intervals ? 0.08 : 0.05);
+        }
+
+        if (canUseHr && entry.ZoneSeconds is { } times && zones is not null && ZoneBounds(entry, p, zones) is { } bounds)
+        {
+            var fuels = new List<FuelEstimate>();
+            for (var i = 0; i < times.Count; i++)
+            {
+                if (times[i] == 0) continue;
+                // Allocate the same whole-zone energy bounds used above, rather than treating zone time as energy share.
+                var zoneEnergy = p.Sex is not null && p.AgeYears is >= 18 and <= 100 && Positive(p.WeightKg)
+                    ? Widen(Keytel(p, bounds[i].Low) * times[i] / 60, Keytel(p, bounds[i].High) * times[i] / 60, entry.Intervals ? 0.4 : 0.25)
+                    : new EnergyRange(kcal.Low * times[i] / entry.DurationSeconds, kcal.High * times[i] / entry.DurationSeconds);
+                if (zoneEnergy is null) return null;
+                fuels.Add(CardioSubstrates.Allocate(zoneEnergy, RqForHr(bounds[i].Low, bounds[i].High)!));
+            }
+            EnergyRange Sum(Func<FuelEstimate, EnergyRange> select) => new(fuels.Sum(f => select(f).Low), fuels.Sum(f => select(f).High));
+            return new(Sum(f => f.FatKcal), Sum(f => f.CarbKcal), Sum(f => f.FatGrams), Sum(f => f.CarbGrams), CardioSubstrates.Method + "; time in zones");
+        }
+        if (canUseHr && entry.AverageHr is { } average)
+        {
+            return CardioSubstrates.Allocate(kcal, RqForHr(average, average)!, CardioSubstrates.Method + "; average HR assumes steady state");
+        }
+        if (entry.Rpe is { } rpe && !entry.Intervals)
+        {
+            // Broad category mapping, an explicit product assumption rather than an individual RPE→VO₂ equation.
+            var low = rpe < 4 ? 0 : rpe < 6 ? 0.46 : 0.64;
+            var high = rpe < 4 ? 0.46 : rpe < 6 ? 0.64 : 1;
+            return CardioSubstrates.Allocate(kcal, CardioSubstrates.RqRange(low, high, 0.08),
+                CardioSubstrates.Method + "; rough RPE category proxy");
+        }
+        return null;
+    }
+
+    private static IntensityMinutes? Intensity(CardioEntry entry, CardioPhysiology p, CardioZones? zones)
+    {
+        if (p.LowerThresholdHr is { IsEstimate: false, Value: > 0 } lower
+            && p.ThresholdHr is { IsEstimate: false } upper && upper.Value > lower.Value)
+        {
+            double low = 0, moderate = 0, high = 0;
+            if (entry.ZoneSeconds is { } times && zones is not null)
+            {
+                for (var i = 0; i < times.Count; i++)
+                {
+                    if (times[i] == 0) continue;
+                    var zone = zones.Zones[i];
+                    if (zone.LowerBpm >= upper.Value) high += times[i];
+                    else if (zone.LowerBpm >= lower.Value && zone.UpperBpm <= upper.Value) moderate += times[i];
+                    else if (zone.UpperBpm <= lower.Value) low += times[i];
+                    else return null;
+                }
+            }
+            else if (entry.AverageHr is { } hr && !entry.Intervals)
+            {
+                if (hr >= upper.Value) high = entry.DurationSeconds;
+                else if (hr >= lower.Value) moderate = entry.DurationSeconds;
+                else low = entry.DurationSeconds;
+            }
+            else
+            {
+                return null;
+            }
+
+            return new(low, moderate, high, "Measured LT1/LT2 HR");
+        }
+
+        // A single RPE is not a time distribution for an interval workout.
+        if ((p.TakesHeartRateLoweringMedication || (entry.AverageHr is null && entry.ZoneSeconds is null)) && entry.Rpe is { } rpe && !entry.Intervals)
+        {
+            return new(rpe < 4 ? entry.DurationSeconds : 0, rpe is >= 4 and < 6 ? entry.DurationSeconds : 0,
+                rpe >= 6 ? entry.DurationSeconds : 0, "RPE categories");
+        }
+        return null;
     }
 
     private static EnergyRange? Widen(double low, double high, double fraction) =>

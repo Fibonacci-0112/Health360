@@ -1,0 +1,41 @@
+@using System.Globalization
+
+@if (Points.Count == 0)
+{
+    <p class="muted">No estimated 1RM history for this exercise yet.</p>
+}
+else
+{
+    var values = Points.Select(p => UnitCodes.Convert(p.E1rmKg, "kg", Unit)!.Value).ToArray();
+    var min = values.Min(); var max = values.Max();
+    if (max - min < 1e-9) { min -= 1; max += 1; }
+    <figure class="chart">
+        <svg viewBox="0 0 640 220" role="img" aria-label="@($"{Name} estimated 1RM history in {Unit}. {Points.Count} dates. Latest {values[^1]:0.#} {Unit}.")">
+            @if (Points.Count > 1) { <polyline class="chart-trend" points="@Path(values, min, max)" /> }
+            @for (var i = 0; i < Points.Count; i++) { <circle class="chart-point" cx="@N(X(i))" cy="@N(Y(values[i], min, max))" r="4" /> }
+            <text class="chart-label" x="16" y="16">@values.Max().ToString("0.#", CultureInfo.CurrentCulture) @Unit</text>
+            <text class="chart-label" x="16" y="212">@Points[0].LocalDate</text>
+            <text class="chart-label" x="624" y="212" text-anchor="end">@Points[^1].LocalDate</text>
+        </svg>
+        <figcaption class="muted small">Best Epley estimated 1RM per day, from completed work sets in finished workouts. Loads shown in @Unit.</figcaption>
+    </figure>
+    <details><summary>Show estimated 1RM as a table</summary><table>
+        <thead><tr><th scope="col">Date</th><th scope="col">Estimated 1RM (@Unit)</th></tr></thead>
+        <tbody>@foreach (var p in Points) { <tr><th scope="row">@p.LocalDate</th><td>@UnitCodes.Convert(p.E1rmKg, "kg", Unit)!.Value.ToString("0.#", CultureInfo.CurrentCulture)</td></tr> }</tbody>
+    </table></details>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<E1rmPoint> Points { get; set; } = [];
+    [Parameter] public string Unit { get; set; } = "kg";
+    [Parameter] public string Name { get; set; } = "Exercise";
+    private double X(int index)
+    {
+        var first = DateOnly.Parse(Points[0].LocalDate, CultureInfo.InvariantCulture).DayNumber;
+        var span = DateOnly.Parse(Points[^1].LocalDate, CultureInfo.InvariantCulture).DayNumber - first;
+        return span == 0 ? 320 : 32 + (DateOnly.Parse(Points[index].LocalDate, CultureInfo.InvariantCulture).DayNumber - first) * 576d / span;
+    }
+    private static double Y(double v, double min, double max) => 24 + (max - v) * 160 / (max - min);
+    private string Path(double[] values, double min, double max) => string.Join(' ', values.Select((v, i) => $"{N(X(i))},{N(Y(v, min, max))}"));
+    private static string N(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+}

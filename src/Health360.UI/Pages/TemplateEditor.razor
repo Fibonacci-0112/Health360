@@ -59,6 +59,9 @@
                                     @onclick="() => rows.RemoveAt(index)">Remove</button>
                         </div>
                     </div>
+                    <div class="field"><label for="@($"superset-{index}")">Superset group (optional, e.g. A)</label>
+                        <input id="@($"superset-{index}")" maxlength="12" @bind="row.Superset" @bind:event="oninput" />
+                    </div>
                     <div class="inline">
                         <div class="field">
                             <label class="label" for="@($"sets-{index}")">Sets</label>
@@ -221,6 +224,7 @@
         public string MaxReps { get; set; } = "12";
 
         public string Rest { get; set; } = "";
+        public string Superset { get; set; } = "";
 
         public string Load { get; set; } = "";
 
@@ -317,6 +321,7 @@
             MinReps = Text(scheme?.MinReps ?? 8),
             MaxReps = Text(scheme?.MaxReps ?? 12),
             Rest = e.RestSeconds is { } rest ? Text(rest) : "",
+            Superset = scheme?.Superset ?? "",
             // A starting load in another unit than the rule's is shown in the rule's, since one unit serves both.
             Load = shownLoad ?? "",
             Unit = unit,
@@ -445,7 +450,7 @@
                 }
             }
 
-            var scheme = new SetScheme(sets, min, max, load, load is null ? null : loadUnit);
+            var scheme = new SetScheme(sets, min, max, load, load is null ? null : loadUnit, string.IsNullOrWhiteSpace(row.Superset) ? null : row.Superset.Trim());
             exercises.Add(new TemplateExerciseInput(row.ExerciseId, scheme, rest, rule, row.Id));
         }
 

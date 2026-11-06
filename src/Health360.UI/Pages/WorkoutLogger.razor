@@ -6,6 +6,8 @@
 @inject WorkoutService Workouts
 @inject ProfileService Profiles
 @inject NavigationManager Navigation
+@inject RestTimerService Rest
+@inject BodyData Body
 
 @* The live logger (FEATURES.md §1.4). Planned sets come pre-filled from last time, so accepting one is a single tap
    on Done. Every change is saved to the local database at once: the workout survives the app being killed and
@@ -33,17 +35,27 @@
             <p class="muted">No exercises yet. Add one below.</p>
         }
 
+        <RestTimer SessionId="@SessionId" @key="@($"{watchedProfile}/{SessionId}")" />
         @foreach (var exercise in exercises)
         {
             <section @key="exercise.Id" class="card logger-exercise" aria-labelledby="@($"ex-{exercise.Id}")">
                 <div class="page-head">
                     <h2 id="@($"ex-{exercise.Id}")">@exercise.Name</h2>
+                    @if (!exercise.Sets.Any(s => s.Completed))
+                    {
+                        <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Swap {exercise.Name}")" @onclick="() => swapId = exercise.Id">Swap</button>
+                    }
                     <button type="button" class="secondary compact" disabled="@busy" aria-label="@($"Remove {exercise.Name}")"
                             @onclick="() => RunAsync(() => Workouts.RemoveExerciseAsync(exercise.Id))">Remove</button>
                 </div>
+                @if (exercise.Superset is { } group) { <p class="muted small">Superset @group · alternate exercises in this group, then rest.</p> }
                 @if (suggestions.GetValueOrDefault(exercise.Id) is { } suggestion)
                 {
                     <p class="muted small progression-note">@SuggestionText(suggestion)</p>
+                }
+                @if (exercise.TracksLoad)
+                {
+                    <PlateCalculator @key="exercise.Id" SuggestedKg="exercise.Sets.FirstOrDefault(s => !s.Completed)?.WeightKg" ApplyKg="kg => ApplyLoadAsync(exercise, kg)" />
                 }
                 <div class="sets-scroll">
                     <table class="sets">
@@ -165,7 +177,8 @@
         }
 
         <section class="card" aria-labelledby="add-exercise-title">
-            <h2 id="add-exercise-title">Add an exercise</h2>
+            <h2 id="add-exercise-title">@(swapId is null ? "Add an exercise" : "Choose a replacement exercise")</h2>
+            @if (swapId is not null) { <button type="button" class="secondary" @onclick="() => swapId = null">Cancel swap</button> }
             <div class="field">
                 <label for="exercise-search" class="label">Search exercises</label>
                 <input id="exercise-search" value="@query" @oninput="SearchAsync" autocomplete="off" />
@@ -213,6 +226,7 @@
     [Parameter]
     public string SessionId { get; set; } = "";
 
+    private string? swapId;
     private IReadOnlyList<LoggedExercise>? exercises;
     private IReadOnlyDictionary<string, ExerciseSuggestion> suggestions = new Dictionary<string, ExerciseSuggestion>();
     private CancellationTokenSource? watch;
@@ -586,6 +600,9 @@
             else
             {
                 Celebrate(await Workouts.CompleteSetAsync(set.Id), exercise.Name);
+                if (exercise.Superset is { } group && exercises?.Any(e => e.Position > exercise.Position && e.Superset == group) == true)
+                    await Rest.StopAsync();
+                else await Rest.StartAsync(SessionId, await Workouts.RestSecondsAsync(exercise.Id));
             }
         });
 
@@ -604,6 +621,17 @@
             }
         }
     }
+
+    private Task ApplyLoadAsync(LoggedExercise exercise, double kg) => RunAsync(async () =>
+    {
+        foreach (var set in exercise.Sets.Where(s => !s.Completed && s.SetType != "warmup"))
+        {
+            await FieldSavesOfAsync(set);
+            var unit = Unit(set);
+            await Workouts.ChangeSetAsync(set.Id, e => e with { Weight = UnitCodes.Convert(kg, "kg", unit), WeightUnit = unit });
+            drafts.Remove(set.Id + "/" + WeightField);
+        }
+    });
 
     private void Celebrate(IReadOnlyList<NewRecord> records, string? exercise = null)
     {
@@ -646,7 +674,9 @@
 
     private Task AddExerciseAsync(string exerciseId) => RunAsync(async () =>
     {
-        await Workouts.AddExerciseAsync(SessionId, exerciseId);
+        if (swapId is { } replaced) await Workouts.SwapExerciseAsync(replaced, exerciseId);
+        else await Workouts.AddExerciseAsync(SessionId, exerciseId);
+        swapId = null;
         query = null;
         results = [];
     });
@@ -668,13 +698,15 @@
             }
         }
 
-        await Workouts.FinishAsync(SessionId);
+        await Workouts.FinishAsync(SessionId, Body.Profile() is { } profile ? CardioPhysiology.From(profile) : null);
+        await Rest.StopAsync();
         Navigation.NavigateTo("train");
     });
 
     private Task DiscardAsync() => RunAsync(async () =>
     {
         await Workouts.DiscardAsync(SessionId);
+        await Rest.StopAsync();
         Navigation.NavigateTo("train");
     });
 

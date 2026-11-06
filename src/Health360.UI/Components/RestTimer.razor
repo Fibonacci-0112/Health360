@@ -1,0 +1,38 @@
+@implements IDisposable
+@inject RestTimerService Timer
+@inject TimeProvider Clock
+
+<section class="card" aria-label="Rest timer">
+    <div class="inline">
+        <label for="rest-duration">Rest (seconds)</label><input id="rest-duration" type="number" min="0" max="3600" @bind="seconds" />
+        <button type="button" class="secondary" @onclick="StartAsync">Start rest</button>
+        <button type="button" class="secondary" @onclick="Timer.StopAsync">Stop rest</button>
+    </div>
+    @if (Timer.SessionId == SessionId && Timer.Deadline is not null)
+    {
+        <p role="timer" aria-live="off">@(Timer.RemainingSeconds == 0 ? "Rest complete" : $"{Timer.RemainingSeconds / 60}:{Timer.RemainingSeconds % 60:00} remaining")</p>
+    }
+    @if (error is not null) { <p role="alert">@error</p> }
+    @if (Timer.Notice is not null) { <p class="muted" role="status">@Timer.Notice</p> }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public string SessionId { get; set; } = "";
+    private int seconds = 90;
+    private string? error;
+    private async Task StartAsync()
+    {
+        error = null;
+        if (seconds is < 0 or > 3600) { error = "Rest is from 0 to 3600 seconds."; return; }
+        await Timer.StartAsync(SessionId, seconds);
+    }
+    private ITimer? tick;
+    protected override async Task OnInitializedAsync()
+    {
+        Timer.Changed += Changed;
+        await Timer.RestoreAsync(SessionId);
+        tick = Clock.CreateTimer(_ => Changed(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+    private void Changed() => _ = InvokeAsync(StateHasChanged);
+    public void Dispose() { Timer.Changed -= Changed; tick?.Dispose(); }
+}

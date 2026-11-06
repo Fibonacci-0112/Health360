@@ -318,13 +318,17 @@ public static class AppSchema
             ("created_at", ColumnType.Text)),
         new TableOptions(localOnly: true));
 
+    /// <summary>Owner-bound local drafts and rest deadlines; never uploaded, cleared on account switch.</summary>
+    public static Table WorkoutState { get; } = new("workout_state",
+        Columns(("profile_id", ColumnType.Text), ("value", ColumnType.Text)), new TableOptions(localOnly: true));
+
     public static IReadOnlyList<Table> Tables { get; } =
         [
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
             MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, Exercises, WorkoutTemplates,
             TemplateExercises, WorkoutSessions, CardioEstimates, SessionExercises, SetLogs, TrainingLocations, Programs, ScheduledWorkouts,
             PersonalRecords, FailedUploadsTable, PhotoUploadsTable,
-            PhotoDeletionsTable,
+            PhotoDeletionsTable, WorkoutState,
         ];
 
     public static Schema Schema { get; } = new([.. Tables]);

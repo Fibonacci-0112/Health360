@@ -23,6 +23,25 @@
         <p>Aerobic @N(aerobic / 60) min · Anaerobic @N(anaerobic / 60) min (intensity estimate)</p>
         <p class="muted small">These labels describe intensity. Both energy systems work at every intensity.</p>
     }
+    @if (Estimate.Entry.Elevation is { } elevation)
+    {
+        <p>Elevation gain @N(elevation) @Estimate.Entry.ElevationUnit</p>
+    }
+    @if (Estimate.Intensity is { } intensity)
+    {
+        <p>Low @N(intensity.LowSeconds / 60) min · Moderate @N(intensity.ModerateSeconds / 60) min · High @N(intensity.HighSeconds / 60) min</p>
+        <p class="muted small">@intensity.Method</p>
+    }
+    @if (Estimate.Fuel is { } fuel)
+    {
+        <meter min="0" max="100" value="@FatPercent(fuel)" aria-label="Estimated fat share, midpoint of displayed ranges">@N(FatPercent(fuel))%</meter>
+        <p>Fat @Range(fuel.FatKcal) @EnergyUnitCode (@RangeGrams(fuel.FatGrams) g) · Carbohydrate @Range(fuel.CarbKcal) @EnergyUnitCode (@RangeGrams(fuel.CarbGrams) g)</p>
+        <p class="muted small">@fuel.Method. Broad population ranges, not measured fuel use. The ranges are marginal and their endpoints should not be added together.</p>
+    }
+    else
+    {
+        <p class="muted small">Fuel estimate unavailable for these inputs.</p>
+    }
     <details>
         <summary>Inputs and limitations</summary>
         <p>Method version @Estimate.Version · Weight @(Estimate.Physiology.WeightKg is { } weight ? $"{N(weight)} kg (trend)" : "unavailable") · Age @Estimate.Physiology.AgeYears · Sex for calculations @Estimate.Physiology.Sex</p>
@@ -57,13 +76,21 @@
             <p class="muted small">@note</p>
         }
     </details>
-    <p class="muted small">Rough energy range. Not added to your calorie target. Fat/carbohydrate estimates are not available yet.</p>
+    <p class="muted small">Rough energy range. Not added to your calorie target. Body-fat change depends on energy balance over days and weeks, not which fuel a workout used.</p>
 </section>
 
 @code {
     [Parameter, EditorRequired]
     public CardioEstimate Estimate { get; set; } = null!;
 
+    private static double FatPercent(FuelEstimate fuel)
+    {
+        var fat = fuel.FatKcal.Low + fuel.FatKcal.High;
+        var total = fat + fuel.CarbKcal.Low + fuel.CarbKcal.High;
+        return total > 0 ? fat / total * 100 : 0;
+    }
+    private string Range(EnergyRange range) => $"{N(Energy(range.Low))}–{N(Energy(range.High))}";
+    private static string RangeGrams(EnergyRange range) => $"{N(range.Low)}–{N(range.High)}";
     private static string N(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
 
     private string EnergyUnitCode => UnitPrefOptions.Energy.ToCode(Profiles.UnitPrefs.Energy);
