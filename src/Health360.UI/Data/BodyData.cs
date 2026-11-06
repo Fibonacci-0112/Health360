@@ -106,7 +106,7 @@ public sealed partial class BodyData : IDisposable
 
         return PhysiologyProfile.Build(new PhysiologyInputs(
             asOf ?? Today,
-            [.. rows.Select(r => r.ToMetricValue()).OfType<MetricValue>()],
+            [.. rows.Select(r => r.ToMetricValue()).OfType<MetricValue>().Where(m => asOf is null || m.Measured.MeasuredOn <= asOf.Value)],
             profile.SexForCalcs switch
             {
                 SexForCalcs.Female => Sex.Female,

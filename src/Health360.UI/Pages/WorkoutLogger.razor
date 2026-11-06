@@ -600,7 +600,7 @@
             else
             {
                 Celebrate(await Workouts.CompleteSetAsync(set.Id), exercise.Name);
-                if (exercise.Superset is { } group && exercises?.Any(e => e.Position > exercise.Position && e.Superset == group) == true)
+                if (exercise.Superset is { } group && exercises?.Any(e => e.Position > exercise.Position && e.Superset == group && e.Sets.Any(s => !s.Completed)) == true)
                     await Rest.StopAsync();
                 else await Rest.StartAsync(SessionId, await Workouts.RestSecondsAsync(exercise.Id));
             }

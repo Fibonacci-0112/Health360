@@ -382,7 +382,7 @@
         catch (ArgumentException e) { error = e.Message; return; }
         if (entry.EndedAt > Clock.GetUtcNow()) { error = "A completed session cannot end in the future."; return; }
         await RefreshAsync();
-        if (physiology is null || loading || profileId != Workouts.ProfileId) return;
+        if (physiology is null || loading || error is not null || Body.Failed || !zonesReady || profileId != Workouts.ProfileId) return;
         entry = Entry();
         var errors = CardioEnergy.Errors(entry, zones);
         if (errors.Count > 0)
