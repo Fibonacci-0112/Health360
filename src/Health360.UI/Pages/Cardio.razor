@@ -41,7 +41,7 @@
                 else { <p class="muted">Saved as ending now.</p> }
                 <div class="field">
                     <label for="cardio-activity">Activity</label>
-                    <select id="cardio-activity" value="@activityCode" @onchange="ActivityChangedAsync" disabled="@busy">
+                    <select id="cardio-activity" value="@activityCode" @onchange="ActivityChangedAsync" disabled="@(busy || saved)">
                         @foreach (var activity in CardioEnergy.Activities)
                         {
                             <option value="@activity.Code">@activity.Name (@activity.Mets METs)</option>
@@ -50,13 +50,13 @@
                 </div>
                 <div class="field">
                     <label for="cardio-duration">Duration (minutes)</label>
-                    <input id="cardio-duration" inputmode="decimal" @bind="minutes" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" />
+                    <input id="cardio-duration" inputmode="decimal" @bind="minutes" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@(busy || saved)" />
                 </div>
                 <div class="field">
                     <label for="cardio-distance">Distance (optional)</label>
                     <div class="inline">
-                        <input id="cardio-distance" inputmode="decimal" @bind="distance" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" />
-                        <select aria-label="Distance unit" @bind="distanceUnit" @bind:after="FormChangedAsync" disabled="@busy">
+                        <input id="cardio-distance" inputmode="decimal" @bind="distance" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@(busy || saved)" />
+                        <select aria-label="Distance unit" @bind="distanceUnit" @bind:after="FormChangedAsync" disabled="@(busy || saved)">
                             @foreach (var unit in WorkoutCodes.DistanceUnits)
                             {
                                 <option value="@unit">@unit</option>
@@ -70,18 +70,18 @@
                 </div></div>
                 <div class="field">
                     <label for="cardio-average">Average HR (bpm, optional)</label>
-                    <input id="cardio-average" inputmode="decimal" @bind="averageHr" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" />
+                    <input id="cardio-average" inputmode="decimal" @bind="averageHr" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@(busy || saved)" />
                 </div>
                 <div class="field">
                     <label for="cardio-max">Max HR (bpm, optional)</label>
-                    <input id="cardio-max" inputmode="decimal" @bind="maxHr" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" />
+                    <input id="cardio-max" inputmode="decimal" @bind="maxHr" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@(busy || saved)" />
                 </div>
                 <div class="field">
                     <label for="cardio-rpe">Perceived effort (modified Borg 0–10, optional)</label>
-                    <input id="cardio-rpe" inputmode="decimal" @bind="rpe" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" />
+                    <input id="cardio-rpe" inputmode="decimal" @bind="rpe" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@(busy || saved)" />
                 </div>
                 <p class="muted small">0: rest · 2–3: light · 4–5: moderate · 6–7: vigorous · 8–10: very hard. One rating cannot divide interval time.</p>
-                <label class="check"><input type="checkbox" @bind="intervals" @bind:after="FormChangedAsync" disabled="@busy" /> This session included intervals</label>
+                <label class="check"><input type="checkbox" @bind="intervals" @bind:after="FormChangedAsync" disabled="@(busy || saved)" /> This session included intervals</label>
             </section>
             <section class="card" aria-labelledby="cardio-zones-title">
                 <h2 id="cardio-zones-title">Heart-rate zones</h2>
@@ -108,7 +108,7 @@
                                     <th scope="row">@zone.Name</th>
                                     <td>@Bounds(zone)</td>
                                     <td><input class="set-input" inputmode="decimal" aria-label="@($"Zone {zone.Name} minutes")"
-                                               @bind="zoneMinutes[index]" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@busy" /></td>
+                                               @bind="zoneMinutes[index]" @bind:event="oninput" @bind:after="FormChangedAsync" disabled="@(busy || saved)" /></td>
                                 </tr>
                             }
                         </tbody>
@@ -117,7 +117,7 @@
                 <NavLink href="body/physiology">View physiology</NavLink>
             </section>
             <div class="inline">
-                <button type="button" class="secondary" id="preview-cardio" disabled="@busy" @onclick="Preview">Estimate</button>
+                <button type="button" class="secondary" id="preview-cardio" disabled="@(busy || saved)" @onclick="Preview">Estimate</button>
                 <button type="submit" class="primary" id="save-cardio" disabled="@busy">Save cardio</button>
             </div>
             <p class="muted small">Save records this completed session on this device, ready to sync. Unfinished entries are saved on this device as you type. They resume here after a restart.</p>
@@ -151,6 +151,10 @@
     private string? error;
     private string? status;
     private bool busy;
+    // The session is stored; a retry only clears the draft, since saving again would add a second session.
+    private bool saved;
+    // Counts refreshes that cleared entered watch times, so Preview can tell them from the user clearing them.
+    private int zoneResets;
     private bool loading;
     private bool disposed;
     private int refresh;
@@ -191,6 +195,8 @@
             zones = null;
             physiology = null;
             zoneMinutes = [];
+            zoneResets++;
+            saved = false;
             status = error = null;
             if (currentId is not null)
             {
@@ -247,6 +253,7 @@
                 }
 
                 zoneMinutes = new string[loaded?.Zones.Count ?? 0];
+                zoneResets++;
             }
 
             zones = loaded;
@@ -324,7 +331,7 @@
     private Task FormChangedAsync()
     {
         preview = null;
-        if (profileId is null || profileId != Workouts.ProfileId || physiology is null) return Task.CompletedTask;
+        if (saved || profileId is null || profileId != Workouts.ProfileId || physiology is null) return Task.CompletedTask;
         var owner = profileId;
         var json = CardioJson.SerializeDraft(new(activityCode, minutes, distance, distanceUnit, averageHr, maxHr, rpe, intervals,
             [.. zoneMinutes], ZoneKey(zones), elevation, elevationUnit, backdated, endDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), endTime));
@@ -382,10 +389,11 @@
         catch (ArgumentException e) { error = e.Message; return; }
         if (entry.EndedAt > Clock.GetUtcNow()) { error = "A completed session cannot end in the future."; return; }
         var shownZones = ZoneKey(zones);
+        var resets = zoneResets;
         await RefreshAsync();
         if (physiology is null || loading || error is not null || Body.Failed || !zonesReady || profileId != Workouts.ProfileId) return;
         // The start date can move onto another zone set without a refresh; never swap watch times for a fallback.
-        if (entry.ZoneSeconds is not null && (ZoneKey(zones) != shownZones || zoneMinutes.All(string.IsNullOrWhiteSpace)))
+        if (entry.ZoneSeconds is not null && (ZoneKey(zones) != shownZones || zoneResets != resets))
         {
             error = "Zones changed for this session's start date. Enter your watch times again using the boundaries shown.";
             return;
@@ -408,10 +416,13 @@
             return;
         }
 
-        await Preview();
-        if (preview is null)
+        if (!saved)
         {
-            return;
+            await Preview();
+            if (preview is null)
+            {
+                return;
+            }
         }
 
         var estimate = preview;
@@ -421,16 +432,29 @@
         {
             await draftSave;
             if (disposed || owner != Workouts.ProfileId) return;
-            await Workouts.SaveCardioAsync(estimate.Entry, estimate.Physiology, estimate.Zones);
-            if (!disposed && owner == Workouts.ProfileId) await Workouts.DeleteStateAsync("cardio");
+            if (!saved && estimate is not null)
+            {
+                try { await Workouts.SaveCardioAsync(estimate.Entry, estimate.Physiology, estimate.Zones); }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    error = "Couldn't save the cardio session on this device. Try again.";
+                    return;
+                }
+                saved = true;
+            }
+
+            if (disposed || owner != Workouts.ProfileId) return;
+            try { await Workouts.DeleteStateAsync("cardio"); }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                error = "The cardio session was saved, but this device couldn't clear the unfinished form. Tap Save cardio to retry clearing it; the session won't be saved twice.";
+                return;
+            }
+
             if (!disposed && owner == Workouts.ProfileId)
             {
                 Navigation.NavigateTo("train");
             }
-        }
-        catch (Exception e) when (e is not OperationCanceledException)
-        {
-            error = "Couldn't save the cardio session on this device. Try again.";
         }
         finally
         {

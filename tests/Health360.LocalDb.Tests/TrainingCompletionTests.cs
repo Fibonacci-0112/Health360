@@ -42,6 +42,51 @@ public sealed class TrainingCompletionTests
     }
 
     [Fact]
+    public async Task Strength_energy_runs_to_the_last_completed_set_not_to_a_late_finish()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.Db.Execute("INSERT INTO exercises (id, name, tracking_type) VALUES (?, 'Squat', 'weight_reps')", [Exercise]);
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, null, "kg", new FixedClock(Now.AddHours(-10)));
+        await WorkoutLog.AddExerciseAsync(t.Db, Profile, session, Exercise, "kg", Clock);
+        var set = Assert.Single(Assert.Single(await WorkoutLog.ExercisesAsync(t.Db, Profile, session)).Sets);
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, set.Id, new(5, 100, "kg"), Clock);
+        await WorkoutLog.CompleteSetAsync(t.Db, Profile, set.Id, new FixedClock(Now.AddHours(-9)));
+        await WorkoutLog.FinishAsync(t.Db, Profile, session, Clock, new CardioPhysiology(80, Sex.Male, 30));
+        var estimate = CardioJson.Parse(Assert.Single(await WorkoutLog.RecentSessionsAsync(t.Db, Profile)).EnergyEstimate)!;
+        Assert.Equal(3600, estimate.Entry.DurationSeconds, 6);
+        Assert.Equal((196, 364), (Math.Round(estimate.Kcal!.Low, 6), Math.Round(estimate.Kcal.High, 6)));
+
+        var empty = await WorkoutLog.StartAsync(t.Db, Profile, null, "kg", new FixedClock(Now.AddHours(-1)));
+        await WorkoutLog.FinishAsync(t.Db, Profile, empty, Clock, new CardioPhysiology(80, Sex.Male, 30));
+        Assert.Null((await WorkoutLog.RecentSessionsAsync(t.Db, Profile)).Single(s => s.Id == empty).EnergyEstimate);
+    }
+
+    [Fact]
+    public async Task Swapping_keeps_the_slots_superset_and_rest_and_a_self_swap_changes_nothing()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        foreach (var id in new[] { Exercise, Household, Profile })
+            await t.Db.Execute("INSERT INTO exercises (id, name, tracking_type) VALUES (?, 'Exercise', 'weight_reps')", [id]);
+        var template = await WorkoutPlans.CreateTemplateAsync(t.Db, Profile, "A",
+            [new TemplateExerciseInput(Exercise, new SetScheme(2, 8, 12, Superset: "A"), 45), new TemplateExerciseInput(Household, new SetScheme(2, 8, 12, Superset: "A"), 45)], Clock);
+        var session = await WorkoutLog.StartAsync(t.Db, Profile, template, "kg", Clock);
+        var first = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[0];
+        await WorkoutLog.UpdateSetAsync(t.Db, Profile, first.Sets[0].Id, new(7, 40, "kg"), Clock);
+        var before = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[0];
+
+        await WorkoutLog.SwapExerciseAsync(t.Db, Profile, first.Id, Exercise, "kg", Clock);
+        var unchanged = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[0];
+        Assert.Equal((before.Id, before.ExerciseId), (unchanged.Id, unchanged.ExerciseId));
+        Assert.Equal(before.Sets, unchanged.Sets);
+        Assert.Equal(7, unchanged.Sets[0].Reps);
+
+        await WorkoutLog.SwapExerciseAsync(t.Db, Profile, first.Id, Profile, "kg", Clock);
+        var swapped = (await WorkoutLog.ExercisesAsync(t.Db, Profile, session))[0];
+        Assert.Equal((Profile, "A"), (swapped.ExerciseId, swapped.Superset));
+        Assert.Equal(45, await WorkoutLog.RestSecondsAsync(t.Db, Profile, swapped.Id));
+    }
+
+    [Fact]
     public async Task Swapping_an_unstarted_exercise_cannot_relabel_completed_sets_or_another_owners_data()
     {
         await using var t = await TestDatabase.OpenAsync();

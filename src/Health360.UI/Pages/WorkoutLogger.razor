@@ -186,7 +186,7 @@
             @if (results.Length > 0)
             {
                 <ul class="measurement-list" aria-label="Matching exercises">
-                    @foreach (var result in results)
+                    @foreach (var result in results.Where(r => r.Id != SwappedExerciseId))
                     {
                         <li @key="result.Id" class="measurement">
                             <span>@result.Name</span>
@@ -227,6 +227,7 @@
     public string SessionId { get; set; } = "";
 
     private string? swapId;
+    private string? SwappedExerciseId => swapId is null ? null : exercises?.FirstOrDefault(e => e.Id == swapId)?.ExerciseId;
     private IReadOnlyList<LoggedExercise>? exercises;
     private IReadOnlyDictionary<string, ExerciseSuggestion> suggestions = new Dictionary<string, ExerciseSuggestion>();
     private CancellationTokenSource? watch;

@@ -1,8 +1,8 @@
--- Version-2 cardio summaries keep elevation, end time, intensity and fuel on workout rows, while physiology, zones,
+-- Version-2 cardio summaries keep elevation, end time, RPE-only intensity and fuel on workout rows, while physiology, zones,
 -- zone times and notes stay in the owner-only cardio_estimates. Runs as `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(14);
+select plan(17);
 
 insert into auth.users (id, email) values ('00000000-0000-0000-0000-00000000000a', 'a@example.com');
 select set_config('t.a', (select id::text from profiles where user_id = '00000000-0000-0000-0000-00000000000a'), true);
@@ -34,8 +34,7 @@ insert into workout_sessions (id, profile_id, kind, started_at, ended_at, local_
             "elevation_metres":36.576}');
 
 select is((select energy_estimate -> 'intensity' from workout_sessions where id = '64000000-0000-7000-8000-000000000001'),
-  '{"low_seconds":600,"moderate_seconds":900,"high_seconds":300,"method":"Measured LT1/LT2 HR"}'::jsonb,
-  'the summary keeps intensity minutes');
+  'null'::jsonb, 'the summary drops intensity from measured thresholds');
 select is((select energy_estimate -> 'fuel' from workout_sessions where id = '64000000-0000-7000-8000-000000000001'),
   '{"fat_kcal":{"low":100,"high":150},"carb_kcal":{"low":200,"high":250},"fat_grams":{"low":11,"high":17},
     "carb_grams":{"low":50,"high":62},"method":"Romijn 1993 population proxy"}'::jsonb,
@@ -85,6 +84,19 @@ select is(
   (select private.cardio_workout_summary('{"fuel":{"fat_kcal":null,"carb_kcal":{"low":1,"high":2},"method":"m"}}') -> 'fuel'),
   '{"fat_kcal":null,"carb_kcal":{"low":1,"high":2},"fat_grams":null,"carb_grams":null,"method":"m"}'::jsonb,
   'nested fuel ranges keep nulls as null');
+select is(
+  (select private.cardio_workout_summary('{"entry":{"rpe":5,"zone_seconds":null},
+     "intensity":{"low_seconds":0,"moderate_seconds":1800,"high_seconds":0,"method":"RPE categories"}}') -> 'intensity'),
+  '{"low_seconds":0,"moderate_seconds":1800,"high_seconds":0,"method":"RPE categories"}'::jsonb,
+  'RPE intensity without HR inputs is shared');
+select is(
+  (select private.cardio_workout_summary('{"entry":{"average_hr":140,"rpe":5},
+     "intensity":{"low_seconds":0,"moderate_seconds":1800,"high_seconds":0,"method":"RPE categories"}}') -> 'intensity'),
+  'null'::jsonb, 'RPE intensity alongside HR, the medication path, is not shared');
+select is(
+  (select private.cardio_workout_summary('{"entry":{"rpe":5,"zone_seconds":[600,1200]},
+     "intensity":{"low_seconds":0,"moderate_seconds":1800,"high_seconds":0,"method":"RPE categories"}}') -> 'intensity'),
+  'null'::jsonb, 'RPE intensity alongside zone times is not shared');
 
 select * from finish();
 rollback;

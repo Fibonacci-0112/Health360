@@ -142,6 +142,25 @@ public sealed class CardioTests : AppTestContext
     }
 
     [Fact]
+    public async Task A_saved_session_whose_draft_cannot_be_cleared_is_not_saved_again_on_retry()
+    {
+        var cut = await CardioAsync();
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-rpe", "5");
+        await App.Database.Db.Execute("CREATE TEMP TRIGGER fail_draft_delete INSTEAD OF DELETE ON workout_state BEGIN SELECT RAISE(ABORT, 'disk busy'); END");
+        await SubmitAsync(cut);
+
+        cut.WaitForAssertion(() => Assert.Contains("was saved", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Single(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
+        Assert.True(cut.Find("#cardio-duration").HasAttribute("disabled"));
+
+        await App.Database.Db.Execute("DROP TRIGGER temp.fail_draft_delete");
+        await SubmitAsync(cut);
+        cut.WaitForAssertion(() => cut.Find("[aria-labelledby=cardio-week-title] details"), Wait);
+        Assert.Single(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
+    }
+
+    [Fact]
     public async Task Medication_suppresses_age_based_zones_and_hr_energy()
     {
         var cut = await CardioAsync(medication: true);

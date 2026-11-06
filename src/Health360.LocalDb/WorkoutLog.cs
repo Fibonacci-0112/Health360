@@ -446,7 +446,10 @@ public static partial class WorkoutLog
         }).ConfigureAwait(false);
     }
 
-    /// <summary>Ends the session now. Sets still only planned are dropped, then exercises left without sets.</summary>
+    /// <summary>
+    /// Ends the session now. Sets still only planned are dropped, then exercises left without sets. With physiology, the strength
+    /// energy estimate covers the start to the last completed set (none without a completed set, or beyond 24 hours).
+    /// </summary>
     public static async Task FinishAsync(IPowerSyncDatabase db, string profileId, string sessionId, TimeProvider clock, CardioPhysiology? physiology = null)
     {
         ArgumentNullException.ThrowIfNull(db);
@@ -466,10 +469,25 @@ public static partial class WorkoutLog
             string? energy = null;
             if (physiology is not null)
             {
+                // Lifting time runs to the last completed set, not to when Finish is tapped: a workout left open isn't billed for the wait.
                 var session = await tx.Get<SessionRow>("SELECT started_at AS StartedAt FROM workout_sessions WHERE id = ? AND profile_id = ?", [sessionId, profileId]).ConfigureAwait(false);
-                if (DateTimeOffset.TryParse(session.StartedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var start))
+                var completed = await tx.GetAll<CompletedAt>(
+                    "SELECT s.completed_at AS Value FROM set_logs s JOIN session_exercises se ON se.id = s.session_exercise_id AND se.profile_id = s.profile_id " +
+                    "WHERE se.session_id = ? AND s.profile_id = ? AND s.completed_at IS NOT NULL", [sessionId, profileId]).ConfigureAwait(false);
+                DateTimeOffset? end = null;
+                foreach (var set in completed)
                 {
-                    var duration = (clock.GetUtcNow() - start).TotalSeconds;
+                    if (DateTimeOffset.TryParse(set.Value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var at)
+                        && (end is null || at > end))
+                    {
+                        end = at;
+                    }
+                }
+
+                if (end is { } last
+                    && DateTimeOffset.TryParse(session.StartedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var start))
+                {
+                    var duration = (last - start).TotalSeconds;
                     if (duration is > 0 and <= 86400)
                     {
                         energy = CardioJson.SerializeWorkoutSummary(CardioEnergy.Estimate(new("02054", duration), physiology));
@@ -946,5 +964,10 @@ public static partial class WorkoutLog
     internal sealed class Count
     {
         public long N { get; set; }
+    }
+
+    internal sealed class CompletedAt
+    {
+        public string Value { get; set; } = "";
     }
 }

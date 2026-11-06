@@ -21,13 +21,24 @@ public static partial class WorkoutLog
             "AND ws.local_date BETWEEN ? AND ? GROUP BY muscle.value ORDER BY Sets DESC, Muscle",
             [profileId, WorkoutPlans.Day(from), WorkoutPlans.Day(to)]);
 
-    /// <summary>Swapping never re-labels a completed set or its records. Unfinished sets are replaced using the new exercise's own history.</summary>
+    /// <summary>
+    /// Swapping never re-labels a completed set or its records. Unfinished sets are replaced using the new exercise's own history.
+    /// The replacement keeps the slot's template link, so its superset group and rest stay as planned; progression ignores a link
+    /// to a row that names another exercise. Swapping an exercise for itself changes nothing.
+    /// </summary>
     public static Task SwapExerciseAsync(IPowerSyncDatabase db, string profileId, string sessionExerciseId, string replacementId, string loadUnit, TimeProvider clock) =>
         db.WriteTransaction(async tx =>
         {
-            var row = await tx.GetOptional<SwapRow>("SELECT session_id AS SessionId, position AS Position FROM session_exercises WHERE id = ? AND profile_id = ?",
+            var row = await tx.GetOptional<SwapRow>(
+                "SELECT session_id AS SessionId, exercise_id AS ExerciseId, position AS Position, template_exercise_id AS TemplateExerciseId " +
+                "FROM session_exercises WHERE id = ? AND profile_id = ?",
                 [sessionExerciseId, profileId]).ConfigureAwait(false) ?? throw new InvalidOperationException("The exercise is no longer on this device.");
             await RequireOpenSessionAsync(tx, profileId, row.SessionId).ConfigureAwait(false);
+            if (row.ExerciseId == replacementId)
+            {
+                return;
+            }
+
             _ = await tx.GetOptional<WorkoutPlans.IdOnly>("SELECT id AS Id FROM exercises WHERE id = ?", [replacementId]).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("The replacement has not synced.");
             if ((await tx.GetAll<WorkoutPlans.IdOnly>("SELECT id AS Id FROM set_logs WHERE session_exercise_id = ? AND completed_at IS NOT NULL", [sessionExerciseId])
@@ -38,7 +49,8 @@ public static partial class WorkoutLog
 
             await tx.Execute("DELETE FROM set_logs WHERE session_exercise_id = ? AND profile_id = ?", [sessionExerciseId, profileId]).ConfigureAwait(false);
             await tx.Execute("DELETE FROM session_exercises WHERE id = ? AND profile_id = ?", [sessionExerciseId, profileId]).ConfigureAwait(false);
-            await AddExerciseAsync(tx, profileId, row.SessionId, replacementId, (int)row.Position, null, null, loadUnit, clock).ConfigureAwait(false);
+            await AddExerciseAsync(tx, profileId, row.SessionId, replacementId, (int)row.Position, null, null, loadUnit, clock, templateExerciseId: row.TemplateExerciseId)
+                .ConfigureAwait(false);
         });
 
     public static async Task<int> RestSecondsAsync(IPowerSyncDatabase db, string profileId, string sessionExerciseId) =>
@@ -50,6 +62,8 @@ public static partial class WorkoutLog
     public sealed class SwapRow
     {
         public string SessionId { get; set; } = "";
+        public string ExerciseId { get; set; } = "";
         public long Position { get; set; }
+        public string? TemplateExerciseId { get; set; }
     }
 }

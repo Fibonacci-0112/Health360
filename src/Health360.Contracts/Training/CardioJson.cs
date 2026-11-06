@@ -19,7 +19,15 @@ public static class CardioJson
             estimate.Kcal,
             estimate.AerobicSeconds,
             estimate.AnaerobicSeconds,
-            estimate.DistanceMetres, estimate.Intensity, estimate.Fuel, estimate.ElevationMetres), CardioJsonContext.Default.CardioEstimateSummary);
+            estimate.DistanceMetres, SharedIntensity(estimate), estimate.Fuel, estimate.ElevationMetres), CardioJsonContext.Default.CardioEstimateSummary);
+
+    /// <summary>
+    /// Shared only when it follows from shared fields alone (RPE categories with no HR input); otherwise its presence or method
+    /// could reveal measured thresholds or heart-rate-lowering medication. Matches private.cardio_workout_summary.
+    /// </summary>
+    private static IntensityMinutes? SharedIntensity(CardioEstimate estimate) =>
+        estimate.Intensity is { Method: "RPE categories" } intensity && estimate.Entry.AverageHr is null && estimate.Entry.ZoneSeconds is null
+            ? intensity : null;
 
     public static string SerializeDraft(CardioDraft draft) => JsonSerializer.Serialize(draft, CardioJsonContext.Default.CardioDraft);
     public static CardioDraft? ParseDraft(string? json)

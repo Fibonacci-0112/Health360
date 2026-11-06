@@ -1,5 +1,6 @@
 -- Version-2 cardio summaries add elevation, end time, intensity minutes and fuel ranges. Extend the workout-visible
 -- allow-list so the privacy trigger keeps them, while physiology, zones, zone times and notes stay private.
+-- Intensity minutes are kept only when derived from RPE alone (see below).
 
 -- An absent range stays JSON null rather than becoming {"low":null,"high":null}, which clients reject.
 create function private.cardio_summary_range(value jsonb) returns jsonb
@@ -38,7 +39,12 @@ language sql immutable set search_path = '' as $$
     'aerobic_seconds', value -> 'aerobic_seconds',
     'anaerobic_seconds', value -> 'anaerobic_seconds',
     'distance_metres', value -> 'distance_metres',
-    'intensity', case when jsonb_typeof(value -> 'intensity') = 'object' then jsonb_build_object(
+    -- Intensity is shared only when it follows from shared fields alone: RPE categories with no HR input. Otherwise its
+    -- presence or method can reveal measured thresholds or the heart-rate-lowering-medication path.
+    'intensity', case when jsonb_typeof(value -> 'intensity') = 'object'
+      and value -> 'intensity' ->> 'method' = 'RPE categories'
+      and jsonb_typeof(coalesce(value -> 'entry' -> 'average_hr', 'null')) = 'null'
+      and jsonb_typeof(coalesce(value -> 'entry' -> 'zone_seconds', 'null')) = 'null' then jsonb_build_object(
       'low_seconds', value -> 'intensity' -> 'low_seconds',
       'moderate_seconds', value -> 'intensity' -> 'moderate_seconds',
       'high_seconds', value -> 'intensity' -> 'high_seconds',

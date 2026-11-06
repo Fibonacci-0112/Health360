@@ -13,6 +13,9 @@ public sealed class CardioLogTests
     private static readonly FixedClock Clock = new(new DateTimeOffset(2026, 11, 4, 12, 0, 0, TimeSpan.Zero));
     private static readonly CardioPhysiology Physiology = new(80, Sex.Male, 30);
 
+    private static Resolution Measured(double value) => Resolver.Resolve(
+        [new(Guid.Parse("10000000-0000-7000-8000-0000000000f1"), value, MeasurementSource.Lab, new(2026, 1, 1))], null)!;
+
     private static PhysiologyProfile ProfileWithMax(bool medication = false) => PhysiologyProfile.Build(
         new(Day, [], BirthDate: new(1996, 11, 4), TakesHeartRateLoweringMedication: medication));
 
@@ -122,6 +125,21 @@ public sealed class CardioLogTests
 
         Assert.Empty(await CardioLog.SessionsAsync(t.Db, Profile, Day, Day));
         Assert.Equal(0, await t.Db.Get<long>("SELECT count(*) FROM ps_crud", []));
+    }
+
+    [Fact]
+    public void Shared_summaries_keep_intensity_only_when_it_follows_from_rpe_alone()
+    {
+        var medicated = CardioEnergy.Estimate(new("12020", 1800, AverageHr: 140, Rpe: 5), Physiology with { TakesHeartRateLoweringMedication = true });
+        Assert.Equal("RPE categories", medicated.Intensity!.Method);
+        Assert.Null(CardioJson.Parse(CardioJson.SerializeWorkoutSummary(medicated))!.Intensity);
+        var measured = CardioEnergy.Estimate(new("12020", 1800, AverageHr: 140, Rpe: 5),
+            Physiology with { ThresholdHr = Measured(160), LowerThresholdHr = Measured(130) });
+        Assert.Equal("Measured LT1/LT2 HR", measured.Intensity!.Method);
+        Assert.Null(CardioJson.Parse(CardioJson.SerializeWorkoutSummary(measured))!.Intensity);
+        var rpeOnly = CardioEnergy.Estimate(new("12020", 1800, Rpe: 5), Physiology);
+        Assert.NotNull(rpeOnly.Intensity);
+        Assert.Equal(rpeOnly.Intensity, CardioJson.Parse(CardioJson.SerializeWorkoutSummary(rpeOnly))!.Intensity);
     }
 
     [Theory]
