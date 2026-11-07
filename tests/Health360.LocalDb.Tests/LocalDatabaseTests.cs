@@ -122,30 +122,57 @@ public class LocalDatabaseTests
     {
         var timeout = TimeSpan.FromSeconds(10);
         var ct = TestContext.Current.CancellationToken;
-        for (var i = 0; i < 10; i++)
+        // An endpoint that holds every connection open, so "stopped" can be checked on the wire: the client must close
+        // each connection it made and dial no more. The SDK's Connecting flag isn't checked: a reconnect the disconnect
+        // overtook can set it again afterwards with nothing running (seen under load with PowerSync.Common 1.0.0), and
+        // the app never reads it.
+        await using var server = new HoldingSyncServer();
+        var running = new List<(TestDatabase Test, LocalDatabase Local)>();
+        try
         {
-            await using var t = await TestDatabase.OpenAsync();
-            var owner = new MemoryOwnerStore();
-            await using var local = new LocalDatabase(t.Db, owner, new SupabaseConnector(
-                new FixedSession(new SessionToken("user-a", "a-token")),
-                owner,
-                new FakeWriter(),
-                new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", new Uri("http://127.0.0.1:9")),
-                new FixedClock(DateTimeOffset.UnixEpoch),
-                NullLogger<SupabaseConnector>.Instance));
+            for (var i = 0; i < 10; i++)
+            {
+                var t = await TestDatabase.OpenAsync();
+                var owner = new MemoryOwnerStore();
+                var local = new LocalDatabase(t.Db, owner, new SupabaseConnector(
+                    new FixedSession(new SessionToken("user-a", "a-token")),
+                    owner,
+                    new FakeWriter(),
+                    new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", server.Url),
+                    new FixedClock(DateTimeOffset.UnixEpoch),
+                    NullLogger<SupabaseConnector>.Instance));
+                running.Add((t, local));
 
-            await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
-            await Task.Delay(300, ct);
-            // Reconnecting tears down the old stream asynchronously. Disconnect must also stop the
-            // new connection even if it hasn't registered with the SDK's connection manager yet.
-            await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
-            await local.DisconnectAsync().WaitAsync(timeout, ct);
-            await SeedAsync(t);
-            await Task.Delay(300, ct);
+                await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
+                await Task.Delay(300, ct);
+                // Reconnecting tears down the old stream asynchronously. Disconnect must also stop the
+                // new connection even if it hasn't registered with the SDK's connection manager yet.
+                await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
+                await local.DisconnectAsync().WaitAsync(timeout, ct);
+                await SeedAsync(t);
 
-            Assert.False(t.Db.CurrentStatus.Connected);
-            Assert.False(t.Db.CurrentStatus.Connecting);
-            Assert.Equal((1, 1, 1), await CountsAsync(t));
+                Assert.True(await server.AllClosedAsync(timeout, ct), $"a sync connection outlived the disconnect (iteration {i})");
+                Assert.False(t.Db.CurrentStatus.Connected);
+                Assert.Equal((1, 1, 1), await CountsAsync(t));
+            }
+
+            // Still disconnected well past the retry delay: nothing dials again, and the writes stay pending.
+            var dialled = server.Accepted;
+            await Task.Delay(TimeSpan.FromMilliseconds(LocalDatabase.RetryDelayMs * 2), ct);
+            Assert.Equal(dialled, server.Accepted);
+            Assert.Equal(0, server.Open);
+            foreach (var (t, _) in running)
+            {
+                Assert.Equal((1, 1, 1), await CountsAsync(t));
+            }
+        }
+        finally
+        {
+            foreach (var (t, local) in running)
+            {
+                await local.DisposeAsync();
+                await t.DisposeAsync();
+            }
         }
     }
 
