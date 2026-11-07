@@ -78,9 +78,13 @@ public sealed class CardioTests : AppTestContext
         await TypeAsync(cut, "#cardio-distance", "3");
         await ClickAsync(cut, "#preview-cardio");
 
-        cut.WaitForAssertion(() => Assert.Contains("Keytel, average HR", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal), Wait);
-        Assert.Contains("Not added to your calorie target", cut.Markup, StringComparison.Ordinal);
-        Assert.Contains("min/mi", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
+        // A background refresh clears the estimate, so everything it shows is checked in one look.
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Keytel, average HR", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
+            Assert.Contains("Not added to your calorie target", cut.Markup, StringComparison.Ordinal);
+            Assert.Contains("min/mi", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
+        }, Wait);
         await SubmitAsync(cut);
 
         cut.WaitForAssertion(() => cut.Find("[aria-labelledby=cardio-week-title] details"), Wait);
@@ -302,8 +306,11 @@ public sealed class CardioTests : AppTestContext
         await TypeAsync(cut, "#cardio-average", "150");
         await ClickAsync(cut, "#preview-cardio");
 
-        cut.WaitForAssertion(() => Assert.Contains("2024 Compendium METs", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal), Wait);
-        Assert.Contains("210–390 kcal", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("2024 Compendium METs", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
+            Assert.Contains("210–390 kcal", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
+        }, Wait);
         Assert.Contains("never the HR equation", cut.Markup, StringComparison.Ordinal);
     }
 
