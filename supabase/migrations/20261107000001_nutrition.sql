@@ -179,7 +179,8 @@ create trigger foods_updated_at before update on public.foods
 
 -- A household's food stays in its household: members' recipes use it. Its basis is fixed too: recipe ingredients
 -- store their amounts in it, and values per 100 ml mean something else per 100 g, so a food sold the other way is a
--- new food. A copy stays a copy of the same catalogue food. SQLSTATE class 23, so uploads quarantine.
+-- new food. Where it came from is fixed: its source, and for a copy the catalogue food. SQLSTATE class 23, so uploads
+-- quarantine.
 create function private.foods_fixed() returns trigger
 language plpgsql set search_path = '' as $$
 begin
@@ -192,16 +193,21 @@ begin
   if new.copied_from is distinct from old.copied_from then
     raise exception 'a copied food cannot change what it was copied from' using errcode = '23514';
   end if;
+  if new.source is distinct from old.source then
+    raise exception 'a food''s source cannot change' using errcode = '23514';
+  end if;
   return new;
 end $$;
 
-create trigger foods_fixed before update of household_id, basis, copied_from on public.foods
+create trigger foods_fixed before update of household_id, basis, copied_from, source on public.foods
   for each row execute function private.foods_fixed();
 
 -- A new copy takes its values from the catalogue row, whatever the client sent, so a household food that says it
 -- came from USDA FDC or Open Food Facts holds what that source published. The household may edit it afterwards (add
--- a portion, say). Reads the catalogue with the writer's rights; every signed-in user can read it. SQLSTATE 23503
--- when there is no such catalogue food, as for a broken foreign key, so the upload quarantines.
+-- a portion, say). When the copy already exists, another member's device uploading its own offline copy of the same
+-- food, the insert carries the existing row's values instead, so the upload's upsert leaves those edits alone. Reads
+-- with the writer's rights: every signed-in user can read the catalogue, and a household member its foods. SQLSTATE
+-- 23503 when there is no such catalogue food, as for a broken foreign key, so the upload quarantines.
 create function private.foods_copy() returns trigger
 language plpgsql set search_path = '' as $$
 declare
@@ -210,9 +216,12 @@ begin
   if new.copied_from is null then
     return new;
   end if;
-  select * into original from public.foods f where f.id = new.copied_from and f.household_id is null;
+  select * into original from public.foods f where f.id = new.id;
   if not found then
-    raise exception 'no catalogue food %', new.copied_from using errcode = '23503';
+    select * into original from public.foods f where f.id = new.copied_from and f.household_id is null;
+    if not found then
+      raise exception 'no catalogue food %', new.copied_from using errcode = '23503';
+    end if;
   end if;
   new.source := original.source;
   new.name := original.name;

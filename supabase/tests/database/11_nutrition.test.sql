@@ -2,7 +2,7 @@
 -- log entries, which follow the 'nutrition' grant. Amounts as entered get canonical g or ml. Runs as `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(60);
+select plan(63);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000000a', 'a@example.com'),
@@ -124,6 +124,17 @@ select lives_ok(
          current_setting('t.copy'), current_setting('t.ha')),
   'a second device copying the same food upserts the same row');
 select is((select count(*) from foods where copied_from is not null), 1::bigint, 'there is still one copy');
+update foods set portions = '[{"name": "1 cup", "amount": 81}, {"name": "1 scoop", "amount": 40}]' where id = current_setting('t.copy')::uuid;
+select lives_ok(
+  format($$ insert into foods (id, household_id, copied_from, source, name) values (%L, %L, '70000000-0000-7000-8000-000000000001', 'usda_fdc', 'Oats')
+            on conflict (id) do update set name = excluded.name, portions = excluded.portions $$,
+         current_setting('t.copy'), current_setting('t.ha')),
+  'another device''s copy uploads after the household edited it');
+select is((select jsonb_array_length(portions) from foods where id = current_setting('t.copy')::uuid), 2,
+  'the later upload keeps the household''s edits');
+select throws_ok(
+  format($$ update foods set source = 'open_food_facts' where id = %L $$, current_setting('t.copy')),
+  '23514', null, 'a food''s source cannot change');
 select throws_ok(
   format($$ insert into foods (household_id, copied_from, source, name) values (%L, '70000000-0000-7000-8000-000000000001', 'usda_fdc', 'x') $$,
          current_setting('t.ha')),
