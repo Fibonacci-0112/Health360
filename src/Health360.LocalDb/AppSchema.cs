@@ -274,6 +274,87 @@ public static class AppSchema
         ("achieved_at", ColumnType.Text),
         ("local_date", ColumnType.Text));
 
+    /// <summary>G: a nutrient's code, the fixed unit of all its amounts (kcal, g, mg, ug) and its display order.</summary>
+    public static Table Nutrients { get; } = Synced("nutrients",
+        ("code", ColumnType.Text),
+        ("unit", ColumnType.Text),
+        ("position", ColumnType.Integer));
+
+    /// <summary>
+    /// H: a household's own food (catalogue foods are searched online, not synced), or its copy of a catalogue food
+    /// (<c>copied_from</c>, with the id <see cref="Domain.Nutrition.FoodCopy.IdFor"/>; the server fills its values from
+    /// the catalogue). Values are per 100 g or 100 ml (<c>basis</c>): the macronutrients in their own columns,
+    /// everything else in <c>nutrients_100</c> by code, and named <c>portions</c> as a JSON array of
+    /// <c>{"name", "amount"}</c> in g or ml. Null means unknown, not 0.
+    /// </summary>
+    public static Table Foods { get; } = Synced("foods",
+        ("household_id", ColumnType.Text),
+        ("source", ColumnType.Text),
+        ("external_id", ColumnType.Text),
+        ("name", ColumnType.Text),
+        ("brand", ColumnType.Text),
+        ("barcode", ColumnType.Text),
+        ("basis", ColumnType.Text),
+        ("energy_100", ColumnType.Real),
+        ("protein_100", ColumnType.Real),
+        ("carbohydrate_100", ColumnType.Real),
+        ("fat_100", ColumnType.Real),
+        ("nutrients_100", ColumnType.Text),
+        ("portions", ColumnType.Text),
+        ("verified", ColumnType.Integer),
+        ("copied_from", ColumnType.Text));
+
+    /// <summary>H: a recipe's servings and cooked weight as entered; the server recomputes <c>cooked_weight_g</c>.</summary>
+    public static Table Recipes { get; } = Synced("recipes",
+        ("household_id", ColumnType.Text),
+        ("name", ColumnType.Text),
+        ("servings", ColumnType.Real),
+        ("cooked_weight", ColumnType.Real),
+        ("cooked_weight_unit", ColumnType.Text),
+        ("cooked_weight_g", ColumnType.Real));
+
+    /// <summary>
+    /// H: one food in a recipe. The amount as entered (a unit, or a number of the food's named portions) and in g or
+    /// ml of the food's <c>basis</c>; the server recomputes <c>base_amount</c> for a unit, as the client does.
+    /// </summary>
+    public static Table RecipeIngredients { get; } = Synced("recipe_ingredients",
+        ("household_id", ColumnType.Text),
+        ("recipe_id", ColumnType.Text),
+        ("position", ColumnType.Integer),
+        ("food_id", ColumnType.Text),
+        ("quantity", ColumnType.Real),
+        ("quantity_unit", ColumnType.Text),
+        ("portion_name", ColumnType.Text),
+        ("basis", ColumnType.Text),
+        ("base_amount", ColumnType.Real));
+
+    /// <summary>
+    /// U: one thing eaten, with a snapshot of its name and the nutrients in the amount eaten, so the log works offline
+    /// and doesn't change when a food is edited. <c>incomplete_nutrients</c> lists codes that are only lower bounds.
+    /// </summary>
+    public static Table FoodLogEntries { get; } = Synced("food_log_entries",
+        ("profile_id", ColumnType.Text),
+        ("logged_at", ColumnType.Text),
+        ("local_date", ColumnType.Text),
+        ("meal", ColumnType.Text),
+        ("entry_method", ColumnType.Text),
+        ("food_id", ColumnType.Text),
+        ("recipe_id", ColumnType.Text),
+        ("name", ColumnType.Text),
+        ("brand", ColumnType.Text),
+        ("quantity", ColumnType.Real),
+        ("quantity_unit", ColumnType.Text),
+        ("portion_name", ColumnType.Text),
+        ("basis", ColumnType.Text),
+        ("base_amount", ColumnType.Real),
+        ("energy", ColumnType.Real),
+        ("protein", ColumnType.Real),
+        ("carbohydrate", ColumnType.Real),
+        ("fat", ColumnType.Real),
+        ("nutrients", ColumnType.Text),
+        ("incomplete_nutrients", ColumnType.Text),
+        ("is_estimate", ColumnType.Integer));
+
     /// <summary>
     /// Local only, never uploaded. When the server permanently rejects a write (constraint or RLS
     /// violation), the connector parks it here instead of blocking the upload queue (PLAN.md §4).
@@ -327,7 +408,7 @@ public static class AppSchema
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
             MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, Exercises, WorkoutTemplates,
             TemplateExercises, WorkoutSessions, CardioEstimates, SessionExercises, SetLogs, TrainingLocations, Programs, ScheduledWorkouts,
-            PersonalRecords, FailedUploadsTable, PhotoUploadsTable,
+            PersonalRecords, Nutrients, Foods, Recipes, RecipeIngredients, FoodLogEntries, FailedUploadsTable, PhotoUploadsTable,
             PhotoDeletionsTable, WorkoutState,
         ];
 
@@ -388,6 +469,18 @@ public static class AppSchema
                 ["equipment"] = ServerColumnType.Json,
                 ["plate_inventory"] = ServerColumnType.Json,
             },
+            ["foods"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
+            {
+                ["nutrients_100"] = ServerColumnType.Json,
+                ["portions"] = ServerColumnType.Json,
+                ["verified"] = ServerColumnType.Boolean,
+            },
+            ["food_log_entries"] = new Dictionary<string, ServerColumnType>(StringComparer.Ordinal)
+            {
+                ["nutrients"] = ServerColumnType.Json,
+                ["incomplete_nutrients"] = ServerColumnType.Json,
+                ["is_estimate"] = ServerColumnType.Boolean,
+            },
         };
 
     /// <summary>
@@ -415,6 +508,7 @@ public static class AppSchema
                 "profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins",
                 "progress_photos", "exercises", "workout_templates", "template_exercises", "workout_sessions",
                 "session_exercises", "set_logs", "cardio_estimates", "training_locations", "programs", "scheduled_workouts", "personal_records",
+                "foods", "recipes", "recipe_ingredients", "food_log_entries",
             ],
             StringComparer.Ordinal);
 

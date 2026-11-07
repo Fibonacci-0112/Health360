@@ -81,6 +81,29 @@ public class ServerRowTests
         Assert.Equal("""{"equipment":["barbell"],"plate_inventory":[{"weight":20,"unit":"kg","count":2}]}""", location.ToJsonString());
     }
 
+    [Fact]
+    public void SendsTheNutritionColumnsAsTheirPostgresTypes()
+    {
+        var food = Uploads.ToServerRow("foods", new JsonObject
+        {
+            ["nutrients_100"] = """{"fiber":10.1}""",
+            ["portions"] = """[{"name":"1 slice","amount":60}]""",
+            ["verified"] = 1L,
+            ["energy_100"] = 250.0,
+        });
+        var entry = Uploads.ToServerRow("food_log_entries", new JsonObject
+        {
+            ["nutrients"] = """{"fiber":5.6}""",
+            ["incomplete_nutrients"] = """["fiber"]""",
+            ["is_estimate"] = 0L,
+        });
+
+        Assert.Equal(
+            """{"nutrients_100":{"fiber":10.1},"portions":[{"name":"1 slice","amount":60}],"verified":true,"energy_100":250}""",
+            food.ToJsonString());
+        Assert.Equal("""{"nutrients":{"fiber":5.6},"incomplete_nutrients":["fiber"],"is_estimate":false}""", entry.ToJsonString());
+    }
+
     [Theory]
     [InlineData(1L, true)]
     [InlineData(0L, false)]

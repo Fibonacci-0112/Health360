@@ -37,6 +37,7 @@ streams:
       - SELECT * FROM programs WHERE profile_id IN my_profiles
       - SELECT * FROM scheduled_workouts WHERE profile_id IN my_profiles
       - SELECT * FROM personal_records WHERE profile_id IN my_profiles
+      - SELECT * FROM food_log_entries WHERE profile_id IN my_profiles
 
   # H tables for every household the user belongs to.
   household:
@@ -49,6 +50,10 @@ streams:
       # Custom exercises. System exercises (household_id null) arrive with reference.
       - SELECT * FROM exercises WHERE household_id IN my_households
       - SELECT * FROM training_locations WHERE household_id IN my_households
+      # Household foods. Catalogue foods (household_id null) are searched online through the API, not synced.
+      - SELECT * FROM foods WHERE household_id IN my_households
+      - SELECT * FROM recipes WHERE household_id IN my_households
+      - SELECT * FROM recipe_ingredients WHERE household_id IN my_households
 
   # G tables: global reference data, the same for everyone signed in.
   reference:
@@ -57,6 +62,7 @@ streams:
       - SELECT * FROM reference_datasets
       - SELECT * FROM metric_definitions
       - SELECT * FROM exercises WHERE household_id IS NULL
+      - SELECT * FROM nutrients
 
   # Not in Phase 0: `shared_profile`, an on-demand stream for another member's rows. It must check
   # sharing_grants exactly as private.readable_profile_ids() does before it is added.
