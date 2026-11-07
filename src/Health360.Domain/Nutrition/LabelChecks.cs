@@ -19,10 +19,16 @@ public enum LabelField
     Fat,
     Fiber,
     SugarAlcohols,
+    Alcohol,
+    OrganicAcids,
     ServingSize,
 }
 
-/// <summary>The values of one label column, as printed. Null means not printed or not readable, never zero.</summary>
+/// <summary>
+/// The values of one label column, as printed, in kcal, kJ and grams. Null means not printed or not readable, never
+/// zero. Alcohol and organic acids also supply energy (Reg. 1169/2011 Annex XIV); labels rarely print them, but when
+/// they do the energy check counts them.
+/// </summary>
 public sealed record LabelValues(
     double? EnergyKcal = null,
     double? EnergyKj = null,
@@ -30,7 +36,9 @@ public sealed record LabelValues(
     double? Carbohydrate = null,
     double? Fat = null,
     double? Fiber = null,
-    double? SugarAlcohols = null);
+    double? SugarAlcohols = null,
+    double? Alcohol = null,
+    double? OrganicAcids = null);
 
 /// <summary>
 /// What was read from a label: the basis of its per-100 column, the serving size in g (or ml) when printed, and either
@@ -84,6 +92,12 @@ public static class LabelChecks
     /// <summary>Fat's general factor, the most energy any nutrient supplies per gram (21 CFR 101.9(c)(1)(i)(B)).</summary>
     public const double MaxKcalPerGram = 9;
 
+    /// <summary>Alcohol (ethanol), 7 kcal/g (Reg. 1169/2011 Annex XIV).</summary>
+    public const double AlcoholKcalPerGram = 7;
+
+    /// <summary>Organic acid, 3 kcal/g (Reg. 1169/2011 Annex XIV).</summary>
+    public const double OrganicAcidKcalPerGram = 3;
+
     /// <summary>
     /// Half the rounding step assumed for a printed serving size in g or ml. An assumption, not a rule: labels print
     /// whole grams or millilitres.
@@ -129,15 +143,19 @@ public static class LabelChecks
         var fat = v.Fat is { } f ? FatGrams(f) : (Interval?)null;
         var fiber = v.Fiber is { } fi ? WholeGrams(fi) : (Interval?)null;
         var polyols = v.SugarAlcohols is { } po ? WholeGrams(po) : (Interval?)null;
+        var alcohol = v.Alcohol is { } al ? WholeGrams(al) : (Interval?)null;
+        var acids = v.OrganicAcids is { } oa ? WholeGrams(oa) : (Interval?)null;
 
         if (kcal is { } k && protein is { } pr && carbohydrate is { } cr && fat is { } fa)
         {
             // Lowest: general factors on carbohydrate less what may be non-digestible (method C, which counts
             // insoluble fiber and erythritol at 0). Highest: 4/4/9 on all of it (method B) plus 2 kcal/g for fiber, as
-            // EU labels count it outside carbohydrate.
+            // EU labels count it outside carbohydrate. Both add alcohol and organic acids when they are printed.
             var nonDigestible = (fiber?.Hi ?? 0) + (polyols?.Hi ?? 0);
-            var lowest = (4 * pr.Lo) + (4 * Math.Max(0, cr.Lo - nonDigestible)) + (9 * fa.Lo);
-            var highest = (4 * pr.Hi) + (4 * cr.Hi) + (9 * fa.Hi) + (2 * (fiber?.Hi ?? 0));
+            var other = (Lo: (AlcoholKcalPerGram * (alcohol?.Lo ?? 0)) + (OrganicAcidKcalPerGram * (acids?.Lo ?? 0)),
+                Hi: (AlcoholKcalPerGram * (alcohol?.Hi ?? 0)) + (OrganicAcidKcalPerGram * (acids?.Hi ?? 0)));
+            var lowest = (4 * pr.Lo) + (4 * Math.Max(0, cr.Lo - nonDigestible)) + (9 * fa.Lo) + other.Lo;
+            var highest = (4 * pr.Hi) + (4 * cr.Hi) + (9 * fa.Hi) + (2 * (fiber?.Hi ?? 0)) + other.Hi;
             if (!k.Overlaps(new Interval(lowest * (1 - EnergyTolerance), highest * (1 + EnergyTolerance))))
             {
                 List<LabelField> fields = [LabelField.EnergyKcal, LabelField.Protein, LabelField.Carbohydrate, LabelField.Fat];
@@ -149,6 +167,16 @@ public static class LabelChecks
                 if (polyols is not null)
                 {
                     fields.Add(LabelField.SugarAlcohols);
+                }
+
+                if (alcohol is not null)
+                {
+                    fields.Add(LabelField.Alcohol);
+                }
+
+                if (acids is not null)
+                {
+                    fields.Add(LabelField.OrganicAcids);
                 }
 
                 issues.Add(new(LabelIssueKind.EnergyDoesNotMatchMacros, column, fields));
@@ -199,6 +227,8 @@ public static class LabelChecks
             (LabelField.Fat, perServing.Fat, per100.Fat, FatGrams),
             (LabelField.Fiber, perServing.Fiber, per100.Fiber, WholeGrams),
             (LabelField.SugarAlcohols, perServing.SugarAlcohols, per100.SugarAlcohols, WholeGrams),
+            (LabelField.Alcohol, perServing.Alcohol, per100.Alcohol, WholeGrams),
+            (LabelField.OrganicAcids, perServing.OrganicAcids, per100.OrganicAcids, WholeGrams),
         };
 
         var fields = new List<LabelField>();
@@ -251,7 +281,7 @@ public static class LabelChecks
     /// <summary>
     /// 21 CFR 101.9(c)(6) and (c)(7): carbohydrate, fiber and protein to the nearest gram, and under 1 g may be printed
     /// as "less than 1 gram". A 0 is taken to mean anything below 1 g, in case "less than 1 g" was read as 0. Sugar
-    /// alcohols are treated the same way.
+    /// alcohols, alcohol and organic acids, which have no FDA rounding rule, are treated the same way.
     /// </summary>
     internal static Interval WholeGrams(double printed) =>
         printed == 0 ? new(0, 1) : new(Math.Max(0, printed - 0.5), printed + 0.5);
@@ -263,7 +293,11 @@ public static class LabelChecks
             return;
         }
 
-        foreach (var v in new[] { values.EnergyKcal, values.EnergyKj, values.Protein, values.Carbohydrate, values.Fat, values.Fiber, values.SugarAlcohols })
+        foreach (var v in new[]
+        {
+            values.EnergyKcal, values.EnergyKj, values.Protein, values.Carbohydrate, values.Fat, values.Fiber,
+            values.SugarAlcohols, values.Alcohol, values.OrganicAcids,
+        })
         {
             if (v is { } x && (!double.IsFinite(x) || x < 0))
             {

@@ -204,10 +204,14 @@ create trigger foods_fixed before update of household_id, basis, copied_from, so
 
 -- A new copy takes its values from the catalogue row, whatever the client sent, so a household food that says it
 -- came from USDA FDC or Open Food Facts holds what that source published. The household may edit it afterwards (add
--- a portion, say). When the copy already exists, another member's device uploading its own offline copy of the same
--- food, the insert carries the existing row's values instead, so the upload's upsert leaves those edits alone. Reads
--- with the writer's rights: every signed-in user can read the catalogue, and a household member its foods. SQLSTATE
--- 23503 when there is no such catalogue food, as for a broken foreign key, so the upload quarantines.
+-- a portion, say). Reads the catalogue with the writer's rights; every signed-in user can read it. SQLSTATE 23503
+-- when there is no such catalogue food, as for a broken foreign key, so the upload quarantines.
+--
+-- Uploads send an insert as INSERT ... ON CONFLICT (id) DO UPDATE. When the copy already exists (another member's
+-- device copied the same food first), that insert must not touch it: the household may have edited it since. So the
+-- insert leaves a transaction-local marker, foods_copy_conflict skips the conflict update it turns into, and the
+-- existing row stays exactly as committed, however the two uploads interleave. An insert that goes ahead clears the
+-- marker (foods_copy_inserted), so later updates in the same transaction are unaffected.
 create function private.foods_copy() returns trigger
 language plpgsql set search_path = '' as $$
 declare
@@ -216,13 +220,11 @@ begin
   if new.copied_from is null then
     return new;
   end if;
-  select * into original from public.foods f where f.id = new.id;
+  select * into original from public.foods f where f.id = new.copied_from and f.household_id is null;
   if not found then
-    select * into original from public.foods f where f.id = new.copied_from and f.household_id is null;
-    if not found then
-      raise exception 'no catalogue food %', new.copied_from using errcode = '23503';
-    end if;
+    raise exception 'no catalogue food %', new.copied_from using errcode = '23503';
   end if;
+  perform set_config('health360.food_copy_insert', new.id::text, true);
   new.source := original.source;
   new.name := original.name;
   new.brand := original.brand;
@@ -240,6 +242,30 @@ end $$;
 
 create trigger foods_copy before insert on public.foods
   for each row execute function private.foods_copy();
+
+create function private.foods_copy_inserted() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  perform set_config('health360.food_copy_insert', '', true);
+  return null;
+end $$;
+
+create trigger foods_copy_inserted after insert on public.foods
+  for each row when (new.copied_from is not null) execute function private.foods_copy_inserted();
+
+-- Runs before foods_fixed and foods_updated_at (triggers fire in name order). Returning null skips the update.
+create function private.foods_copy_conflict() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if new.copied_from is not null and current_setting('health360.food_copy_insert', true) = new.id::text then
+    perform set_config('health360.food_copy_insert', '', true);
+    return null;
+  end if;
+  return new;
+end $$;
+
+create trigger foods_copy_conflict before update on public.foods
+  for each row execute function private.foods_copy_conflict();
 
 -------------------------------------------------------------------------------
 -- recipes, recipe_ingredients (H)
@@ -338,14 +364,21 @@ create function private.recipe_ingredients_canonical() returns trigger
 language plpgsql set search_path = '' as $$
 declare
   food record;
+  prior public.recipe_ingredients;
   portion_amount double precision;
 begin
-  -- An edit that leaves the amount as entered alone (a new position, say) keeps the stored amount, so a later change
-  -- to the food's portions never moves it or makes the edit fail.
-  if tg_op = 'UPDATE' and new.food_id = old.food_id and new.quantity = old.quantity
-    and new.quantity_unit = old.quantity_unit and new.portion_name is not distinct from old.portion_name
-    and new.basis = old.basis then
-    new.base_amount := old.base_amount;
+  -- A write that leaves the amount as entered alone keeps the stored amount, so a later change to the food's portions
+  -- never moves it or makes the write fail: an edit (a new position, say), and also a replayed insert, which uploads
+  -- send as INSERT ... ON CONFLICT DO UPDATE and which runs this trigger as an insert before the conflict is found.
+  if tg_op = 'UPDATE' then
+    prior := old;
+  else
+    select * into prior from public.recipe_ingredients r where r.id = new.id;
+  end if;
+  if prior.id is not null and new.food_id = prior.food_id and new.quantity = prior.quantity
+    and new.quantity_unit = prior.quantity_unit and new.portion_name is not distinct from prior.portion_name
+    and new.basis = prior.basis then
+    new.base_amount := prior.base_amount;
     return new;
   end if;
   select f.basis, f.portions into food from public.foods f where f.id = new.food_id;
@@ -437,7 +470,8 @@ revoke all on function private.is_nutrient_map(jsonb), private.is_nutrient_codes
 grant execute on function private.is_nutrient_map(jsonb), private.is_nutrient_codes(jsonb), private.is_food_portions(jsonb),
   private.food_amount_base(double precision, text, text, double precision), private.food_copy_id(uuid, uuid)
   to authenticated, service_role;
-revoke all on function private.foods_fixed(), private.foods_copy(), private.recipes_canonical(), private.recipes_fixed_household(),
+revoke all on function private.foods_fixed(), private.foods_copy(), private.foods_copy_inserted(), private.foods_copy_conflict(),
+  private.recipes_canonical(), private.recipes_fixed_household(),
   private.recipe_ingredients_canonical(), private.food_log_entries_canonical() from public, anon;
 
 alter table public.nutrients enable row level security;

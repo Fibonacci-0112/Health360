@@ -2,7 +2,7 @@
 -- log entries, which follow the 'nutrition' grant. Amounts as entered get canonical g or ml. Runs as `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(63);
+select plan(66);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000000a', 'a@example.com'),
@@ -132,6 +132,9 @@ select lives_ok(
   'another device''s copy uploads after the household edited it');
 select is((select jsonb_array_length(portions) from foods where id = current_setting('t.copy')::uuid), 2,
   'the later upload keeps the household''s edits');
+update foods set name = 'Rolled oats' where id = current_setting('t.copy')::uuid;
+select is((select name from foods where id = current_setting('t.copy')::uuid), 'Rolled oats',
+  'a household edit after a duplicate upload in the same transaction still applies');
 select throws_ok(
   format($$ update foods set source = 'open_food_facts' where id = %L $$, current_setting('t.copy')),
   '23514', null, 'a food''s source cannot change');
@@ -186,6 +189,14 @@ select is((select base_amount from recipe_ingredients where position = 5), 90::d
 update foods set portions = '[]' where id = '70000000-0000-7000-8000-000000000002';
 select lives_ok($$ update recipe_ingredients set position = 1 where position = 5 $$,
   'an ingredient can still be moved after its portion was removed');
+select lives_ok(
+  format($$ insert into recipe_ingredients (id, household_id, recipe_id, position, food_id, quantity, quantity_unit, portion_name, basis, base_amount)
+            select id, household_id, recipe_id, position, food_id, quantity, quantity_unit, portion_name, basis, 0
+            from recipe_ingredients where position = 1
+            on conflict (id) do update set quantity = excluded.quantity, base_amount = excluded.base_amount $$),
+  'a replayed upload of the ingredient still succeeds after its portion was removed');
+select is((select base_amount from recipe_ingredients where position = 1), 90::double precision,
+  'the replay keeps the stored amount');
 select throws_ok($$ update recipe_ingredients set quantity = 2 where position = 1 $$,
   '23514', null, 'changing the amount resolves the portion again');
 update foods set portions = '[{"name": "1 slice", "amount": 60}]' where id = '70000000-0000-7000-8000-000000000002';

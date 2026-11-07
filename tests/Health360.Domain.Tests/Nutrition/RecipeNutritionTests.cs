@@ -72,6 +72,24 @@ public class RecipeNutritionTests
     }
 
     [Fact]
+    public void An_ingredient_with_no_amount_changes_nothing()
+    {
+        var milk = NutrientAmounts.Create((Nutrient.Energy, 64));
+        var oatsOnly = RecipeNutrition.Compute([new(Oats, FoodBasis.Mass, 80)], servings: 1);
+        var withNothing = RecipeNutrition.Compute([new(Oats, FoodBasis.Mass, 80), new(milk, FoodBasis.Volume, 0)], servings: 1);
+
+        Assert.Equal(oatsOnly.Total.Amounts, withNothing.Total.Amounts);
+        Assert.Empty(withNothing.Total.Incomplete); // milk lists no fiber, but none of it went in
+        Assert.Equal(80, withNothing.DishWeightG);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(double.NaN)]
+    public void Ingredient_amounts_must_be_finite_and_non_negative(double amount) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => RecipeNutrition.Compute([new(Oats, FoodBasis.Mass, amount)], servings: 1));
+
+    [Fact]
     public void An_empty_recipe_has_nothing()
     {
         var r = RecipeNutrition.Compute([], servings: 1);

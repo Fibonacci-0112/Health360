@@ -68,6 +68,21 @@ public class LabelChecksTests
     }
 
     [Fact]
+    public void Energy_from_organic_acids_and_alcohol_counts_when_printed()
+    {
+        // Vinegar per 100 ml: 21 kcal, nearly all from about 7 g of acetic acid at 3 kcal/g (Annex XIV).
+        var vinegar = new LabelValues(EnergyKcal: 21, Protein: 0, Carbohydrate: 0, Fat: 0);
+        // A 5% beer per 100 ml: about 4 g of alcohol at 7 kcal/g plus 3 g of carbohydrate.
+        var beer = new LabelValues(EnergyKcal: 40, Protein: 0, Carbohydrate: 3, Fat: 0);
+
+        Assert.Empty(Check(null, vinegar with { OrganicAcids = 7 }, basis: FoodBasis.Volume));
+        Assert.Empty(Check(null, beer with { Alcohol = 4 }, basis: FoodBasis.Volume));
+        // Unprinted, they can't be counted: the energy is marked suspect for the user to confirm.
+        Assert.Equal(LabelIssueKind.EnergyDoesNotMatchMacros, Assert.Single(Check(null, vinegar, basis: FoodBasis.Volume)).Kind);
+        Assert.Contains(LabelField.Alcohol, Assert.Single(Check(null, beer with { Alcohol = 0 }, basis: FoodBasis.Volume)).Fields);
+    }
+
+    [Fact]
     public void A_zero_calorie_drink_passes() =>
         Assert.Empty(Check(new LabelValues(EnergyKcal: 0, Protein: 0, Carbohydrate: 0, Fat: 0), null, servingSize: 355, basis: FoodBasis.Volume));
 

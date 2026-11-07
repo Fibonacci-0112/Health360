@@ -404,7 +404,7 @@ Implemented in `Health360.Domain/Nutrition`; tests in `tests/Health360.Domain.Te
 
 **Scaling.** The nutrients in an amount are each per-100 value × amount / 100, in that order (`NutrientAmounts.ForAmount`); `Per100` reverses it (value × 100 / amount).
 
-**Recipes.** `RecipeNutrition.Compute` adds each ingredient's nutrients for its amount, in ingredient order, and divides the total by the number of servings. Per 100 g of the dish uses the cooked weight when it was weighed (cooking changes weight through water, not the nutrients counted here) and otherwise the raw ingredients' total mass, which is known only when every ingredient is measured by mass.
+**Recipes.** `RecipeNutrition.Compute` adds each ingredient's nutrients for its amount, in ingredient order, and divides the total by the number of servings. Per 100 g of the dish uses the cooked weight when it was weighed (cooking changes weight through water, not the nutrients counted here) and otherwise the raw ingredients' total mass, which is known only when every ingredient is measured by mass. An ingredient with a zero amount is left out, so it can't make a nutrient incomplete or the raw weight unknown.
 
 Golden values (test fixture): 80 g oats (379 kcal, 13.2 g protein, 10.1 g fiber per 100 g), 120 g banana (89 kcal, 1.09 g protein, 2.6 g fiber) and 32 g peanut butter (588 kcal, 25.1 g protein, no fiber listed), 2 servings:
 
@@ -433,7 +433,9 @@ A label rounded more finely (EU labels give fat to 0.1 g, for example) has narro
 
 lowest = 4 × protein + 4 × max(0, carbohydrate − fiber − sugar alcohols) + 9 × fat, with each interval's low end and the fiber and sugar alcohols' high ends,
 
-to highest = 4 × protein + 4 × carbohydrate + 9 × fat + 2 × fiber, with the high ends. That range is widened by **10% on each side, a product choice and not a sourced figure**: labels may also use food-specific Atwater factors or bomb calorimetry (methods (A) and (E)), which the general factors can't reproduce. The check needs kcal, protein, carbohydrate and fat. Without a fiber value the lowest estimate counts all carbohydrate, so a high-fiber food can be flagged until its fiber is read.
+to highest = 4 × protein + 4 × carbohydrate + 9 × fat + 2 × fiber, with the high ends.
+
+Both add 7 kcal/g of alcohol and 3 kcal/g of organic acids (Annex XIV) when the label prints them, each given the whole-gram interval. Labels rarely print organic acids, so a correct label whose energy comes mostly from them (vinegar, kombucha) can still be flagged; the user then confirms the value. That range is widened by **10% on each side, a product choice and not a sourced figure**: labels may also use food-specific Atwater factors or bomb calorimetry (methods (A) and (E)), which the general factors can't reproduce. The check needs kcal, protein, carbohydrate and fat. Without a fiber value the lowest estimate counts all carbohydrate, so a high-fiber food can be flagged until its fiber is read.
 
 **kJ against kcal.** Annex XIV's factors give between 4.0 kJ/kcal (fibre, 8 kJ / 2 kcal) and 4.33 kJ/kcal (organic acid, 13 kJ / 3 kcal); 4.184 (the thermochemical calorie) lies between. The kJ interval must meet [4.0 × kcal low, 13/3 × kcal high].
 
