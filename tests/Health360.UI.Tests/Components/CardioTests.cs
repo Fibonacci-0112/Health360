@@ -241,6 +241,13 @@ public sealed class CardioTests : AppTestContext
         var bike = Domain.Training.CardioEnergy.Activities.First(a => a.Sport == Domain.Physiology.ZoneSport.Bike).Code;
         await TypeAsync(cut, "#cardio-duration", "30");
 
+        // Every render from here on is recorded. Any later refresh (for example another zone-watch notification) rebuilds
+        // the form and clears the estimate's alert and any estimate, so reading the page only at the end would depend on
+        // whether such a refresh happened to arrive.
+        var rendered = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        void Record(object? sender, EventArgs e) => rendered.Enqueue(cut.Markup);
+        cut.OnMarkupUpdated += Record;
+
         // Estimate is tapped with no watch times while a sport change reloads the zones, and the times are typed during
         // that wait; the refresh then swaps the zone set and clears them.
         await Renderer.Dispatcher.InvokeAsync(async () =>
@@ -251,9 +258,18 @@ public sealed class CardioTests : AppTestContext
             await Task.WhenAll(refreshing, estimate, typed);
         });
 
-        Assert.Empty(cut.FindAll(".cardio-estimate"));
         cut.WaitForAssertion(() =>
-            Assert.Contains("Enter your watch times again", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+        {
+            // The refresh that cleared the times says so; only a profile switch clears this status.
+            Assert.Contains(cut.FindAll("[role=status]"), s => s.TextContent.Contains("Enter your watch times again", StringComparison.Ordinal));
+            Assert.All(cut.FindAll("input[aria-label^='Zone '][aria-label$=' minutes']"), i => Assert.True(string.IsNullOrEmpty(i.GetAttribute("value"))));
+        }, Wait);
+        cut.OnMarkupUpdated -= Record;
+
+        // The waiting estimate stopped and asked for the times again, and no render ever showed an estimate without them.
+        var renders = rendered.ToArray();
+        Assert.Contains(renders, m => m.Contains("start date. Enter your watch times again using the boundaries shown.", StringComparison.Ordinal));
+        Assert.DoesNotContain(renders, m => m.Contains("cardio-estimate", StringComparison.Ordinal));
     }
 
     [Fact]
