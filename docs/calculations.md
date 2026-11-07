@@ -1,8 +1,8 @@
-# Calculations: body, physiology and training (Phase 1, steps 1.1–1.2)
+# Calculations: body, physiology, training and nutrition (Phase 1, steps 1.1–1.3)
 
 The exact rules `Health360.Domain` implements for the body and physiology screens, with their sources. Code, tests and this page must agree; change them together. General rules are in [PLAN.md §2.8](PLAN.md) and the units rules in §2.6. Every formula here takes canonical units (kg, cm, years). Convert with `Health360.Domain/Units` and never through a rounded display value.
 
-Status: what's below is implemented and tested in `Health360.Domain` (`Body/`, `Physiology/`, `Training/`). Not yet specified: the LTHR estimate and the Nes et al. (2011) VO₂max estimator. They wait until they're checked against primary sources, not secondary ones (see [Still to specify](#still-to-specify)).
+Status: what's below is implemented and tested in `Health360.Domain` (`Body/`, `Physiology/`, `Training/`, `Nutrition/`). Not yet specified: the LTHR estimate and the Nes et al. (2011) VO₂max estimator. They wait until they're checked against primary sources, not secondary ones (see [Still to specify](#still-to-specify)).
 
 ## Navy method (body fat from circumferences)
 
@@ -391,6 +391,59 @@ For a steady session without usable HR, modified Borg CR10 effort supplies low (
 `PlateLoading` combines matching pairs from the finite location inventory, after grouping identical weight/unit entries. Canonical kg uses the existing exact 0.45359237 kg/lb factor. Plates up to 1000 in their own unit are accepted, matching the stored location inventory. The bounded search groups reachable per-side loads at 1 g resolution and keeps the lightest exact load in each group, so a plate that fits on a slightly heavier near-equal load also fits on it; the answer is the heaviest exact combination found that does not exceed the target, and the empty bar is the minimum. With 2.5 kg and 5.512 lb (≈2.50018 kg) plates in the same 1 g group, 1.25 kg can still be added to reach exactly 27.5 kg on a 20 kg bar. Returned totals are computed from the original exact plate weights, not rounded display values. An odd leftover plate cannot be used. The result is applied explicitly to unfinished non-warm-up sets, leaving completed sets and records unchanged. A 20 kg bar, two 15 kg plates and six 10 kg plates can load 80 kg: three 10 kg plates per side, a combination a greedy loader misses.
 
 Weekly volume is completed non-warm-up set load in canonical kg × reps, grouped by primary muscle, in finished sessions dated Monday–Sunday. Each primary muscle gets the full set, so totals across muscles are not additive. Secondary muscles do not receive guessed fractional sets. e1RM history uses completed Epley estimates from finished sessions only, best per local date, so changing display units or mixing formula histories cannot manufacture a trend.
+
+## Nutrition amounts and recipes (step 1.3)
+
+Implemented in `Health360.Domain/Nutrition`; tests in `tests/Health360.Domain.Tests/Nutrition`.
+
+**Nutrients.** Each nutrient has a database code and one fixed unit (`Nutrient`): energy in kcal, macronutrients in g, cholesterol, sodium, potassium, calcium and iron in mg, vitamin D in µg (code `ug`). Amounts are never entered in a user's unit, so they carry no unit column. The catalogue is the Nutrition Facts label set for now; the USDA import adds the rest. `nutrients` in the database is seeded with the same codes and units.
+
+**Unknown is not zero.** A nutrient a food doesn't list is absent from its `NutrientAmounts`, not 0. A sum (`NutrientTotal.Sum`) adds the known parts and lists in `Incomplete` every nutrient some parts knew and others didn't: that total is only a lower bound, and the app must say so. A nutrient no part knew stays absent.
+
+**Basis and amounts.** A food's values are per 100 g, or per 100 ml for a drink labelled by volume (`FoodBasis`). An amount as entered is converted to the basis unit with `Health360.Domain/Units` (`FoodAmount.ToBase`): ounces of a per-100 g food become grams exactly, cups of a per-100 ml drink become millilitres. A mass unit is refused for a volume-basis food and a volume unit for a mass-basis one: grams per cup depend on the food, so a cup of flour is a portion (`FoodPortion`, grams per portion), and count × grams per portion gives the base amount.
+
+**Scaling.** The nutrients in an amount are each per-100 value × amount / 100, in that order (`NutrientAmounts.ForAmount`); `Per100` reverses it (value × 100 / amount).
+
+**Recipes.** `RecipeNutrition.Compute` adds each ingredient's nutrients for its amount, in ingredient order, and divides the total by the number of servings. Per 100 g of the dish uses the cooked weight when it was weighed (cooking changes weight through water, not the nutrients counted here) and otherwise the raw ingredients' total mass, which is known only when every ingredient is measured by mass.
+
+Golden values (test fixture): 80 g oats (379 kcal, 13.2 g protein, 10.1 g fiber per 100 g), 120 g banana (89 kcal, 1.09 g protein, 2.6 g fiber) and 32 g peanut butter (588 kcal, 25.1 g protein, no fiber listed), 2 servings:
+
+| | Hand calculation | Result |
+|---|---|---|
+| Energy | 379 × 80/100 + 89 × 120/100 + 588 × 32/100 = 303.2 + 106.8 + 188.16 | 598.16 kcal; 299.08 per serving |
+| Protein | 10.56 + 1.308 + 8.032 | 19.9 g; 9.95 per serving |
+| Fiber | 8.08 + 3.12, peanut butter unknown | 11.2 g, incomplete |
+| Per 100 g, raw weight 232 g | 598.16 × 100 / 232 | 257.83 kcal |
+| Per 100 g, cooked weight 400 g | 598.16 × 100 / 400 | 149.54 kcal |
+
+## Label checks (step 1.3)
+
+`LabelChecks.Check` looks for misreads in values read from a Nutrition Facts label before the confirm screen. It only makes fields suspect for the user to check; it never changes or rejects them.
+
+**Printed values are intervals.** Each printed value stands for every true value that rounds to it under the FDA rules, [21 CFR 101.9(c)](https://www.ecfr.gov/current/title-21/section-101.9), checked against the eCFR text:
+- Calories (c)(1): nearest 5 kcal up to and including 50, nearest 10 above; under 5 may be 0. So 0 means 0–5, 50 means 47.5–55 and 120 means 115–125.
+- Fat (c)(2): nearest 0.5 g below 5 g, nearest gram above; under 0.5 g is 0.
+- Carbohydrate and fiber (c)(6), protein (c)(7): nearest gram; under 1 g may be printed "less than 1 gram" and under 0.5 g as 0. A printed 0 is taken as 0–1 g in case "less than 1 g" was read as 0. Sugar alcohols are given the same interval (an assumption; no separate rule is applied).
+- kJ: the FDA sets no rounding for kJ, so a kJ value gets the interval of the kcal value it stands for, × 4.184.
+- Serving size: ± 0.5 g or ml (an assumption: labels print whole units).
+
+A label rounded more finely (EU labels give fat to 0.1 g, for example) has narrower true intervals that lie inside these, so it is not flagged for its rounding. Per-100 columns are given the same intervals. A check fails only when no values inside the intervals can agree.
+
+**Energy against macros.** The general factors are 4, 4 and 9 kcal per gram of protein, total carbohydrate and fat, and labels may instead count carbohydrate less non-digestible carbohydrates and sugar alcohols (101.9(c)(1)(i)(B) and (C)). EU labels count carbohydrate without fibre and fibre at 2 kcal/g ([Regulation (EU) 1169/2011, Annex XIV](https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32011R1169)). The energy may be anywhere from
+
+lowest = 4 × protein + 4 × max(0, carbohydrate − fiber − sugar alcohols) + 9 × fat, with each interval's low end and the fiber and sugar alcohols' high ends,
+
+to highest = 4 × protein + 4 × carbohydrate + 9 × fat + 2 × fiber, with the high ends. That range is widened by **10% on each side, a product choice and not a sourced figure**: labels may also use food-specific Atwater factors or bomb calorimetry (methods (A) and (E)), which the general factors can't reproduce. The check needs kcal, protein, carbohydrate and fat. Without a fiber value the lowest estimate counts all carbohydrate, so a high-fiber food can be flagged until its fiber is read.
+
+**kJ against kcal.** Annex XIV's factors give between 4.0 kJ/kcal (fibre, 8 kJ / 2 kcal) and 4.33 kJ/kcal (organic acid, 13 kJ / 3 kcal); 4.184 (the thermochemical calorie) lies between. The kJ interval must meet [4.0 × kcal low, 13/3 × kcal high].
+
+**Weight checks**, only when the basis is mass (a volume's weight depends on density):
+- Protein + carbohydrate + fat, low ends, may not exceed the amount's high end (100 g, or the serving size). Fiber is left out, because EU labels count it outside carbohydrate.
+- Energy may not exceed 9 kcal per gram (fat's general factor, the densest), widened by the same 10%.
+
+**Columns.** When both columns and the serving size are known, each value present in both must agree: the per-serving interval must meet the per-100 interval × the serving interval / 100.
+
+A property test rounds labels built from exact 4/4/9 energy with the FDA rules, independently written in the test, and checks that none is ever flagged.
 
 ## What the 1.1 exit criterion proves
 
