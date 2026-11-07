@@ -54,6 +54,16 @@ public class LabelChecksTests
     }
 
     [Fact]
+    public void Alcohol_and_organic_acids_count_towards_the_weight()
+    {
+        var issue = Assert.Single(Check(null, new LabelValues(Protein: 0, Carbohydrate: 0, Fat: 0, Alcohol: 101)));
+
+        Assert.Equal(LabelIssueKind.MacrosExceedWeight, issue.Kind);
+        Assert.Contains(LabelField.Alcohol, issue.Fields);
+        Assert.Equal(LabelIssueKind.MacrosExceedWeight, Assert.Single(Check(null, new LabelValues(Fat: 60, OrganicAcids: 50))).Kind);
+    }
+
+    [Fact]
     public void Volume_labels_skip_the_weight_checks() =>
         Assert.Empty(Check(null, new LabelValues(Protein: 60, Carbohydrate: 50, Fat: 10), basis: FoodBasis.Volume));
 

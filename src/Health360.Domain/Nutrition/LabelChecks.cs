@@ -198,6 +198,7 @@ public static class LabelChecks
         var macros = new (LabelField Field, Interval? Value)[]
         {
             (LabelField.Protein, protein), (LabelField.Carbohydrate, carbohydrate), (LabelField.Fat, fat),
+            (LabelField.Alcohol, alcohol), (LabelField.OrganicAcids, acids),
         }.Where(m => m.Value is not null).ToList();
         if (macros.Count > 0 && macros.Aggregate(0.0, (sum, m) => sum + m.Value!.Value.Lo) > weight.Hi)
         {

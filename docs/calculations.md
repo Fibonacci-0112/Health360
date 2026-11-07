@@ -440,7 +440,7 @@ Both add 7 kcal/g of alcohol and 3 kcal/g of organic acids (Annex XIV) when the 
 **kJ against kcal.** Annex XIV's factors give between 4.0 kJ/kcal (fibre, 8 kJ / 2 kcal) and 4.33 kJ/kcal (organic acid, 13 kJ / 3 kcal); 4.184 (the thermochemical calorie) lies between. The kJ interval must meet [4.0 × kcal low, 13/3 × kcal high].
 
 **Weight checks**, only when the basis is mass (a volume's weight depends on density):
-- Protein + carbohydrate + fat, low ends, may not exceed the amount's high end (100 g, or the serving size). Fiber is left out, because EU labels count it outside carbohydrate.
+- Protein + carbohydrate + fat, plus alcohol and organic acids when printed, low ends, may not exceed the amount's high end (100 g, or the serving size). Fiber is left out, because on US labels it is part of carbohydrate already.
 - Energy may not exceed 9 kcal per gram (fat's general factor, the densest), widened by the same 10%.
 
 **Columns.** When both columns and the serving size are known, each value present in both must agree: the per-serving interval must meet the per-100 interval × the serving interval / 100.
