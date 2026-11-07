@@ -435,20 +435,22 @@
             return;
         }
 
-        if (!saved)
-        {
-            await Preview();
-            if (preview is null)
-            {
-                return;
-            }
-        }
-
-        var estimate = preview;
-        var owner = profileId;
+        // Busy from the first await on: the preview can wait for a zone refresh, and a second tap meanwhile must not
+        // save the session again.
         busy = true;
         try
         {
+            if (!saved)
+            {
+                await Preview();
+                if (preview is null)
+                {
+                    return;
+                }
+            }
+
+            var estimate = preview;
+            var owner = profileId;
             await draftSave;
             if (disposed || owner != Workouts.ProfileId) return;
             if (!saved && estimate is not null)
