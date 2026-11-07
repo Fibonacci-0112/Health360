@@ -5,7 +5,7 @@
     "ghcr.io/devcontainers/features/dotnet:2": {
       "version": "10.0.403"
     },
-    "ghcr.io/devcontainers/features/docker-in-docker:4": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
   "customizations": {
     "vscode": {
@@ -15,10 +15,13 @@
       ]
     }
   },
+  "remoteEnv": {
+    "PATH": "${containerEnv:HOME}/.local/bin:${containerEnv:PATH}"
+  },
   "forwardPorts": [
     54321,
-    54323,
+    54324,
     8080
   ],
-  "postCreateCommand": "dotnet restore Health360.Core.slnf -p:ContinuousIntegrationBuild=true"
+  "postCreateCommand": "bash tools/codespaces/install-supabase-cli.sh && dotnet restore Health360.Core.slnf -p:ContinuousIntegrationBuild=true"
 }
