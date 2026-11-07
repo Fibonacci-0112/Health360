@@ -122,30 +122,65 @@ public class LocalDatabaseTests
     {
         var timeout = TimeSpan.FromSeconds(10);
         var ct = TestContext.Current.CancellationToken;
-        for (var i = 0; i < 10; i++)
+        // Each attempt syncs against its own endpoint that holds every connection open, so "stopped" can be checked on
+        // the wire: after the disconnect the client must close the connections the reconnect made and dial no more.
+        // Two PowerSync.Common 1.0.0 behaviours are allowed for, neither of which the app relies on:
+        // - The first connection's request may stay open: when a reconnect supersedes a stream whose request has
+        //   reached the server, the SDK doesn't cancel that request, and it lingers (about 75 s here) after the stream
+        //   is gone. The stream never reports Connected again and the writes stay pending, which is checked.
+        // - The Connecting flag isn't checked: a reconnect the disconnect overtook can set it again afterwards with
+        //   nothing running, and the app never reads it.
+        var running = new List<(HoldingSyncServer Server, TestDatabase Test, LocalDatabase Local, int Dialled)>();
+        try
         {
-            await using var t = await TestDatabase.OpenAsync();
-            var owner = new MemoryOwnerStore();
-            await using var local = new LocalDatabase(t.Db, owner, new SupabaseConnector(
-                new FixedSession(new SessionToken("user-a", "a-token")),
-                owner,
-                new FakeWriter(),
-                new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", new Uri("http://127.0.0.1:9")),
-                new FixedClock(DateTimeOffset.UnixEpoch),
-                NullLogger<SupabaseConnector>.Instance));
+            for (var i = 0; i < 10; i++)
+            {
+                var server = new HoldingSyncServer();
+                var t = await TestDatabase.OpenAsync();
+                var owner = new MemoryOwnerStore();
+                var local = new LocalDatabase(t.Db, owner, new SupabaseConnector(
+                    new FixedSession(new SessionToken("user-a", "a-token")),
+                    owner,
+                    new FakeWriter(),
+                    new SyncEndpoints(new Uri("http://127.0.0.1:54321"), "anon", server.Url),
+                    new FixedClock(DateTimeOffset.UnixEpoch),
+                    NullLogger<SupabaseConnector>.Instance));
+                running.Add((server, t, local, 0));
 
-            await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
-            await Task.Delay(300, ct);
-            // Reconnecting tears down the old stream asynchronously. Disconnect must also stop the
-            // new connection even if it hasn't registered with the SDK's connection manager yet.
-            await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
-            await local.DisconnectAsync().WaitAsync(timeout, ct);
-            await SeedAsync(t);
-            await Task.Delay(300, ct);
+                await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
+                // The first attempt has reached the server, so the reconnect has a live stream to tear down.
+                Assert.True(await server.AcceptedAtLeastAsync(1, timeout, ct), $"the first connection never reached the server (iteration {i})");
+                // Reconnecting tears down the old stream asynchronously. Disconnect must also stop the
+                // new connection even if it hasn't registered with the SDK's connection manager yet.
+                await local.ConnectAsync("user-a").WaitAsync(timeout, ct);
+                await local.DisconnectAsync().WaitAsync(timeout, ct);
+                await SeedAsync(t);
 
-            Assert.False(t.Db.CurrentStatus.Connected);
-            Assert.False(t.Db.CurrentStatus.Connecting);
-            Assert.Equal((1, 1, 1), await CountsAsync(t));
+                Assert.True(await server.AllClosedAsync(timeout, ct, first: 1), $"a reconnect's sync connection outlived the disconnect (iteration {i})");
+                Assert.False(t.Db.CurrentStatus.Connected);
+                Assert.Equal((1, 1, 1), await CountsAsync(t));
+                running[i] = (server, t, local, server.Accepted);
+            }
+
+            // Still disconnected well past the retry delay: no attempt dials again, and the writes stay pending.
+            await Task.Delay(TimeSpan.FromMilliseconds(LocalDatabase.RetryDelayMs * 2), ct);
+            for (var i = 0; i < running.Count; i++)
+            {
+                var (server, t, _, dialled) = running[i];
+                Assert.True(dialled == server.Accepted, $"attempt {i} dialled again after its disconnect");
+                Assert.True(server.OpenFrom(1) == 0, $"a reconnect's sync connection reopened after the disconnect (attempt {i})");
+                Assert.False(t.Db.CurrentStatus.Connected);
+                Assert.Equal((1, 1, 1), await CountsAsync(t));
+            }
+        }
+        finally
+        {
+            foreach (var (server, t, local, _) in running)
+            {
+                await local.DisposeAsync();
+                await t.DisposeAsync();
+                await server.DisposeAsync();
+            }
         }
     }
 

@@ -45,7 +45,7 @@ public sealed class CardioTests : AppTestContext
         await TypeAsync(cut, "#cardio-distance", "3");
         await ClickAsync(cut, "#preview-cardio");
 
-        Assert.Contains("Keytel, average HR", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
+        cut.WaitForAssertion(() => Assert.Contains("Keytel, average HR", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal), Wait);
         Assert.Contains("Not added to your calorie target", cut.Markup, StringComparison.Ordinal);
         Assert.Contains("min/mi", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
         await SubmitAsync(cut);
@@ -69,12 +69,12 @@ public sealed class CardioTests : AppTestContext
         }
 
         await SubmitAsync(cut);
-        Assert.Contains("add up to the session duration", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal);
+        cut.WaitForAssertion(() => Assert.Contains("add up to the session duration", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
         Assert.Empty(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
 
         await TypeAsync(cut, "input[aria-label='Zone 3 minutes']", "10");
         await ClickAsync(cut, "#preview-cardio");
-        Assert.Contains("Keytel, time in zones", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
+        cut.WaitForAssertion(() => Assert.Contains("Keytel, time in zones", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal), Wait);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public sealed class CardioTests : AppTestContext
         }
 
         await ClickAsync(cut, "#preview-cardio");
-        Assert.Single(cut.FindAll(".cardio-estimate"));
+        cut.WaitForAssertion(() => Assert.Single(cut.FindAll(".cardio-estimate")), Wait);
         await App.Database.Db.Execute(
             "UPDATE zone_sets SET boundaries = '[0,130,170]', boundaries_canonical = '[0,130,170]' WHERE id = 'cardio-zones'");
         cut.WaitForAssertion(() =>
@@ -265,7 +265,7 @@ public sealed class CardioTests : AppTestContext
         await TypeAsync(cut, "#cardio-average", "150");
         await ClickAsync(cut, "#preview-cardio");
 
-        Assert.Contains("2024 Compendium METs", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
+        cut.WaitForAssertion(() => Assert.Contains("2024 Compendium METs", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal), Wait);
         Assert.Contains("210–390 kcal", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
         Assert.Contains("never the HR equation", cut.Markup, StringComparison.Ordinal);
     }
@@ -276,8 +276,11 @@ public sealed class CardioTests : AppTestContext
         var cut = await CardioAsync(weight: false);
         await TypeAsync(cut, "#cardio-duration", "30");
         await ClickAsync(cut, "#preview-cardio");
-        Assert.Contains("Energy estimate unavailable", cut.Markup, StringComparison.Ordinal);
-        Assert.Contains("Enter a body weight", cut.Markup, StringComparison.Ordinal);
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Energy estimate unavailable", cut.Markup, StringComparison.Ordinal);
+            Assert.Contains("Enter a body weight", cut.Markup, StringComparison.Ordinal);
+        }, Wait);
         await SubmitAsync(cut);
         cut.WaitForAssertion(() => cut.Find("[aria-labelledby=cardio-week-title] details"), Wait);
 
@@ -312,7 +315,7 @@ public sealed class CardioTests : AppTestContext
         await TypeAsync(cut, "#cardio-average", "oops");
         await SubmitAsync(cut);
 
-        Assert.Contains("Heart rate must be", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal);
+        cut.WaitForAssertion(() => Assert.Contains("Heart rate must be", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
         Assert.Empty(cut.FindAll(".cardio-estimate"));
     }
 }
