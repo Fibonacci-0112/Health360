@@ -41,6 +41,21 @@ public sealed class TrainTests : AppTestContext
         return cut;
     }
 
+    [Fact]
+    public async Task A_failed_start_stays_reported_when_the_tab_reloads()
+    {
+        var cut = await TrainAsync();
+        await App.Database.Db.Execute("CREATE TEMP TRIGGER fail_start INSTEAD OF INSERT ON workout_sessions BEGIN SELECT RAISE(ABORT, 'disk busy'); END");
+        await ClickAsync(cut, "#start-empty");
+        cut.WaitForAssertion(() => Assert.Equal("Couldn't start the workout on this device. Try again.", cut.Find("[role=alert]").TextContent), Wait);
+
+        // A template synced from another device reloads the tab without any tap; the template shown proves that reload finished.
+        await WorkoutPlans.CreateTemplateAsync(App.Database.Db, ProfileId, "Legs", [], App.Clock);
+        cut.WaitForAssertion(() => Assert.Contains("Legs", cut.Markup, StringComparison.Ordinal), Wait);
+
+        Assert.Equal("Couldn't start the workout on this device. Try again.", cut.Find("[role=alert]").TextContent);
+    }
+
     /// <summary>A finished session of squats, logged as if on an earlier day.</summary>
     private async Task LogEarlierSessionAsync(double weight, string unit, int reps)
     {
