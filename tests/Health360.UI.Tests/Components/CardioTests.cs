@@ -199,6 +199,37 @@ public sealed class CardioTests : AppTestContext
     }
 
     [Fact]
+    public async Task Watch_times_a_refresh_clears_while_saving_stop_the_save()
+    {
+        var cut = await CardioAsync();
+        await App.Database.Db.Execute(
+            "INSERT INTO zone_sets (id, profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from) " +
+            "VALUES ('cardio-zones', ?, 'run', 'hr', 'custom', '[0,100,150]', 'bpm', '[0,100,150]', '2026-01-01')", [ProfileId]);
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Stored HR zones", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal), Wait);
+        var bike = Domain.Training.CardioEnergy.Activities.First(a => a.Sport == Domain.Physiology.ZoneSport.Bike).Code;
+        await TypeAsync(cut, "#cardio-duration", "30");
+        for (var i = 1; i <= 3; i++)
+        {
+            await TypeAsync(cut, $"input[aria-label='Zone {i} minutes']", i == 2 ? "30" : "0");
+        }
+
+        // Switching sport starts a refresh that swaps the zone set and clears the entered watch times. Starting it and the
+        // save tap in one dispatcher turn makes the tap land before the refresh can resume, as a tap during a slow zone
+        // read does.
+        await Renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            var refreshing = cut.Find("#cardio-activity").ChangeAsync(new ChangeEventArgs { Value = bike });
+            var save = cut.Find("form").SubmitAsync(EventArgs.Empty);
+            await Task.WhenAll(refreshing, save);
+        });
+
+        Assert.Empty(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Enter your watch times again", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+    }
+
+    [Fact]
     public async Task Medication_suppresses_age_based_zones_and_hr_energy()
     {
         var cut = await CardioAsync(medication: true);

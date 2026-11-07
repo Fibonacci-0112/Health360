@@ -394,8 +394,18 @@
     {
         preview = null;
         error = null;
-        // A tap that lands while a background refresh runs waits for it rather than failing or doing nothing.
+        // A tap that lands while a background refresh runs waits for it rather than failing or doing nothing. If that
+        // refresh swapped the zone set, it cleared any watch times entered against the old one: stop and ask for them
+        // again, rather than estimating without them.
+        var enteredZoneTimes = zoneMinutes.Any(t => !string.IsNullOrWhiteSpace(t));
+        var resetsBefore = zoneResets;
         await SettledAsync();
+        if (enteredZoneTimes && zoneResets != resetsBefore)
+        {
+            error = "Zones changed for this session's start date. Enter your watch times again using the boundaries shown.";
+            return;
+        }
+
         if (physiology is null || loading || profileId != Workouts.ProfileId)
         {
             error = "Wait for your physiology and zones to load.";
