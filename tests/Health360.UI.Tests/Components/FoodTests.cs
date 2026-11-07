@@ -213,6 +213,15 @@ public sealed class FoodTests : AppTestContext
             Assert.StartsWith("Couldn't read your ", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal);
         }, Wait);
         Assert.DoesNotContain("Loading your food log", cut.Markup, StringComparison.Ordinal);
+
+        // Once the log can be read again, another day loads and the failed day's alert goes with it.
+        await App.Database.Db.UpdateSchema(AppSchema.Schema);
+        await ClickAsync(cut, "#food-previous");
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Nothing logged", cut.Find("[aria-labelledby=food-total-title]").TextContent, StringComparison.Ordinal);
+            Assert.DoesNotContain(cut.FindAll("[role=alert]"), a => a.TextContent.Contains("food log", StringComparison.Ordinal));
+        }, Wait);
     }
 
     [Fact]

@@ -226,6 +226,12 @@
     private DateOnly date;
     private bool loaded, busy, readFailed, choicesFailed;
 
+    // A read failure's alert, which only a later successful read of the same thing clears: any other error answers the
+    // user's last tap and stays until their next one.
+    private const string DayReadFailed = "Couldn't read your food log on this device. Leave this tab and come back to try again.";
+    private const string ChoicesReadFailed = "Couldn't read your household's foods on this device. Leave this tab and come back to try again.";
+    private const string SearchFailed = "Couldn't search your household's foods on this device. Try again.";
+
     // Bumped whenever the screen starts following another profile (or none). Work that started earlier checks it after
     // each await, so nothing it reads or saves lands on the next profile's screen.
     private int generation, runGeneration;
@@ -291,6 +297,7 @@
         StopWatching();
         loaded = readFailed = false;
         confirmDelete = null;
+        if (error == DayReadFailed) error = null;
         var profile = watchedProfile;
         var day = date;
         watch = new CancellationTokenSource();
@@ -307,6 +314,7 @@
                         entries = rows;
                         total = FoodLog.Total(rows);
                         loaded = true;
+                        if (error == DayReadFailed) error = null;
                         StateHasChanged();
                     });
                 }
@@ -324,7 +332,7 @@
                     entries = [];
                     total = NutrientTotal.Empty;
                     readFailed = true;
-                    error = "Couldn't read your food log on this device. Leave this tab and come back to try again.";
+                    error = DayReadFailed;
                     StateHasChanged();
                 });
             }
@@ -349,6 +357,7 @@
             households = nextHouseholds;
             results = nextResults;
             choicesFailed = false;
+            if (error == ChoicesReadFailed) error = null;
             if (!households.Any(h => h.Id == householdId)) householdId = households.FirstOrDefault()?.Id ?? "";
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -357,7 +366,7 @@
             if (started != generation) return;
             LogReadFailed(Logger, "household foods", e.GetType().Name);
             choicesFailed = true;
-            error = "Couldn't read your household's foods on this device. Leave this tab and come back to try again.";
+            error = ChoicesReadFailed;
         }
 
         StateHasChanged();
@@ -389,14 +398,17 @@
         try
         {
             var found = string.IsNullOrWhiteSpace(asked) ? await Foods.RecentAsync() : await Foods.SearchAsync(asked);
-            if (asked == query && started == generation) results = found;
+            if (asked != query || started != generation) return;
+            results = found;
+            if (error == SearchFailed) error = null;
         }
         catch (Exception x) when (x is not OperationCanceledException)
         {
-            if (started != generation) return;
+            // Only the latest search speaks: an older one failing late leaves newer matches alone.
+            if (asked != query || started != generation) return;
             LogReadFailed(Logger, "food search", x.GetType().Name);
             results = [];
-            error = "Couldn't search your household's foods on this device. Try again.";
+            error = SearchFailed;
         }
     }
 
