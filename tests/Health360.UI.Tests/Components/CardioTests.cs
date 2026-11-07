@@ -355,4 +355,23 @@ public sealed class CardioTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Contains("Heart rate must be", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
         Assert.Empty(cut.FindAll(".cardio-estimate"));
     }
+
+    [Fact]
+    public async Task A_background_refresh_keeps_the_answer_to_the_last_tap()
+    {
+        var cut = await CardioAsync();
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-average", "oops");
+        await SubmitAsync(cut);
+        cut.WaitForAssertion(() => Assert.Contains("Heart rate must be", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+
+        // Synced zones arrive and the page reloads them without any tap; the zones shown prove that refresh finished.
+        await App.Database.Db.Execute(
+            "INSERT INTO zone_sets (id, profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from) " +
+            "VALUES ('cardio-zones', ?, 'run', 'hr', 'custom', '[0,100,150]', 'bpm', '[0,100,150]', '2026-01-01')", [ProfileId]);
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Stored HR zones", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal), Wait);
+
+        Assert.Contains("Heart rate must be", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal);
+    }
 }

@@ -149,6 +149,11 @@
     private CardioEstimate? preview;
     private string? profileId;
     private string? error;
+    // Errors about loading the form. A refresh that loads it clears these; any other error answers the user's last tap
+    // and stays until their next one, so a background refresh (a sync notification, a profile change) cannot hide it.
+    private const string PhysiologyFailed = "Couldn't read your physiology. Leave this page and come back to retry.";
+    private const string ZonesFailed = "Couldn't read your zones on this device. Leave this page and come back to retry.";
+    private const string StillLoading = "Wait for your physiology and zones to load.";
     private string? status;
     private bool busy;
     // The session is stored; a retry only clears the draft, since saving again would add a second session.
@@ -244,7 +249,7 @@
             loading = false;
             if (Body.Failed)
             {
-                error = "Couldn't read your physiology. Leave this page and come back to retry.";
+                error = PhysiologyFailed;
             }
 
             StateHasChanged();
@@ -283,13 +288,13 @@
                 restoring = null;
             }
             physiology = CardioPhysiology.From(profile);
-            error = null;
+            if (error is PhysiologyFailed or ZonesFailed or StillLoading) error = null;
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
             if (refresh == generation && !disposed)
             {
-                error = "Couldn't read your zones on this device. Leave this page and come back to retry.";
+                error = ZonesFailed;
             }
         }
         finally
@@ -340,7 +345,7 @@
                     physiology = null;
                     preview = null;
                     loading = false;
-                    error = "Couldn't read your zones on this device. Leave this page and come back to retry.";
+                    error = ZonesFailed;
                     StateHasChanged();
                 }
             });
@@ -410,7 +415,7 @@
 
         if (physiology is null || loading || profileId != Workouts.ProfileId)
         {
-            error = "Wait for your physiology and zones to load.";
+            error = StillLoading;
             return;
         }
 
