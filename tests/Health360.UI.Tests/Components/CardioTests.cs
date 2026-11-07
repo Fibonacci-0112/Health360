@@ -161,6 +161,102 @@ public sealed class CardioTests : AppTestContext
     }
 
     [Fact]
+    public async Task An_estimate_requested_while_the_zones_refresh_waits_for_them()
+    {
+        var cut = await CardioAsync();
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-average", "150");
+        var activity = cut.Find("#cardio-activity").GetAttribute("value")!;
+
+        // Start a refresh (as a synced zone change does) and tap Estimate while it may still be reading the zones. Whether
+        // the read yields first varies, so the overlap is tried several times; every tap must produce the estimate.
+        for (var i = 0; i < 10; i++)
+        {
+            var refreshing = ChangeAsync(cut, "#cardio-activity", activity);
+            await ClickAsync(cut, "#preview-cardio");
+            await refreshing;
+
+            Assert.Single(cut.FindAll(".cardio-estimate"));
+            Assert.DoesNotContain("Wait for your physiology", cut.Markup, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task Two_save_taps_while_the_zones_refresh_save_one_session()
+    {
+        var cut = await CardioAsync();
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-rpe", "5");
+        var activity = cut.Find("#cardio-activity").GetAttribute("value")!;
+
+        // Both taps arrive while a refresh is reading the zones, so both wait in the preview.
+        var refreshing = ChangeAsync(cut, "#cardio-activity", activity);
+        var first = SubmitAsync(cut);
+        var second = SubmitAsync(cut);
+        await Task.WhenAll(refreshing, first, second);
+
+        Assert.Single(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
+    }
+
+    [Fact]
+    public async Task Watch_times_a_refresh_clears_while_saving_stop_the_save()
+    {
+        var cut = await CardioAsync();
+        await App.Database.Db.Execute(
+            "INSERT INTO zone_sets (id, profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from) " +
+            "VALUES ('cardio-zones', ?, 'run', 'hr', 'custom', '[0,100,150]', 'bpm', '[0,100,150]', '2026-01-01')", [ProfileId]);
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Stored HR zones", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal), Wait);
+        var bike = Domain.Training.CardioEnergy.Activities.First(a => a.Sport == Domain.Physiology.ZoneSport.Bike).Code;
+        await TypeAsync(cut, "#cardio-duration", "30");
+        for (var i = 1; i <= 3; i++)
+        {
+            await TypeAsync(cut, $"input[aria-label='Zone {i} minutes']", i == 2 ? "30" : "0");
+        }
+
+        // Switching sport starts a refresh that swaps the zone set and clears the entered watch times. Starting it and the
+        // save tap in one dispatcher turn makes the tap land before the refresh can resume, as a tap during a slow zone
+        // read does.
+        await Renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            var refreshing = cut.Find("#cardio-activity").ChangeAsync(new ChangeEventArgs { Value = bike });
+            var save = cut.Find("form").SubmitAsync(EventArgs.Empty);
+            await Task.WhenAll(refreshing, save);
+        });
+
+        Assert.Empty(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Enter your watch times again", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+    }
+
+    [Fact]
+    public async Task Watch_times_typed_while_an_estimate_waits_are_not_lost_silently()
+    {
+        var cut = await CardioAsync();
+        await App.Database.Db.Execute(
+            "INSERT INTO zone_sets (id, profile_id, sport, metric, basis, boundaries, unit, boundaries_canonical, effective_from) " +
+            "VALUES ('cardio-zones', ?, 'run', 'hr', 'custom', '[0,100,150]', 'bpm', '[0,100,150]', '2026-01-01')", [ProfileId]);
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Stored HR zones", cut.Find("[aria-labelledby=cardio-zones-title]").TextContent, StringComparison.Ordinal), Wait);
+        var bike = Domain.Training.CardioEnergy.Activities.First(a => a.Sport == Domain.Physiology.ZoneSport.Bike).Code;
+        await TypeAsync(cut, "#cardio-duration", "30");
+
+        // Estimate is tapped with no watch times while a sport change reloads the zones, and the times are typed during
+        // that wait; the refresh then swaps the zone set and clears them.
+        await Renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            var refreshing = cut.Find("#cardio-activity").ChangeAsync(new ChangeEventArgs { Value = bike });
+            var estimate = cut.Find("#preview-cardio").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+            var typed = cut.Find("input[aria-label='Zone 2 minutes']").TriggerEventAsync("oninput", new ChangeEventArgs { Value = "30" });
+            await Task.WhenAll(refreshing, estimate, typed);
+        });
+
+        Assert.Empty(cut.FindAll(".cardio-estimate"));
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Enter your watch times again", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+    }
+
+    [Fact]
     public async Task Medication_suppresses_age_based_zones_and_hr_energy()
     {
         var cut = await CardioAsync(medication: true);
