@@ -1,3 +1,548 @@
 @page "/food"
+@using System.Globalization
+@using FluentValidation
+@using Health360.Contracts.Body
+@using Health360.Contracts.Nutrition
+@using Health360.Domain.Nutrition
+@using Health360.Domain.Units
+@implements IDisposable
+@inject FoodService Foods
+@inject ProfileService Profiles
 
-<ComingSoon Title="Food" Section="1.3" />
+<div class="page">
+    <div class="page-head">
+        <h1>Food</h1>
+    </div>
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+    <p role="status">@status</p>
+    @if (watchedProfile is null)
+    {
+        <p class="muted" role="status">Waiting for your profile to sync to this device</p>
+    }
+    else
+    {
+        <div class="inline" role="group" aria-label="Day">
+            <button type="button" class="secondary" id="food-previous" @onclick="() => MoveAsync(-1)">Previous day</button>
+            <input id="food-date" type="date" aria-label="Date" value="@date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)" @onchange="DateChangedAsync" />
+            <button type="button" class="secondary" id="food-next" @onclick="() => MoveAsync(1)">Next day</button>
+            @if (date != Foods.Today)
+            {
+                <button type="button" class="secondary" id="food-today" @onclick="() => MoveAsync(Foods.Today.DayNumber - date.DayNumber)">Today</button>
+            }
+        </div>
+
+        <section class="card" aria-labelledby="food-total-title">
+            <h2 id="food-total-title">@(date == Foods.Today ? "Today" : date.ToString("dddd, d MMMM", CultureInfo.CurrentCulture))</h2>
+            @if (!loaded)
+            {
+                <p class="muted" role="status">Loading your food log</p>
+            }
+            else if (entries.Length == 0)
+            {
+                <p class="muted">Nothing logged on this day yet.</p>
+            }
+            else
+            {
+                <dl class="values" id="food-totals">
+                    @foreach (var nutrient in Nutrient.Macros)
+                    {
+                        <div class="value-row"><dt>@MacroName(nutrient)</dt><dd>@TotalText(nutrient)</dd></div>
+                    }
+                </dl>
+                @if (Nutrient.Macros.Any(n => total.Incomplete.Contains(n.Code)))
+                {
+                    <p class="muted small">"At least": some entries don't list that value, so the total counts only those that do.</p>
+                }
+            }
+        </section>
+
+        @foreach (var meal in FoodLog.Meals)
+        {
+            var mealEntries = entries.Where(e => e.Meal == meal).ToList();
+            if (mealEntries.Count == 0) continue;
+            <section class="card" aria-labelledby="@($"meal-{meal}-title")">
+                <h2 id="@($"meal-{meal}-title")">@MealName(meal) · @EnergyText(FoodLog.Total(mealEntries))</h2>
+                <ul class="measurement-list">
+                    @foreach (var entry in mealEntries)
+                    {
+                        <li class="measurement food-entry" data-entry="@entry.Id">
+                            <span class="measurement-text">
+                                <span>@entry.Name@(entry.Brand is null ? "" : $" ({entry.Brand})")</span>
+                                <span class="muted small">@AmountText(entry)@(entry.Energy is { } kcal ? $" · {MetricDisplay.Energy(kcal, Foods.UnitPrefs.Energy)}" : " · energy not listed")</span>
+                            </span>
+                            @if (confirmDelete == entry.Id)
+                            {
+                                <span class="confirm">
+                                    <span>Delete this entry?</span>
+                                    <span class="inline">
+                                        <button type="button" class="danger" @onclick="() => DeleteAsync(entry.Id)" disabled="@busy">Delete</button>
+                                        <button type="button" class="secondary" @onclick="() => confirmDelete = null">Keep</button>
+                                    </span>
+                                </span>
+                            }
+                            else
+                            {
+                                <button type="button" class="secondary" aria-label="@($"Delete {entry.Name}")" @onclick="() => confirmDelete = entry.Id">Delete</button>
+                            }
+                        </li>
+                    }
+                </ul>
+            </section>
+        }
+
+        <section class="card" aria-labelledby="add-food-title">
+            <h2 id="add-food-title">Add food</h2>
+            <div class="field">
+                <label for="food-meal">Meal</label>
+                <select id="food-meal" @bind="meal">
+                    @foreach (var mealCode in FoodLog.Meals)
+                    {
+                        <option value="@mealCode">@MealName(mealCode)</option>
+                    }
+                </select>
+            </div>
+            <div class="field">
+                <label for="food-search">Search your household's foods</label>
+                <input id="food-search" type="search" value="@query" @oninput="SearchAsync" autocomplete="off" />
+            </div>
+            <p class="muted small">Search covers foods your household has added. The USDA catalogue and barcode lookup come with online search.</p>
+            @if (results.Length > 0)
+            {
+                <p class="muted small">@(string.IsNullOrWhiteSpace(query) ? "Recently logged" : "Matching foods")</p>
+                <ul class="measurement-list" id="food-results">
+                    @foreach (var row in results)
+                    {
+                        <li class="measurement">
+                            <span class="measurement-text"><span>@row.Name@(row.Brand is null ? "" : $" ({row.Brand})")</span>
+                                <span class="muted small">@Per100Text(row)</span></span>
+                            <button type="button" class="secondary" aria-label="@($"Choose {row.Name}")" @onclick="() => ChooseAsync(row.Id)">Choose</button>
+                        </li>
+                    }
+                </ul>
+            }
+            else if (!string.IsNullOrWhiteSpace(query))
+            {
+                <p class="muted">No household food matches. Add it below, or use quick add.</p>
+            }
+
+            @if (chosen is not null)
+            {
+                <form class="form" id="log-food-form" @onsubmit="LogAsync" @onsubmit:preventDefault>
+                    <p><strong>@chosen.Name</strong>@(chosen.Brand is null ? "" : $" ({chosen.Brand})")</p>
+                    <div class="field">
+                        <label for="food-amount">Amount</label>
+                        <div class="inline">
+                            <input id="food-amount" inputmode="decimal" @bind="amount" @bind:event="oninput" />
+                            <select id="food-unit" aria-label="Amount unit" @bind="unit">
+                                @foreach (var portion in chosen.Portions)
+                                {
+                                    <option value="@("portion:" + portion.Name)">× @portion.Name</option>
+                                }
+                                @foreach (var unitCode in FoodLog.UnitsFor(chosen.Basis))
+                                {
+                                    <option value="@unitCode">@UnitName(unitCode)</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                    <p class="muted" id="food-preview">@PreviewText()</p>
+                    <div class="inline">
+                        <button type="submit" class="primary" id="log-food" disabled="@busy">Log food</button>
+                        <button type="button" class="secondary" @onclick="() => chosen = null">Cancel</button>
+                    </div>
+                </form>
+            }
+        </section>
+
+        <section class="card" aria-labelledby="quick-add-title">
+            <h2 id="quick-add-title">Quick add</h2>
+            <p class="muted small">Calories or macros without a food, in the meal chosen above. Leave a value blank if you don't know it.</p>
+            <form class="form" id="quick-add-form" @onsubmit="QuickAddAsync" @onsubmit:preventDefault>
+                <div class="field"><label for="quick-name">Name (optional)</label><input id="quick-name" @bind="quickName" @bind:event="oninput" /></div>
+                <div class="field"><label for="quick-energy">Energy (@EnergyUnitName)</label><input id="quick-energy" inputmode="decimal" @bind="quickEnergy" @bind:event="oninput" /></div>
+                <div class="field"><label for="quick-protein">Protein (g)</label><input id="quick-protein" inputmode="decimal" @bind="quickProtein" @bind:event="oninput" /></div>
+                <div class="field"><label for="quick-carbohydrate">Carbohydrate (g)</label><input id="quick-carbohydrate" inputmode="decimal" @bind="quickCarbohydrate" @bind:event="oninput" /></div>
+                <div class="field"><label for="quick-fat">Fat (g)</label><input id="quick-fat" inputmode="decimal" @bind="quickFat" @bind:event="oninput" /></div>
+                <button type="submit" class="primary" id="quick-add" disabled="@busy">Quick add</button>
+            </form>
+        </section>
+
+        <section class="card" aria-labelledby="new-food-title">
+            <h2 id="new-food-title">New food</h2>
+            @if (households.Length == 0)
+            {
+                <p class="muted">Foods are shared with your household. Your household hasn't synced to this device yet.</p>
+            }
+            else
+            {
+                <p class="muted small">Copy the values from the label. They can be for 100 g or ml, or for one serving; the app stores them per 100.</p>
+                <form class="form" id="new-food-form" @onsubmit="SaveFoodAsync" @onsubmit:preventDefault>
+                    @if (households.Length > 1)
+                    {
+                        <div class="field"><label for="new-food-household">Household</label><select id="new-food-household" @bind="householdId">
+                            @foreach (var household in households) { <option value="@household.Id">@household.Name</option> }
+                        </select></div>
+                    }
+                    <div class="field"><label for="new-food-name">Name</label><input id="new-food-name" @bind="foodName" @bind:event="oninput" /></div>
+                    <div class="field"><label for="new-food-brand">Brand (optional)</label><input id="new-food-brand" @bind="foodBrand" @bind:event="oninput" /></div>
+                    <div class="field">
+                        <label for="new-food-per">Values are for</label>
+                        <div class="inline">
+                            <input id="new-food-per" inputmode="decimal" @bind="foodPer" @bind:event="oninput" />
+                            <select id="new-food-basis" aria-label="Measured by" @bind="foodBasis">
+                                <option value="g">g (by weight)</option>
+                                <option value="ml">ml (by volume)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field"><label for="new-food-portion">Name that amount as a portion (optional, such as "1 slice")</label><input id="new-food-portion" @bind="foodPortion" @bind:event="oninput" /></div>
+                    <div class="field"><label for="new-food-energy">Energy (@EnergyUnitName)</label><input id="new-food-energy" inputmode="decimal" @bind="foodEnergy" @bind:event="oninput" /></div>
+                    <div class="field"><label for="new-food-protein">Protein (g)</label><input id="new-food-protein" inputmode="decimal" @bind="foodProtein" @bind:event="oninput" /></div>
+                    <div class="field"><label for="new-food-carbohydrate">Carbohydrate (g)</label><input id="new-food-carbohydrate" inputmode="decimal" @bind="foodCarbohydrate" @bind:event="oninput" /></div>
+                    <div class="field"><label for="new-food-fat">Fat (g)</label><input id="new-food-fat" inputmode="decimal" @bind="foodFat" @bind:event="oninput" /></div>
+                    <button type="submit" class="primary" id="save-food" disabled="@busy">Save food</button>
+                </form>
+            }
+        </section>
+        <p class="muted small">Everything is saved on this device first and syncs when you're online.</p>
+    }
+</div>
+
+@code {
+    private string? watchedProfile, error, status, confirmDelete;
+    private CancellationTokenSource? watch;
+    private DateOnly date;
+    private bool loaded, busy;
+    private FoodLogEntryRow[] entries = [];
+    private NutrientTotal total = NutrientTotal.Empty;
+    private string meal = "breakfast", query = "", amount = "", unit = "";
+    private FoodRow[] results = [];
+    private LoggableFood? chosen;
+    private string quickName = "", quickEnergy = "", quickProtein = "", quickCarbohydrate = "", quickFat = "";
+    private WorkoutService.HouseholdChoice[] households = [];
+    private string householdId = "", foodName = "", foodBrand = "", foodPer = "100", foodBasis = "g", foodPortion = "";
+    private string foodEnergy = "", foodProtein = "", foodCarbohydrate = "", foodFat = "";
+
+    protected override void OnInitialized()
+    {
+        Profiles.Changed += ProfileChanged;
+        Follow();
+    }
+
+    private void ProfileChanged() => _ = InvokeAsync(() =>
+    {
+        if (Foods.ProfileId == watchedProfile)
+        {
+            StateHasChanged();
+        }
+        else
+        {
+            Follow();
+            StateHasChanged();
+        }
+    });
+
+    /// <summary>Follows the signed-in profile: nothing of a previous profile's stays on screen.</summary>
+    private void Follow()
+    {
+        var profileId = Foods.ProfileId;
+        if (profileId == watchedProfile)
+        {
+            return;
+        }
+
+        StopWatching();
+        watchedProfile = profileId;
+        error = status = confirmDelete = null;
+        entries = []; total = NutrientTotal.Empty; results = []; chosen = null; households = [];
+        query = amount = quickName = quickEnergy = quickProtein = quickCarbohydrate = quickFat = "";
+        ClearNewFood();
+        if (profileId is null)
+        {
+            return;
+        }
+
+        date = Foods.Today;
+        meal = Foods.Hour switch { < 11 => "breakfast", < 16 => "lunch", < 21 => "dinner", _ => "snack" };
+        WatchDay();
+        _ = InvokeAsync(LoadChoicesAsync);
+    }
+
+    private void WatchDay()
+    {
+        StopWatching();
+        loaded = false;
+        confirmDelete = null;
+        var profile = watchedProfile;
+        var day = date;
+        watch = new CancellationTokenSource();
+        var token = watch.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var rows in Foods.WatchDay(day, token))
+                {
+                    await InvokeAsync(() =>
+                    {
+                        if (token.IsCancellationRequested || profile != Foods.ProfileId) return;
+                        entries = rows;
+                        total = FoodLog.Total(rows);
+                        loaded = true;
+                        StateHasChanged();
+                    });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception e) when (e is not ObjectDisposedException)
+            {
+                await InvokeAsync(() =>
+                {
+                    if (token.IsCancellationRequested) return;
+                    error = "Couldn't read your food log on this device. Leave this tab and come back to try again.";
+                    StateHasChanged();
+                });
+            }
+        }, CancellationToken.None);
+    }
+
+    private void StopWatching()
+    {
+        watch?.Cancel();
+        watch?.Dispose();
+        watch = null;
+    }
+
+    private async Task LoadChoicesAsync()
+    {
+        var profile = watchedProfile;
+        try
+        {
+            var nextHouseholds = await Foods.HouseholdsAsync();
+            var nextResults = string.IsNullOrWhiteSpace(query) ? await Foods.RecentAsync() : await Foods.SearchAsync(query);
+            if (profile != Foods.ProfileId) return;
+            households = nextHouseholds;
+            results = nextResults;
+            if (!households.Any(h => h.Id == householdId)) householdId = households.FirstOrDefault()?.Id ?? "";
+            StateHasChanged();
+        }
+        catch (Exception e) when (e is InvalidOperationException)
+        {
+            // The profile went away while loading; Follow clears the screen.
+        }
+    }
+
+    private async Task MoveAsync(int days)
+    {
+        date = date.AddDays(days);
+        status = null;
+        WatchDay();
+        await Task.CompletedTask;
+    }
+
+    private Task DateChangedAsync(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParseExact(e.Value?.ToString(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var picked) && picked != date)
+        {
+            return MoveAsync(picked.DayNumber - date.DayNumber);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task SearchAsync(ChangeEventArgs e)
+    {
+        query = e.Value?.ToString() ?? "";
+        var asked = query;
+        var profile = watchedProfile;
+        var found = string.IsNullOrWhiteSpace(asked) ? await Foods.RecentAsync() : await Foods.SearchAsync(asked);
+        if (asked == query && profile == Foods.ProfileId) results = found;
+    }
+
+    private async Task ChooseAsync(string id)
+    {
+        error = null;
+        var row = await Foods.FoodAsync(id);
+        chosen = row?.ToFood();
+        if (chosen is null)
+        {
+            error = "That food is no longer on this device.";
+            return;
+        }
+
+        unit = chosen.Portions.Count > 0
+            ? "portion:" + chosen.Portions[0].Name
+            : chosen.Basis == FoodBasis.Mass ? UnitPrefOptions.FoodMass.ToCode(Foods.UnitPrefs.FoodMass) : UnitPrefOptions.Volume.ToCode(Foods.UnitPrefs.Volume);
+        amount = chosen.Portions.Count > 0 ? "1" : "";
+    }
+
+    private (string? Unit, string? Portion) SplitUnit() =>
+        unit.StartsWith("portion:", StringComparison.Ordinal) ? (null, unit["portion:".Length..]) : (unit, null);
+
+    private string PreviewText()
+    {
+        if (chosen is null || NumberText.Parse(amount) is not { } quantity || quantity <= 0) return "Enter an amount to see what it holds.";
+        try
+        {
+            var (u, portion) = SplitUnit();
+            var (_, amounts) = FoodLog.Compute(chosen, quantity, u, portion);
+            return string.Join(" · ", Nutrient.Macros.Select(n => amounts[n] is { } v
+                ? $"{MacroName(n)} {(n == Nutrient.Energy ? MetricDisplay.Energy(v, Foods.UnitPrefs.Energy) : MetricDisplay.Format(v, "g"))}"
+                : $"{MacroName(n)} not listed"));
+        }
+        catch (ArgumentException e)
+        {
+            return e.Message;
+        }
+    }
+
+    private Task LogAsync() => RunAsync(async () =>
+    {
+        if (chosen is null) return;
+        var quantity = NumberText.Parse(amount) ?? throw new ArgumentException("Enter the amount as a number.");
+        var (u, portion) = SplitUnit();
+        var name = chosen.Name;
+        await Foods.LogAsync(chosen.Id, meal, date, quantity, u, portion);
+        chosen = null;
+        amount = "";
+        status = $"Logged {name} in {MealName(meal).ToLowerInvariant()}. Saved on this device, ready to sync.";
+        await LoadChoicesAsync();
+    });
+
+    private Task QuickAddAsync() => RunAsync(async () =>
+    {
+        var energy = Optional(quickEnergy, "energy");
+        await Foods.QuickAddAsync(meal, date, quickName, energy is { } e ? ToKcal(e) : null,
+            Optional(quickProtein, "protein"), Optional(quickCarbohydrate, "carbohydrate"), Optional(quickFat, "fat"));
+        quickName = quickEnergy = quickProtein = quickCarbohydrate = quickFat = "";
+        status = $"Added to {MealName(meal).ToLowerInvariant()}. Saved on this device, ready to sync.";
+    });
+
+    private Task SaveFoodAsync() => RunAsync(async () =>
+    {
+        if (string.IsNullOrEmpty(householdId)) throw new ArgumentException("Choose a household first.");
+        var per = NumberText.Parse(foodPer) ?? throw new ArgumentException("Enter the amount the values are for as a number.");
+        FoodBases.TryParse(foodBasis, out var basis);
+        var energy = Optional(foodEnergy, "energy");
+        PortionInput[] portions = string.IsNullOrWhiteSpace(foodPortion) ? [] : [new PortionInput(foodPortion.Trim(), per)];
+        var input = new FoodInput(foodName, string.IsNullOrWhiteSpace(foodBrand) ? null : foodBrand, basis, per,
+            energy is { } e ? ToKcal(e) : null, Optional(foodProtein, "protein"), Optional(foodCarbohydrate, "carbohydrate"), Optional(foodFat, "fat"), portions);
+        var id = await Foods.AddFoodAsync(householdId, input);
+        var name = input.Name.Trim();
+        ClearNewFood();
+        await ChooseAsync(id);
+        status = $"Saved {name} for your household. Enter an amount above to log it.";
+    });
+
+    private Task DeleteAsync(string id) => RunAsync(async () =>
+    {
+        await Foods.DeleteAsync(id);
+        confirmDelete = null;
+        status = "Entry deleted.";
+    });
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        if (busy || watchedProfile is null || watchedProfile != Foods.ProfileId) return;
+        busy = true;
+        error = status = null;
+        try
+        {
+            await action();
+        }
+        catch (ValidationException e)
+        {
+            error = string.Join(" ", e.Errors.Select(x => x.ErrorMessage).Distinct(StringComparer.Ordinal));
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            error = e.Message;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            error = "Couldn't save on this device. Try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private void ClearNewFood()
+    {
+        foodName = foodBrand = foodPortion = foodEnergy = foodProtein = foodCarbohydrate = foodFat = "";
+        foodPer = "100";
+        foodBasis = "g";
+    }
+
+    /// <summary>A blank field is unknown; anything else must be a number.</summary>
+    private static double? Optional(string text, string what) =>
+        string.IsNullOrWhiteSpace(text) ? null : NumberText.Parse(text) ?? throw new ArgumentException($"Enter {what} as a number, or leave it blank.");
+
+    /// <summary>An energy typed in the user's unit, in kcal.</summary>
+    private double ToKcal(double value) =>
+        Foods.UnitPrefs.Energy == EnergyUnit.Kilojoule ? Conversion.Convert(value, Unit.Kilojoule, Unit.Kilocalorie) : value;
+
+    private string EnergyUnitName => Foods.UnitPrefs.Energy == EnergyUnit.Kilojoule ? "kJ" : "kcal";
+
+    private string EnergyText(NutrientTotal sum) =>
+        sum.Amounts[Nutrient.Energy] is { } kcal
+            ? (sum.Incomplete.Contains(Nutrient.Energy.Code) ? "at least " : "") + MetricDisplay.Energy(kcal, Foods.UnitPrefs.Energy)
+            : "energy not listed";
+
+    private string TotalText(Nutrient nutrient)
+    {
+        if (nutrient == Nutrient.Energy) return EnergyText(total);
+        return total.Amounts[nutrient] is { } grams
+            ? (total.Incomplete.Contains(nutrient.Code) ? "at least " : "") + MetricDisplay.Format(grams, "g")
+            : "not listed";
+    }
+
+    private string Per100Text(FoodRow row)
+    {
+        var basis = row.Basis == "ml" ? "100 ml" : "100 g";
+        return row.Energy100 is { } kcal ? $"{MetricDisplay.Energy(kcal, Foods.UnitPrefs.Energy)} per {basis}" : $"energy not listed per {basis}";
+    }
+
+    private static string AmountText(FoodLogEntryRow entry)
+    {
+        if (entry.Quantity is not { } quantity) return entry.EntryMethod == "quick_add" ? "Quick add" : "";
+        var number = quantity.ToString("0.##", CultureInfo.CurrentCulture);
+        return entry.QuantityUnit == "portion" ? $"{number} × {entry.PortionName}" : $"{number} {UnitName(entry.QuantityUnit ?? "")}";
+    }
+
+    private static string UnitName(string code) => code switch
+    {
+        "fl_oz" => "fl oz",
+        "cup" => "cups",
+        "l" => "L",
+        _ => code,
+    };
+
+    private static string MealName(string code) => code switch
+    {
+        "breakfast" => "Breakfast",
+        "lunch" => "Lunch",
+        "dinner" => "Dinner",
+        _ => "Snacks",
+    };
+
+    private static string MacroName(Nutrient nutrient) => nutrient.Code switch
+    {
+        "energy" => "Energy",
+        "protein" => "Protein",
+        "carbohydrate" => "Carbohydrate",
+        _ => "Fat",
+    };
+
+    public void Dispose()
+    {
+        Profiles.Changed -= ProfileChanged;
+        StopWatching();
+    }
+}
