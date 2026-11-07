@@ -9,6 +9,39 @@ public sealed class CardioTests : AppTestContext
 {
     private DateOnly Today => DateOnly.FromDateTime(App.Clock.Now.DateTime);
 
+    // The alert Estimate and Save show when a refresh cleared the watch times they were waiting on.
+    private const string TimesClearedAlert = "start date. Enter your watch times again using the boundaries shown.";
+
+    // Records the markup of every render while it is subscribed. A refresh can arrive at any point (for example a second
+    // zone-watch notification) and rebuilds the form, clearing a transient alert or estimate, so a check on the final page
+    // alone depends on whether one happened to arrive; a check across the recorded renders does not.
+    private sealed class RenderLog : IDisposable
+    {
+        private readonly IRenderedComponent<Routes> cut;
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> markup = new();
+
+        public RenderLog(IRenderedComponent<Routes> cut)
+        {
+            this.cut = cut;
+            cut.OnMarkupUpdated += Record;
+        }
+
+        public string[] Renders => [.. markup];
+
+        public void Dispose() => cut.OnMarkupUpdated -= Record;
+
+        private void Record(object? sender, EventArgs e) => markup.Enqueue(cut.Markup);
+    }
+
+    // What a refresh that clears watch times leaves behind: empty zone inputs and a status saying why, which only a
+    // profile switch clears.
+    private static void WaitForClearedTimesExplained(IRenderedComponent<Routes> cut) =>
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains(cut.FindAll("[role=status]"), s => s.TextContent.Contains("Enter your watch times again", StringComparison.Ordinal));
+            Assert.All(cut.FindAll("input[aria-label^='Zone '][aria-label$=' minutes']"), i => Assert.True(string.IsNullOrEmpty(i.GetAttribute("value"))));
+        }, Wait);
+
     private async Task<IRenderedComponent<Routes>> CardioAsync(bool medication = false, bool weight = true)
     {
         await SignedInAndOnboardedAsync("{\"distance\":\"mi\",\"pace\":\"min_per_mi\"}");
@@ -217,6 +250,7 @@ public sealed class CardioTests : AppTestContext
         // Switching sport starts a refresh that swaps the zone set and clears the entered watch times. Starting it and the
         // save tap in one dispatcher turn makes the tap land before the refresh can resume, as a tap during a slow zone
         // read does.
+        using var log = new RenderLog(cut);
         await Renderer.Dispatcher.InvokeAsync(async () =>
         {
             var refreshing = cut.Find("#cardio-activity").ChangeAsync(new ChangeEventArgs { Value = bike });
@@ -224,9 +258,9 @@ public sealed class CardioTests : AppTestContext
             await Task.WhenAll(refreshing, save);
         });
 
+        WaitForClearedTimesExplained(cut);
         Assert.Empty(await CardioLog.SessionsAsync(App.Database.Db, ProfileId, Today, Today));
-        cut.WaitForAssertion(() =>
-            Assert.Contains("Enter your watch times again", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Contains(log.Renders, m => m.Contains(TimesClearedAlert, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -241,15 +275,9 @@ public sealed class CardioTests : AppTestContext
         var bike = Domain.Training.CardioEnergy.Activities.First(a => a.Sport == Domain.Physiology.ZoneSport.Bike).Code;
         await TypeAsync(cut, "#cardio-duration", "30");
 
-        // Every render from here on is recorded. Any later refresh (for example another zone-watch notification) rebuilds
-        // the form and clears the estimate's alert and any estimate, so reading the page only at the end would depend on
-        // whether such a refresh happened to arrive.
-        var rendered = new System.Collections.Concurrent.ConcurrentQueue<string>();
-        void Record(object? sender, EventArgs e) => rendered.Enqueue(cut.Markup);
-        cut.OnMarkupUpdated += Record;
-
         // Estimate is tapped with no watch times while a sport change reloads the zones, and the times are typed during
         // that wait; the refresh then swaps the zone set and clears them.
+        using var log = new RenderLog(cut);
         await Renderer.Dispatcher.InvokeAsync(async () =>
         {
             var refreshing = cut.Find("#cardio-activity").ChangeAsync(new ChangeEventArgs { Value = bike });
@@ -258,18 +286,11 @@ public sealed class CardioTests : AppTestContext
             await Task.WhenAll(refreshing, estimate, typed);
         });
 
-        cut.WaitForAssertion(() =>
-        {
-            // The refresh that cleared the times says so; only a profile switch clears this status.
-            Assert.Contains(cut.FindAll("[role=status]"), s => s.TextContent.Contains("Enter your watch times again", StringComparison.Ordinal));
-            Assert.All(cut.FindAll("input[aria-label^='Zone '][aria-label$=' minutes']"), i => Assert.True(string.IsNullOrEmpty(i.GetAttribute("value"))));
-        }, Wait);
-        cut.OnMarkupUpdated -= Record;
+        WaitForClearedTimesExplained(cut);
 
         // The waiting estimate stopped and asked for the times again, and no render ever showed an estimate without them.
-        var renders = rendered.ToArray();
-        Assert.Contains(renders, m => m.Contains("start date. Enter your watch times again using the boundaries shown.", StringComparison.Ordinal));
-        Assert.DoesNotContain(renders, m => m.Contains("cardio-estimate", StringComparison.Ordinal));
+        Assert.Contains(log.Renders, m => m.Contains(TimesClearedAlert, StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Renders, m => m.Contains("cardio-estimate", StringComparison.Ordinal));
     }
 
     [Fact]
