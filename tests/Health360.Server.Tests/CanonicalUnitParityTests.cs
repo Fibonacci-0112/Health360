@@ -228,6 +228,43 @@ public sealed class CanonicalUnitParityTests
         await AssertSameAsync(cases, "select private.food_amount_base(c.value, c.from_unit, c.to_unit, null)");
     }
 
+    /// <summary>
+    /// A household's copy of a catalogue food has the id <see cref="FoodCopy.IdFor"/> gives on every device, and the server
+    /// checks it with <c>private.food_copy_id</c>; the two must agree, or every copy would be quarantined.
+    /// </summary>
+    [Fact]
+    public async Task FoodCopyIdsAreDerivedAsDomainDoes()
+    {
+        Assert.SkipUnless(ConnectionString is { Length: > 0 }, $"Set {EnvironmentVariable} to run the database tests.");
+
+        var random = new Random(20261107);
+        var pairs = Enumerable.Range(0, 50).Select(_ => (Household: RandomGuid(random), Food: RandomGuid(random))).ToList();
+
+        await using var connection = await OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            select private.food_copy_id(c.household, c.food)
+            from unnest($1::uuid[], $2::uuid[]) with ordinality as c (household, food, n)
+            order by c.n
+            """,
+            connection);
+        command.Parameters.Add(new NpgsqlParameter { Value = pairs.Select(p => p.Household).ToArray() });
+        command.Parameters.Add(new NpgsqlParameter { Value = pairs.Select(p => p.Food).ToArray() });
+        await using var reader = await command.ExecuteReaderAsync(Ct);
+        foreach (var (household, food) in pairs)
+        {
+            Assert.True(await reader.ReadAsync(Ct));
+            Assert.Equal(FoodCopy.IdFor(household, food), reader.GetGuid(0));
+        }
+    }
+
+    private static Guid RandomGuid(Random random)
+    {
+        var bytes = new byte[16];
+        random.NextBytes(bytes);
+        return new Guid(bytes);
+    }
+
     /// <summary>The seeded <c>nutrients</c> rows are Domain's catalogue: the same codes, units and order.</summary>
     [Fact]
     public async Task NutrientsAreDomainsCatalogue()

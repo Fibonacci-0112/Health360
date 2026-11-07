@@ -195,3 +195,31 @@ public class FoodAmountTests
         Assert.False(FoodBases.TryParse("kg", out _));
     }
 }
+
+public class FoodCopyTests
+{
+    private static readonly Guid Household = Guid.Parse("01900000-0000-7000-8000-000000000001");
+    private static readonly Guid Oats = Guid.Parse("70000000-0000-7000-8000-000000000001");
+
+    [Fact]
+    public void Every_device_gets_the_same_copy_id() =>
+        Assert.Equal(FoodCopy.IdFor(Household, Oats), FoodCopy.IdFor(Household, Oats));
+
+    [Fact]
+    public void Each_household_and_food_gets_its_own_copy()
+    {
+        var other = Guid.Parse("01900000-0000-7000-8000-000000000002");
+
+        Assert.NotEqual(FoodCopy.IdFor(Household, Oats), FoodCopy.IdFor(other, Oats));
+        Assert.NotEqual(FoodCopy.IdFor(Household, Oats), FoodCopy.IdFor(Household, other));
+    }
+
+    [Fact]
+    public void The_id_is_a_version_8_uuid()
+    {
+        var id = FoodCopy.IdFor(Household, Oats).ToString("D");
+
+        Assert.Equal('8', id[14]);
+        Assert.Contains(id[19], "89ab");
+    }
+}

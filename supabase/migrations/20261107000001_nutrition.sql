@@ -2,8 +2,9 @@
 --
 --   nutrients          (G)   what can be recorded: code, fixed unit (kcal, g, mg, ug) and display order.
 --   foods              (G/H) the food catalogue: system rows (household_id null, written by tools/importers with the
---                            service role: USDA FoodData Central, Open Food Facts) and a household's own foods.
---                            Values are per 100 g or 100 ml (basis), with named portions.
+--                            service role: USDA FoodData Central, Open Food Facts) and a household's own foods,
+--                            among them its copies of catalogue foods it uses (copied_from). Values are per 100 g
+--                            or 100 ml (basis), with named portions.
 --   recipes            (H)   a household's recipe: servings and the cooked weight as entered.
 --   recipe_ingredients (H)   one food in a recipe, in order, with its amount as entered and in g or ml.
 --   food_log_entries   (U)   one thing eaten: a snapshot of its name and nutrients for the amount eaten, so the log
@@ -14,7 +15,9 @@
 -- category: the owner reads and writes; a household member reads only with a 'nutrition' grant.
 --
 -- System foods are in the publication (every synced table must be) but no stream selects them: they are searched
--- online through the API (PLAN.md §2.3). A log entry or ingredient copies what it needs from them.
+-- online through the API (PLAN.md §2.3). A log entry keeps its own snapshot of what it needs. A recipe uses only its
+-- household's foods: a catalogue food is copied into the household the first time it is used, and the copy syncs to
+-- every member's devices, so the recipe can be totalled offline anywhere.
 --
 -- Not here yet (step 3's later deliverables): saved_meals, nutrition_targets, label_scans and its bucket, nutrient
 -- reference intakes (nutrient_dri), water, and food costs.
@@ -111,6 +114,21 @@ insert into public.nutrients (code, unit, position) values
 -- foods (G system rows, H household rows)
 -------------------------------------------------------------------------------
 
+-- The id of a household's copy of a catalogue food: a UUIDv8 (RFC 9562 §5.8) from the first 128 bits of
+-- SHA-256('health360/food_copies/<household id>/<catalogue food id>'), as private.metric_pin_id builds pins' ids.
+-- Every device computes the same id (Health360.Domain FoodCopy.IdFor), so two members copying the same food offline
+-- upsert one row instead of the second being rejected as a duplicate.
+create function private.food_copy_id(household_id uuid, food_id uuid) returns uuid
+language plpgsql immutable set search_path = '' as $$
+declare
+  h bytea := substring(
+    pg_catalog.sha256(convert_to('health360/food_copies/' || household_id::text || '/' || food_id::text, 'UTF8')) from 1 for 16);
+begin
+  h := set_byte(h, 6, (get_byte(h, 6) & 15) | 128); -- version 8
+  h := set_byte(h, 8, (get_byte(h, 8) & 63) | 128); -- RFC 9562 variant
+  return encode(h, 'hex')::uuid;
+end $$;
+
 create table public.foods (
   id uuid primary key default gen_random_uuid(),
   -- Null for a catalogue food; the household that owns it otherwise.
@@ -135,9 +153,18 @@ create table public.foods (
   portions jsonb not null default '[]'::jsonb check (private.is_food_portions(portions)),
   -- The values were checked against the label or the source (a confirmed scan, a reviewed custom food).
   verified boolean not null default false,
+  -- For a household's copy, the catalogue food it was copied from; its source is that food's. Not a foreign key:
+  -- it records where the values came from, and the copy stands alone if the catalogue row is ever removed.
+  copied_from uuid,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint foods_catalogue_source check ((household_id is null) = (source in ('usda_fdc', 'open_food_facts'))),
+  -- Catalogue rows have a catalogue source; household rows are entered or scanned, or are copies keeping their
+  -- catalogue food's source.
+  constraint foods_catalogue_source check (
+    case when household_id is null then source in ('usda_fdc', 'open_food_facts') and copied_from is null
+         else (source in ('usda_fdc', 'open_food_facts')) = (copied_from is not null) end
+  ),
+  constraint foods_copy_id check (copied_from is null or id = private.food_copy_id(household_id, copied_from)),
   constraint foods_external_id_catalogue check (external_id is null or household_id is null),
   -- 100 g of food can't hold more than 100 g of one macronutrient (definitional, not a plausibility range).
   constraint foods_mass_macros check (
@@ -152,7 +179,7 @@ create trigger foods_updated_at before update on public.foods
 
 -- A household's food stays in its household: members' recipes use it. Its basis is fixed too: recipe ingredients
 -- store their amounts in it, and values per 100 ml mean something else per 100 g, so a food sold the other way is a
--- new food. SQLSTATE class 23, so uploads quarantine.
+-- new food. A copy stays a copy of the same catalogue food. SQLSTATE class 23, so uploads quarantine.
 create function private.foods_fixed() returns trigger
 language plpgsql set search_path = '' as $$
 begin
@@ -162,11 +189,48 @@ begin
   if new.basis is distinct from old.basis then
     raise exception 'a food''s basis cannot change' using errcode = '23514';
   end if;
+  if new.copied_from is distinct from old.copied_from then
+    raise exception 'a copied food cannot change what it was copied from' using errcode = '23514';
+  end if;
   return new;
 end $$;
 
-create trigger foods_fixed before update of household_id, basis on public.foods
+create trigger foods_fixed before update of household_id, basis, copied_from on public.foods
   for each row execute function private.foods_fixed();
+
+-- A new copy takes its values from the catalogue row, whatever the client sent, so a household food that says it
+-- came from USDA FDC or Open Food Facts holds what that source published. The household may edit it afterwards (add
+-- a portion, say). Reads the catalogue with the writer's rights; every signed-in user can read it. SQLSTATE 23503
+-- when there is no such catalogue food, as for a broken foreign key, so the upload quarantines.
+create function private.foods_copy() returns trigger
+language plpgsql set search_path = '' as $$
+declare
+  original public.foods;
+begin
+  if new.copied_from is null then
+    return new;
+  end if;
+  select * into original from public.foods f where f.id = new.copied_from and f.household_id is null;
+  if not found then
+    raise exception 'no catalogue food %', new.copied_from using errcode = '23503';
+  end if;
+  new.source := original.source;
+  new.name := original.name;
+  new.brand := original.brand;
+  new.barcode := original.barcode;
+  new.basis := original.basis;
+  new.energy_100 := original.energy_100;
+  new.protein_100 := original.protein_100;
+  new.carbohydrate_100 := original.carbohydrate_100;
+  new.fat_100 := original.fat_100;
+  new.nutrients_100 := original.nutrients_100;
+  new.portions := original.portions;
+  new.verified := original.verified;
+  return new;
+end $$;
+
+create trigger foods_copy before insert on public.foods
+  for each row execute function private.foods_copy();
 
 -------------------------------------------------------------------------------
 -- recipes, recipe_ingredients (H)
@@ -221,8 +285,8 @@ create table public.recipe_ingredients (
   household_id uuid not null,
   recipe_id uuid not null,
   position integer not null check (position >= 0),
-  -- A catalogue food or one of the recipe's own household (the policies check it). A food in use can't be deleted
-  -- (the upload is quarantined), so a recipe never loses one silently.
+  -- A food of the recipe's own household, a copy for a catalogue food (the policies check it). A food in use can't
+  -- be deleted (the upload is quarantined), so a recipe never loses one silently.
   food_id uuid not null references public.foods (id),
   quantity double precision not null check (quantity >= 0 and quantity < 'Infinity'),
   quantity_unit text not null check (quantity_unit in ('g', 'kg', 'oz', 'lb', 'ml', 'l', 'fl_oz', 'cup', 'tbsp', 'tsp', 'portion')),
@@ -360,10 +424,11 @@ create trigger food_log_entries_canonical before insert or update on public.food
 -- The check constraints and triggers call these with the caller's rights (00_rls_coverage checks the grants). The
 -- importer writes catalogue foods as service_role, which bypasses RLS but not function privileges.
 revoke all on function private.is_nutrient_map(jsonb), private.is_nutrient_codes(jsonb), private.is_food_portions(jsonb),
-  private.food_amount_base(double precision, text, text, double precision) from public, anon;
+  private.food_amount_base(double precision, text, text, double precision), private.food_copy_id(uuid, uuid) from public, anon;
 grant execute on function private.is_nutrient_map(jsonb), private.is_nutrient_codes(jsonb), private.is_food_portions(jsonb),
-  private.food_amount_base(double precision, text, text, double precision) to authenticated, service_role;
-revoke all on function private.foods_fixed(), private.recipes_canonical(), private.recipes_fixed_household(),
+  private.food_amount_base(double precision, text, text, double precision), private.food_copy_id(uuid, uuid)
+  to authenticated, service_role;
+revoke all on function private.foods_fixed(), private.foods_copy(), private.recipes_canonical(), private.recipes_fixed_household(),
   private.recipe_ingredients_canonical(), private.food_log_entries_canonical() from public, anon;
 
 alter table public.nutrients enable row level security;
@@ -400,18 +465,19 @@ create policy recipes_update on public.recipes for update to authenticated
 create policy recipes_delete on public.recipes for delete to authenticated
   using (household_id in (select private.my_household_ids()));
 
--- An ingredient may only use a catalogue food or one of its recipe's household. Any food its writer can see would let
--- a member of two households put one household's food in the other's recipe, where that household's other members
--- can't read it, and where the foreign key would stop its own household deleting it.
+-- An ingredient may only use a food of its recipe's household. Any food its writer can see would let a member of two
+-- households put one household's food in the other's recipe, where that household's other members can't read it,
+-- and where the foreign key would stop its own household deleting it. A catalogue food isn't synced, so the
+-- household's members could not total the recipe offline: it is used through the household's copy.
 create policy recipe_ingredients_select on public.recipe_ingredients for select to authenticated
   using (household_id in (select private.my_household_ids()));
 create policy recipe_ingredients_insert on public.recipe_ingredients for insert to authenticated
   with check (household_id in (select private.my_household_ids())
-    and food_id in (select f.id from public.foods f where f.household_id is null or f.household_id = recipe_ingredients.household_id));
+    and food_id in (select f.id from public.foods f where f.household_id = recipe_ingredients.household_id));
 create policy recipe_ingredients_update on public.recipe_ingredients for update to authenticated
   using (household_id in (select private.my_household_ids()))
   with check (household_id in (select private.my_household_ids())
-    and food_id in (select f.id from public.foods f where f.household_id is null or f.household_id = recipe_ingredients.household_id));
+    and food_id in (select f.id from public.foods f where f.household_id = recipe_ingredients.household_id));
 create policy recipe_ingredients_delete on public.recipe_ingredients for delete to authenticated
   using (household_id in (select private.my_household_ids()));
 

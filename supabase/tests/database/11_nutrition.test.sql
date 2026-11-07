@@ -2,7 +2,7 @@
 -- log entries, which follow the 'nutrition' grant. Amounts as entered get canonical g or ml. Runs as `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(52);
+select plan(60);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000000a', 'a@example.com'),
@@ -106,8 +106,38 @@ select throws_ok(
   $$ update foods set basis = 'ml' where id = '70000000-0000-7000-8000-000000000002' $$,
   '23514', null, 'a food''s basis cannot change');
 
+-------- Copies of catalogue foods
+select set_config('t.copy', private.food_copy_id(current_setting('t.ha')::uuid, '70000000-0000-7000-8000-000000000001')::text, true);
+select lives_ok(
+  format($$ insert into foods (id, household_id, copied_from, source, name, basis, energy_100)
+            values (%L, %L, '70000000-0000-7000-8000-000000000001', 'usda_fdc', 'My oats', 'ml', 1) $$,
+         current_setting('t.copy'), current_setting('t.ha')),
+  'A can copy a catalogue food into their household');
+select is(
+  (select row(name, basis, energy_100, nutrients_100 ->> 'fiber', jsonb_array_length(portions))::text from foods
+   where id = current_setting('t.copy')::uuid),
+  row('Oats', 'g', 379::double precision, '10.1', 1)::text,
+  'a copy takes the catalogue food''s values, whatever the client sent');
+select lives_ok(
+  format($$ insert into foods (id, household_id, copied_from, source, name) values (%L, %L, '70000000-0000-7000-8000-000000000001', 'usda_fdc', 'Oats')
+            on conflict (id) do update set name = excluded.name, portions = excluded.portions $$,
+         current_setting('t.copy'), current_setting('t.ha')),
+  'a second device copying the same food upserts the same row');
+select is((select count(*) from foods where copied_from is not null), 1::bigint, 'there is still one copy');
+select throws_ok(
+  format($$ insert into foods (household_id, copied_from, source, name) values (%L, '70000000-0000-7000-8000-000000000001', 'usda_fdc', 'x') $$,
+         current_setting('t.ha')),
+  '23514', null, 'a copy has the id derived from its household and food');
+select throws_ok(
+  format($$ insert into foods (id, household_id, copied_from, source, name) values (%L, %L, '70000000-0000-7000-8000-000000000002', 'usda_fdc', 'x') $$,
+         private.food_copy_id(current_setting('t.ha')::uuid, '70000000-0000-7000-8000-000000000002'), current_setting('t.ha')),
+  '23503', null, 'only a catalogue food can be copied');
+select throws_ok(
+  format($$ update foods set copied_from = '70000000-0000-7000-8000-000000000002' where id = %L $$, current_setting('t.copy')),
+  '23514', null, 'a copy stays a copy of the same food');
+
 select pg_temp.login('c');
-select is((select count(*) from foods), 3::bigint, 'a household member sees its foods');
+select is((select count(*) from foods), 4::bigint, 'a household member sees its foods and copies');
 select pg_temp.login('b');
 select is((select count(*) from foods), 1::bigint, 'a stranger sees only catalogue foods');
 
@@ -118,11 +148,16 @@ select lives_ok(
             values ('71000000-0000-7000-8000-000000000001', %L, 'Porridge', 2, 1, 'lb') $$, current_setting('t.ha')),
   'A can add a recipe');
 select is((select cooked_weight_g from recipes), 453.59237::double precision, 'the cooked weight gets canonical grams');
-select lives_ok(
+select throws_ok(
   format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, basis, base_amount)
             values (%L, '71000000-0000-7000-8000-000000000001', 0, '70000000-0000-7000-8000-000000000001', 2, 'oz', 'g', 0) $$,
          current_setting('t.ha')),
-  'an ingredient may use a catalogue food');
+  '42501', null, 'an ingredient cannot use a catalogue food directly');
+select lives_ok(
+  format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, basis, base_amount)
+            values (%L, '71000000-0000-7000-8000-000000000001', 0, %L, 2, 'oz', 'g', 0) $$,
+         current_setting('t.ha'), current_setting('t.copy')),
+  'an ingredient uses the household''s copy of a catalogue food');
 select is((select base_amount from recipe_ingredients where position = 0), 56.69904625::double precision,
   'the server recomputes the amount in grams, whatever the client sent');
 select lives_ok(
@@ -150,18 +185,18 @@ select throws_ok(
   '23514', null, 'a portion must be one of the food''s');
 select throws_ok(
   format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, basis, base_amount)
-            values (%L, '71000000-0000-7000-8000-000000000001', 2, '70000000-0000-7000-8000-000000000001', 1, 'cup', 'ml', 237) $$,
-         current_setting('t.ha')),
+            values (%L, '71000000-0000-7000-8000-000000000001', 2, %L, 1, 'cup', 'ml', 237) $$,
+         current_setting('t.ha'), current_setting('t.copy')),
   '23514', null, 'an ingredient''s basis must be its food''s');
 select throws_ok(
   format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, basis, base_amount)
-            values (%L, '71000000-0000-7000-8000-000000000001', 2, '70000000-0000-7000-8000-000000000001', 1, 'cup', 'g', 81) $$,
-         current_setting('t.ha')),
+            values (%L, '71000000-0000-7000-8000-000000000001', 2, %L, 1, 'cup', 'g', 81) $$,
+         current_setting('t.ha'), current_setting('t.copy')),
   '23514', null, 'a volume unit cannot measure a food listed per 100 g');
 select throws_ok(
   format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, basis, base_amount)
-            values (%L, '71000000-0000-7000-8000-000000000001', 2, '70000000-0000-7000-8000-000000000001', 1, 'portion', 'g', 81) $$,
-         current_setting('t.ha')),
+            values (%L, '71000000-0000-7000-8000-000000000001', 2, %L, 1, 'portion', 'g', 81) $$,
+         current_setting('t.ha'), current_setting('t.copy')),
   '23514', null, 'a portion names which one');
 select throws_ok(
   format($$ delete from foods where id = '70000000-0000-7000-8000-000000000002' $$),

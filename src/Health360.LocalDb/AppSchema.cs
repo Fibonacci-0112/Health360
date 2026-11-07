@@ -281,9 +281,11 @@ public static class AppSchema
         ("position", ColumnType.Integer));
 
     /// <summary>
-    /// H: a household's own food (catalogue foods are searched online, not synced). Values are per 100 g or 100 ml
-    /// (<c>basis</c>): the macronutrients in their own columns, everything else in <c>nutrients_100</c> by code, and
-    /// named <c>portions</c> as a JSON array of <c>{"name", "amount"}</c> in g or ml. Null means unknown, not 0.
+    /// H: a household's own food (catalogue foods are searched online, not synced), or its copy of a catalogue food
+    /// (<c>copied_from</c>, with the id <see cref="Domain.Nutrition.FoodCopy.IdFor"/>; the server fills its values from
+    /// the catalogue). Values are per 100 g or 100 ml (<c>basis</c>): the macronutrients in their own columns,
+    /// everything else in <c>nutrients_100</c> by code, and named <c>portions</c> as a JSON array of
+    /// <c>{"name", "amount"}</c> in g or ml. Null means unknown, not 0.
     /// </summary>
     public static Table Foods { get; } = Synced("foods",
         ("household_id", ColumnType.Text),
@@ -299,7 +301,8 @@ public static class AppSchema
         ("fat_100", ColumnType.Real),
         ("nutrients_100", ColumnType.Text),
         ("portions", ColumnType.Text),
-        ("verified", ColumnType.Integer));
+        ("verified", ColumnType.Integer),
+        ("copied_from", ColumnType.Text));
 
     /// <summary>H: a recipe's servings and cooked weight as entered; the server recomputes <c>cooked_weight_g</c>.</summary>
     public static Table Recipes { get; } = Synced("recipes",
