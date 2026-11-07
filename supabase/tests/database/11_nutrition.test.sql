@@ -2,7 +2,7 @@
 -- log entries, which follow the 'nutrition' grant. Amounts as entered get canonical g or ml. Runs as `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(44);
+select plan(48);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000000a', 'a@example.com'),
@@ -14,9 +14,10 @@ select set_config('t.b', (select id::text from profiles where user_id = '0000000
 select set_config('t.c', (select id::text from profiles where user_id = '00000000-0000-0000-0000-00000000000c'), true);
 select set_config('t.ha', (select household_id::text from household_members where profile_id = current_setting('t.a')::uuid), true);
 select set_config('t.hb', (select household_id::text from household_members where profile_id = current_setting('t.b')::uuid), true);
--- C is a member of A's household; B is not.
-insert into household_members (household_id, profile_id, role)
-  values (current_setting('t.ha')::uuid, current_setting('t.c')::uuid, 'adult');
+-- C is a member of A's household and of B's; B is not a member of A's.
+insert into household_members (household_id, profile_id, role) values
+  (current_setting('t.ha')::uuid, current_setting('t.c')::uuid, 'adult'),
+  (current_setting('t.hb')::uuid, current_setting('t.c')::uuid, 'adult');
 
 -- A catalogue food, as the importer writes it.
 insert into foods (id, source, external_id, name, basis, energy_100, protein_100, carbohydrate_100, fat_100, nutrients_100, portions)
@@ -101,6 +102,9 @@ select throws_ok(
 select throws_ok(
   format($$ update foods set household_id = %L where household_id is not null $$, current_setting('t.hb')),
   '23514', null, 'a household food cannot move to another household');
+select throws_ok(
+  $$ update foods set basis = 'ml' where id = '70000000-0000-7000-8000-000000000002' $$,
+  '23514', null, 'a food''s basis cannot change');
 
 select pg_temp.login('c');
 select is((select count(*) from foods), 3::bigint, 'a household member sees its foods');
@@ -123,11 +127,21 @@ select is((select base_amount from recipe_ingredients where position = 0), 56.69
   'the server recomputes the amount in grams, whatever the client sent');
 select lives_ok(
   format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, portion_name, basis, base_amount)
-            values (%L, '71000000-0000-7000-8000-000000000001', 1, '70000000-0000-7000-8000-000000000002', 1.5, 'portion', '1 slice', 'g', 90) $$,
+            values (%L, '71000000-0000-7000-8000-000000000001', 1, '70000000-0000-7000-8000-000000000002', 1.5, 'portion', '1 slice', 'g', 0) $$,
          current_setting('t.ha')),
   'an ingredient may be measured in portions');
 select is((select base_amount from recipe_ingredients where position = 1), 90::double precision,
-  'a portion amount is the client''s count × portion');
+  'the server computes a portion amount from the food: 1.5 × 60 g, whatever the client sent');
+select throws_ok(
+  format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, portion_name, basis, base_amount)
+            values (%L, '71000000-0000-7000-8000-000000000001', 2, '70000000-0000-7000-8000-000000000002', 1, 'portion', '1 loaf', 'g', 800) $$,
+         current_setting('t.ha')),
+  '23514', null, 'a portion must be one of the food''s');
+select throws_ok(
+  format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, basis, base_amount)
+            values (%L, '71000000-0000-7000-8000-000000000001', 2, '70000000-0000-7000-8000-000000000001', 1, 'cup', 'ml', 237) $$,
+         current_setting('t.ha')),
+  '23514', null, 'an ingredient''s basis must be its food''s');
 select throws_ok(
   format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, basis, base_amount)
             values (%L, '71000000-0000-7000-8000-000000000001', 2, '70000000-0000-7000-8000-000000000001', 1, 'cup', 'g', 81) $$,
@@ -144,6 +158,13 @@ select throws_ok(
 
 select pg_temp.login('c');
 select is((select count(*) from recipe_ingredients), 2::bigint, 'a household member sees its recipes'' ingredients');
+insert into foods (id, household_id, source, name, basis)
+  values ('70000000-0000-7000-8000-000000000004', current_setting('t.hb')::uuid, 'custom', 'B''s granola', 'g');
+select throws_ok(
+  format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, basis, base_amount)
+            values (%L, '71000000-0000-7000-8000-000000000001', 9, '70000000-0000-7000-8000-000000000004', 50, 'g', 'g', 50) $$,
+         current_setting('t.ha')),
+  '42501', null, 'a member of two households cannot put one''s food in the other''s recipe');
 select pg_temp.login('b');
 select is((select count(*) from recipes) + (select count(*) from recipe_ingredients), 0::bigint, 'a stranger sees no recipes');
 select throws_ok(

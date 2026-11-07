@@ -150,18 +150,23 @@ create index foods_barcode_idx on public.foods (barcode) where barcode is not nu
 create trigger foods_updated_at before update on public.foods
   for each row execute function private.set_updated_at();
 
--- A household's food stays in its household: members' recipes use it. SQLSTATE class 23, so uploads quarantine.
-create function private.foods_fixed_household() returns trigger
+-- A household's food stays in its household: members' recipes use it. Its basis is fixed too: recipe ingredients
+-- store their amounts in it, and values per 100 ml mean something else per 100 g, so a food sold the other way is a
+-- new food. SQLSTATE class 23, so uploads quarantine.
+create function private.foods_fixed() returns trigger
 language plpgsql set search_path = '' as $$
 begin
   if new.household_id is distinct from old.household_id then
     raise exception 'a food cannot move to another household' using errcode = '23514';
   end if;
+  if new.basis is distinct from old.basis then
+    raise exception 'a food''s basis cannot change' using errcode = '23514';
+  end if;
   return new;
 end $$;
 
-create trigger foods_fixed_household before update of household_id on public.foods
-  for each row execute function private.foods_fixed_household();
+create trigger foods_fixed before update of household_id, basis on public.foods
+  for each row execute function private.foods_fixed();
 
 -------------------------------------------------------------------------------
 -- recipes, recipe_ingredients (H)
@@ -208,14 +213,16 @@ create trigger recipes_fixed_household before update of household_id on public.r
   for each row execute function private.recipes_fixed_household();
 
 -- An amount of food as entered: a mass or volume unit, or a number of the food's named portions ('portion', with
--- portion_name). base_amount is in the food's basis (g or ml), copied onto the row as basis. For a unit the server
--- recomputes it through private.convert_unit; for portions it keeps the client's count × portion amount.
+-- portion_name). base_amount is in the food's basis (g or ml), copied onto the row as basis. The server checks basis
+-- against the food and recomputes base_amount: through private.convert_unit for a unit, and as count × the food's
+-- portion of that name for portions. The ingredient keeps that amount if the food's portions are edited later.
 create table public.recipe_ingredients (
   id uuid primary key default gen_random_uuid(),
   household_id uuid not null,
   recipe_id uuid not null,
   position integer not null check (position >= 0),
-  -- A food in use can't be deleted (the upload is quarantined), so a recipe never loses one silently.
+  -- A catalogue food or one of the recipe's own household (the policies check it). A food in use can't be deleted
+  -- (the upload is quarantined), so a recipe never loses one silently.
   food_id uuid not null references public.foods (id),
   quantity double precision not null check (quantity >= 0 and quantity < 'Infinity'),
   quantity_unit text not null check (quantity_unit in ('g', 'kg', 'oz', 'lb', 'ml', 'l', 'fl_oz', 'cup', 'tbsp', 'tsp', 'portion')),
@@ -252,9 +259,29 @@ begin
   return converted;
 end $$;
 
+-- Reads the food with the writer's rights: the policies only accept a food the writer can see, and an unknown one
+-- is left to the foreign key. The basis must be the food's, and a portion must be one of its portions (class 23).
 create function private.recipe_ingredients_canonical() returns trigger
 language plpgsql set search_path = '' as $$
+declare
+  food record;
+  portion_amount double precision;
 begin
+  select f.basis, f.portions into food from public.foods f where f.id = new.food_id;
+  if found then
+    if new.basis is distinct from food.basis then
+      raise exception 'the ingredient''s basis % is not its food''s, %', new.basis, food.basis using errcode = '23514';
+    end if;
+    if new.quantity_unit = 'portion' then
+      select (e ->> 'amount')::double precision into portion_amount
+      from jsonb_array_elements(food.portions) e where e ->> 'name' = new.portion_name;
+      if portion_amount is null then
+        raise exception 'the food has no portion named %', new.portion_name using errcode = '23514';
+      end if;
+      new.base_amount := new.quantity * portion_amount;
+      return new;
+    end if;
+  end if;
   new.base_amount := private.food_amount_base(new.quantity, new.quantity_unit, new.basis, new.base_amount);
   return new;
 end $$;
@@ -328,7 +355,7 @@ revoke all on function private.is_nutrient_map(jsonb), private.is_nutrient_codes
   private.food_amount_base(double precision, text, text, double precision) from public, anon;
 grant execute on function private.is_nutrient_map(jsonb), private.is_nutrient_codes(jsonb), private.is_food_portions(jsonb),
   private.food_amount_base(double precision, text, text, double precision) to authenticated, service_role;
-revoke all on function private.foods_fixed_household(), private.recipes_canonical(), private.recipes_fixed_household(),
+revoke all on function private.foods_fixed(), private.recipes_canonical(), private.recipes_fixed_household(),
   private.recipe_ingredients_canonical(), private.food_log_entries_canonical() from public, anon;
 
 alter table public.nutrients enable row level security;
@@ -365,14 +392,18 @@ create policy recipes_update on public.recipes for update to authenticated
 create policy recipes_delete on public.recipes for delete to authenticated
   using (household_id in (select private.my_household_ids()));
 
--- An ingredient may only use a food its writer can see (the foreign key alone would accept another household's).
+-- An ingredient may only use a catalogue food or one of its recipe's household. Any food its writer can see would let
+-- a member of two households put one household's food in the other's recipe, where that household's other members
+-- can't read it, and where the foreign key would stop its own household deleting it.
 create policy recipe_ingredients_select on public.recipe_ingredients for select to authenticated
   using (household_id in (select private.my_household_ids()));
 create policy recipe_ingredients_insert on public.recipe_ingredients for insert to authenticated
-  with check (household_id in (select private.my_household_ids()) and food_id in (select f.id from public.foods f));
+  with check (household_id in (select private.my_household_ids())
+    and food_id in (select f.id from public.foods f where f.household_id is null or f.household_id = recipe_ingredients.household_id));
 create policy recipe_ingredients_update on public.recipe_ingredients for update to authenticated
   using (household_id in (select private.my_household_ids()))
-  with check (household_id in (select private.my_household_ids()) and food_id in (select f.id from public.foods f));
+  with check (household_id in (select private.my_household_ids())
+    and food_id in (select f.id from public.foods f where f.household_id is null or f.household_id = recipe_ingredients.household_id));
 create policy recipe_ingredients_delete on public.recipe_ingredients for delete to authenticated
   using (household_id in (select private.my_household_ids()));
 
