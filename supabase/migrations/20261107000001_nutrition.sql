@@ -267,6 +267,14 @@ declare
   food record;
   portion_amount double precision;
 begin
+  -- An edit that leaves the amount as entered alone (a new position, say) keeps the stored amount, so a later change
+  -- to the food's portions never moves it or makes the edit fail.
+  if tg_op = 'UPDATE' and new.food_id = old.food_id and new.quantity = old.quantity
+    and new.quantity_unit = old.quantity_unit and new.portion_name is not distinct from old.portion_name
+    and new.basis = old.basis then
+    new.base_amount := old.base_amount;
+    return new;
+  end if;
   select f.basis, f.portions into food from public.foods f where f.id = new.food_id;
   if found then
     if new.basis is distinct from food.basis then

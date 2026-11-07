@@ -2,7 +2,7 @@
 -- log entries, which follow the 'nutrition' grant. Amounts as entered get canonical g or ml. Runs as `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(48);
+select plan(52);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000000a', 'a@example.com'),
@@ -132,6 +132,17 @@ select lives_ok(
   'an ingredient may be measured in portions');
 select is((select base_amount from recipe_ingredients where position = 1), 90::double precision,
   'the server computes a portion amount from the food: 1.5 × 60 g, whatever the client sent');
+update foods set portions = '[{"name": "1 slice", "amount": 70}]' where id = '70000000-0000-7000-8000-000000000002';
+select is(pg_temp.affected($$ update recipe_ingredients set position = 5, base_amount = 1 where position = 1 $$), 1::bigint,
+  'an ingredient can be moved after its food''s portion changed');
+select is((select base_amount from recipe_ingredients where position = 5), 90::double precision,
+  'moving it keeps the stored amount, whatever the client sent');
+update foods set portions = '[]' where id = '70000000-0000-7000-8000-000000000002';
+select lives_ok($$ update recipe_ingredients set position = 1 where position = 5 $$,
+  'an ingredient can still be moved after its portion was removed');
+select throws_ok($$ update recipe_ingredients set quantity = 2 where position = 1 $$,
+  '23514', null, 'changing the amount resolves the portion again');
+update foods set portions = '[{"name": "1 slice", "amount": 60}]' where id = '70000000-0000-7000-8000-000000000002';
 select throws_ok(
   format($$ insert into recipe_ingredients (household_id, recipe_id, position, food_id, quantity, quantity_unit, portion_name, basis, base_amount)
             values (%L, '71000000-0000-7000-8000-000000000001', 2, '70000000-0000-7000-8000-000000000002', 1, 'portion', '1 loaf', 'g', 800) $$,
