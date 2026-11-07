@@ -154,6 +154,9 @@
     private const string PhysiologyFailed = "Couldn't read your physiology. Leave this page and come back to retry.";
     private const string ZonesFailed = "Couldn't read your zones on this device. Leave this page and come back to retry.";
     private const string StillLoading = "Wait for your physiology and zones to load.";
+    // Cleared by the next draft write that succeeds; writes run one after another, so an older success cannot clear a newer
+    // failure.
+    private const string DraftSaveFailed = "Couldn't save the unfinished form on this device. Keep this page open and retry.";
     private string? status;
     private bool busy;
     // The session is stored; a retry only clears the draft, since saving again would add a second session.
@@ -364,8 +367,12 @@
     private async Task SaveAfterAsync(string owner, string json)
     {
         if (owner != Workouts.ProfileId) return;
-        try { await Workouts.SaveStateAsync("cardio", json); }
-        catch (Exception e) when (e is not OperationCanceledException) { error = "Couldn't save the unfinished form on this device. Keep this page open and retry."; }
+        try
+        {
+            await Workouts.SaveStateAsync("cardio", json);
+            if (error is DraftSaveFailed) error = null;
+        }
+        catch (Exception e) when (e is not OperationCanceledException) { error = DraftSaveFailed; }
     }
     private static string ZoneKey(CardioZones? value) => value is null ? "none" : value.Method + "/" + value.StoredId + "/" +
         string.Join(',', value.Zones.Select(z => z.LowerBpm.ToString("R", CultureInfo.InvariantCulture)));

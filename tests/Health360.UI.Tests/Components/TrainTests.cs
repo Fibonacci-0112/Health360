@@ -56,6 +56,29 @@ public sealed class TrainTests : AppTestContext
         Assert.Equal("Couldn't start the workout on this device. Try again.", cut.Find("[role=alert]").TextContent);
     }
 
+    [Fact]
+    public async Task A_failed_start_does_not_follow_into_another_profile()
+    {
+        var cut = await TrainAsync();
+        await App.Database.Db.Execute("CREATE TEMP TRIGGER fail_start INSTEAD OF INSERT ON workout_sessions BEGIN SELECT RAISE(ABORT, 'disk busy'); END");
+        await ClickAsync(cut, "#start-empty");
+        cut.WaitForAssertion(() => Assert.Equal("Couldn't start the workout on this device. Try again.", cut.Find("[role=alert]").TextContent), Wait);
+
+        // The signed-in user's profile is replaced in one write, so the tab stays on screen and follows the new profile.
+        const string other = "0192f0c0-0000-7000-8000-000000000002";
+        await App.Database.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("DELETE FROM profiles WHERE id = ?", [ProfileId]);
+            await tx.Execute(
+                "INSERT INTO profiles (id, user_id, display_name, unit_prefs, onboarded_at, timezone, currency) VALUES (?, ?, 'Alex', ?, '2026-10-29T08:00:00.000Z', 'UTC', 'USD')",
+                [other, App.Auth.UserId, Kg]);
+        });
+        await WorkoutPlans.CreateTemplateAsync(App.Database.Db, other, "Arms", [], App.Clock);
+        cut.WaitForAssertion(() => Assert.Contains("Arms", cut.Markup, StringComparison.Ordinal), Wait);
+
+        Assert.Empty(cut.FindAll("[role=alert]"));
+    }
+
     /// <summary>A finished session of squats, logged as if on an earlier day.</summary>
     private async Task LogEarlierSessionAsync(double weight, string unit, int reps)
     {

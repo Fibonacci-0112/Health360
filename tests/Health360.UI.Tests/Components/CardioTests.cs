@@ -364,6 +364,19 @@ public sealed class CardioTests : AppTestContext
     }
 
     [Fact]
+    public async Task A_failed_draft_write_is_cleared_by_the_next_one_that_succeeds()
+    {
+        var cut = await CardioAsync();
+        await App.Database.Db.Execute("CREATE TEMP TRIGGER fail_draft INSTEAD OF INSERT ON workout_state BEGIN SELECT RAISE(ABORT, 'disk busy'); END");
+        await TypeAsync(cut, "#cardio-duration", "30");
+        cut.WaitForAssertion(() => Assert.Contains("Couldn't save the unfinished form", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+
+        await App.Database.Db.Execute("DROP TRIGGER fail_draft");
+        await TypeAsync(cut, "#cardio-duration", "31");
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("[role=alert]")), Wait);
+    }
+
+    [Fact]
     public async Task A_background_refresh_keeps_the_answer_to_the_last_tap()
     {
         var cut = await CardioAsync();
