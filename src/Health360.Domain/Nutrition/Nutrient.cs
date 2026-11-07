@@ -28,14 +28,58 @@ public sealed class Nutrient
     public static readonly Nutrient Iron = new("iron", NutrientUnit.Milligram);
     public static readonly Nutrient VitaminD = new("vitamin_d", NutrientUnit.Microgram);
 
+    /// <summary>Vitamin A as retinol activity equivalents (µg RAE), the measure the FDA Daily Value uses.</summary>
+    public static readonly Nutrient VitaminA = new("vitamin_a", NutrientUnit.Microgram);
+
+    public static readonly Nutrient VitaminC = new("vitamin_c", NutrientUnit.Milligram);
+
+    /// <summary>Vitamin E as alpha-tocopherol.</summary>
+    public static readonly Nutrient VitaminE = new("vitamin_e", NutrientUnit.Milligram);
+
+    /// <summary>Vitamin K as phylloquinone (K1), as USDA FoodData Central reports it.</summary>
+    public static readonly Nutrient VitaminK = new("vitamin_k", NutrientUnit.Microgram);
+
+    public static readonly Nutrient Thiamin = new("thiamin", NutrientUnit.Milligram);
+    public static readonly Nutrient Riboflavin = new("riboflavin", NutrientUnit.Milligram);
+
+    /// <summary>Preformed niacin, as USDA FoodData Central reports it; not niacin equivalents (which add tryptophan).</summary>
+    public static readonly Nutrient Niacin = new("niacin", NutrientUnit.Milligram);
+
+    public static readonly Nutrient VitaminB6 = new("vitamin_b6", NutrientUnit.Milligram);
+
+    /// <summary>Folate as dietary folate equivalents (µg DFE), the measure the FDA Daily Value uses.</summary>
+    public static readonly Nutrient Folate = new("folate", NutrientUnit.Microgram);
+
+    public static readonly Nutrient VitaminB12 = new("vitamin_b12", NutrientUnit.Microgram);
+    public static readonly Nutrient Biotin = new("biotin", NutrientUnit.Microgram);
+    public static readonly Nutrient PantothenicAcid = new("pantothenic_acid", NutrientUnit.Milligram);
+    public static readonly Nutrient Choline = new("choline", NutrientUnit.Milligram);
+    public static readonly Nutrient Phosphorus = new("phosphorus", NutrientUnit.Milligram);
+    public static readonly Nutrient Iodine = new("iodine", NutrientUnit.Microgram);
+    public static readonly Nutrient Magnesium = new("magnesium", NutrientUnit.Milligram);
+    public static readonly Nutrient Zinc = new("zinc", NutrientUnit.Milligram);
+    public static readonly Nutrient Selenium = new("selenium", NutrientUnit.Microgram);
+    public static readonly Nutrient Copper = new("copper", NutrientUnit.Milligram);
+    public static readonly Nutrient Manganese = new("manganese", NutrientUnit.Milligram);
+    public static readonly Nutrient Molybdenum = new("molybdenum", NutrientUnit.Microgram);
+
+    /// <summary>Ethyl alcohol. It supplies energy (about 7 kcal/g) that the 4/4/9 macronutrient factors leave out.</summary>
+    public static readonly Nutrient Alcohol = new("alcohol", NutrientUnit.Gram);
+
+    public static readonly Nutrient Caffeine = new("caffeine", NutrientUnit.Milligram);
+
     /// <summary>
-    /// Every nutrient, in display order: the Nutrition Facts label set for now. The full micronutrient set arrives with
-    /// the USDA import. The migration seeds the same codes and units into <c>nutrients</c>.
+    /// Every nutrient, in display order: the Nutrition Facts label set, then the vitamins and minerals with an FDA Daily
+    /// Value that USDA FoodData Central reports, then alcohol and caffeine. The migrations seed the same codes, units
+    /// and order into <c>nutrients</c>.
     /// </summary>
     public static IReadOnlyList<Nutrient> All { get; } =
     [
         Energy, Fat, SaturatedFat, TransFat, Cholesterol, Sodium, Carbohydrate, Fiber, Sugars, AddedSugars,
         SugarAlcohols, Protein, VitaminD, Calcium, Iron, Potassium,
+        VitaminA, VitaminC, VitaminE, VitaminK, Thiamin, Riboflavin, Niacin, VitaminB6, Folate, VitaminB12, Biotin,
+        PantothenicAcid, Choline, Phosphorus, Iodine, Magnesium, Zinc, Selenium, Copper, Manganese, Molybdenum,
+        Alcohol, Caffeine,
     ];
 
     /// <summary>The nutrients the food and log tables store in their own columns rather than in the nutrient map.</summary>

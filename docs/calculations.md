@@ -396,7 +396,7 @@ Weekly volume is completed non-warm-up set load in canonical kg × reps, grouped
 
 Implemented in `Health360.Domain/Nutrition`; tests in `tests/Health360.Domain.Tests/Nutrition`.
 
-**Nutrients.** Each nutrient has a database code and one fixed unit (`Nutrient`): energy in kcal, macronutrients in g, cholesterol, sodium, potassium, calcium and iron in mg, vitamin D in µg (code `ug`). Amounts are never entered in a user's unit, so they carry no unit column. The catalogue is the Nutrition Facts label set for now; the USDA import adds the rest. `nutrients` in the database is seeded with the same codes and units.
+**Nutrients.** Each nutrient has a database code and one fixed unit (`Nutrient`): energy in kcal, macronutrients in g, cholesterol, sodium, potassium, calcium and iron in mg, vitamin D in µg (code `ug`). Amounts are never entered in a user's unit, so they carry no unit column. The catalogue is the Nutrition Facts label set, then the vitamins and minerals with an FDA Daily Value ([21 CFR 101.9(c)(8)(iv)](https://www.ecfr.gov/current/title-21/section-101.9)) that USDA FoodData Central reports, then alcohol and caffeine. Where a code's measure is narrower than its name: `vitamin_a` is µg retinol activity equivalents (RAE), `vitamin_e` is mg alpha-tocopherol, `vitamin_k` is µg phylloquinone, `niacin` is preformed niacin in mg (not niacin equivalents, which add tryptophan), and `folate` is µg dietary folate equivalents (DFE). `nutrients` in the database is seeded with the same codes, units and order (migrations `20261107000001_nutrition.sql` and `20261107000002_micronutrients.sql`; `CanonicalUnitParityTests` checks them).
 
 **Unknown is not zero.** A nutrient a food doesn't list is absent from its `NutrientAmounts`, not 0. A sum (`NutrientTotal.Sum`) adds the known parts and lists in `Incomplete` every nutrient some parts knew and others didn't: that total is only a lower bound, and the app must say so. A nutrient no part knew stays absent.
 
@@ -415,6 +415,34 @@ Golden values (test fixture): 80 g oats (379 kcal, 13.2 g protein, 10.1 g fiber 
 | Fiber | 8.08 + 3.12, peanut butter unknown | 11.2 g, incomplete |
 | Per 100 g, raw weight 232 g | 598.16 × 100 / 232 | 257.83 kcal |
 | Per 100 g, cooked weight 400 g | 598.16 × 100 / 400 | 149.54 kcal |
+
+## USDA FoodData Central import (step 1.3)
+
+Implemented in `tools/importers` (`FoodDataCentral`, `FoodImporter`); tests in `tests/Health360.Importers.Tests`. It reads the JSON downloads of Foundation Foods, SR Legacy and FNDDS survey foods from [FoodData Central](https://fdc.nal.usda.gov/download-datasets) (public domain, CC0 1.0) and upserts them as catalogue foods (`household_id` null, `source` `usda_fdc`, `external_id` the `fdcId`, `basis` g). Branded foods are not imported. The mapping was checked against the Foundation 2024-10-31, SR Legacy 2018-04 and FNDDS 2024-10-31 files: 286, 7,793 and 5,431 foods.
+
+**Nutrients by FoodData Central nutrient id**, with the unit the file reports required to be the nutrient's own (a food listing one in another unit is skipped, so a changed file can't store wrong amounts). Values are per 100 g, as the datasets give them, stored unrounded. An entry without an amount is unknown and left out; a listed 0 is 0.
+
+| Code | FDC nutrient id (name) |
+|---|---|
+| energy | 1008 (Energy, kcal); else 2048 (Energy, Atwater Specific Factors); else 2047 (Energy, Atwater General Factors) |
+| protein, fat, carbohydrate | 1003, 1004, 1005 (Carbohydrate, by difference, the total US labels declare) |
+| saturated_fat, trans_fat, cholesterol, sodium, fiber | 1258, 1257, 1253, 1093, 1079 |
+| sugars | 2000 (Total Sugars); else 1063 (Sugars, Total, which Foundation Foods use) |
+| vitamin_d | 1114 (Vitamin D (D2 + D3), µg; the IU entry 1110 is ignored) |
+| calcium, iron, potassium | 1087, 1089, 1092 |
+| vitamin_a, vitamin_c, vitamin_e, vitamin_k | 1106 (RAE), 1162, 1109 (alpha-tocopherol), 1185 (phylloquinone) |
+| thiamin, riboflavin, niacin, vitamin_b6, folate, vitamin_b12 | 1165, 1166, 1167, 1175, 1190 (Folate, DFE), 1178 |
+| biotin, pantothenic_acid, choline | 1176, 1170, 1180 |
+| phosphorus, iodine, magnesium, zinc, selenium, copper, manganese, molybdenum | 1091, 1100, 1090, 1095, 1103, 1098, 1101, 1102 |
+| alcohol, caffeine | 1018, 1057 |
+
+Energy: most Foundation Foods give only the Atwater energies, which USDA computes from the food's own composition; the specific-factor value is preferred as the closer one, and the dataset's own Energy wins whenever it is present. kJ (1062) is not converted, so a food with no kcal energy is skipped. Folate: Foundation Foods report total folate (1177), not DFE; the two differ for foods with folic acid, so their folate stays unknown rather than substituted. Added sugars and sugar alcohols are not in these datasets.
+
+**Skipped foods**, each reported with the field at fault: no positive `fdcId`, no description or longer than 200 characters, a repeated id, no energy, a nutrient in an unexpected unit, negative or listed twice with different amounts, or more than 100 g of protein, carbohydrate or fat per 100 g. In the files above that is 30 Foundation Foods, none listing energy (mostly dry-basis "0% moisture" bean analyses, and iodized table salt), and 1 FNDDS food with no nutrients.
+
+**Portions** become named measures in grams, in the file's `sequenceNumber` order: Foundation Foods as count, unit and modifier ("1 cup, slices with skin"), SR Legacy as count and modifier ("1 cup, chopped"), FNDDS by its description ("1 meatball"). A portion is dropped without a positive gram weight (at most 100,000 g), with a name over 80 characters, a name already used (the first is kept), past the 50th, or as one of FNDDS's survey-coding defaults ("Quantity not specified", "Guideline amount per …").
+
+**Re-importing** updates a food only when one of its values changed, leaves identical rows untouched, never deletes a food gone from the file (households' copies keep their own values), and records the release in `reference_datasets` per dataset (`usda-fdc-foundation`, `usda-fdc-sr-legacy`, `usda-fdc-survey`).
 
 ## Label checks (step 1.3)
 

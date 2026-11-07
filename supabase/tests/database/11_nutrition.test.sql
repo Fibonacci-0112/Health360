@@ -43,9 +43,9 @@ set local role authenticated;
 
 -------- Nutrients
 select pg_temp.login('a');
-select is((select count(*) from nutrients), 16::bigint, 'everyone signed in sees the nutrient catalogue');
+select is((select count(*) from nutrients), 39::bigint, 'everyone signed in sees the nutrient catalogue');
 select is((select unit from nutrients where code = 'vitamin_d'), 'ug', 'each nutrient has its fixed unit');
-select throws_ok($$ insert into nutrients (code, unit, position) values ('zinc', 'mg', 99) $$,
+select throws_ok($$ insert into nutrients (code, unit, position) values ('fluoride', 'ug', 99) $$,
   '42501', null, 'clients cannot add nutrients');
 select throws_ok($$ update nutrients set unit = 'g' $$, '42501', null, 'clients cannot change nutrients');
 

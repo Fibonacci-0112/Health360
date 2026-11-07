@@ -163,9 +163,13 @@
           "xunit.v3.runner.common": "[4.0.2]"
         }
       },
+      "health360.domain": {
+        "type": "Project"
+      },
       "health360.importers": {
         "type": "Project",
         "dependencies": {
+          "Health360.Domain": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
         }
       },

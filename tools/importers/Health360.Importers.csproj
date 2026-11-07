@@ -15,4 +15,8 @@
     <PackageReference Include="Npgsql" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Health360.Domain\Health360.Domain.csproj" />
+  </ItemGroup>
+
 </Project>

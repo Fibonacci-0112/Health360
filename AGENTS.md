@@ -31,7 +31,7 @@ Use current source, project files and `.github/workflows/ci.yml` to verify comma
 | `supabase/migrations`, `supabase/tests/database` | Database evolution, access policies and pgTAP tests |
 | `powersync` | Sync Streams and local service configuration |
 | `tools/drift` | Postgres publication versus `AppSchema` consistency check |
-| `tools/importers` | Reference-data imports (free-exercise-db) into system rows, keyed by `external_id` |
+| `tools/importers` | Reference-data imports (free-exercise-db, USDA FoodData Central) into system rows, keyed by `external_id` |
 | `tests` | Domain, UI, local database, server, drift and two-client sync tests |
 
 Keep business calculations in Domain, shared screens in UI, and platform APIs behind host-supplied adapters. Preserve Domain's purity analyzer (`BannedSymbols.txt`) and purity tests. Inject clocks and randomness; do not use ambient time, randomness, environment, network or filesystem access in Domain.
