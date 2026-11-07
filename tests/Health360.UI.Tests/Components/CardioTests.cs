@@ -310,8 +310,8 @@ public sealed class CardioTests : AppTestContext
         {
             Assert.Contains("2024 Compendium METs", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
             Assert.Contains("210–390 kcal", cut.Find(".cardio-estimate").TextContent, StringComparison.Ordinal);
+            Assert.Contains("never the HR equation", cut.Markup, StringComparison.Ordinal);
         }, Wait);
-        Assert.Contains("never the HR equation", cut.Markup, StringComparison.Ordinal);
     }
 
     [Fact]
