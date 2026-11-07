@@ -1,6 +1,8 @@
 # Health360: feature catalogue
 
-What Health360 will do, module by module, and when each feature is planned. Architecture, data model, roadmap, costs and tests are in [PLAN.md](PLAN.md); the stack decision is in [ADR 0001](adr/0001-language-and-stack.md).
+What Health360 will do, module by module, and when each feature is planned. Architecture, data model, roadmap, costs and tests are in [PLAN.md](PLAN.md); the current stack decision is in [ADR 0002](adr/0002-dotnet-maui-blazor.md) (.NET MAUI Blazor Hybrid and ASP.NET Core, Android and Windows), which supersedes [ADR 0001](adr/0001-language-and-stack.md).
+
+This is a plan, not a status report: a listed feature is not necessarily built yet. What is implemented, step by step, is recorded in [PLAN.md §3](PLAN.md#3-phased-roadmap-each-phase-has-an-exit-criterion).
 
 Tags: **[MVP]** means Phase 1; **[P2]**, **[P3]** and **[P4]** are later phases. The ★ items were borrowed from competitor research.
 
