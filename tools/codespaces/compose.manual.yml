@@ -1,0 +1,5 @@
+# Codespaces override: do not auto-restart PowerSync when Docker starts.
+# The main powersync/docker-compose.yml remains unchanged for local and CI use.
+services:
+  powersync:
+    restart: "no"
