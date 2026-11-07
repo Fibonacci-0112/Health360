@@ -166,4 +166,69 @@ public sealed class FoodTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Contains("energy not listed", cut.Find(".food-entry").TextContent, StringComparison.Ordinal), Wait);
         Assert.Equal(25, Assert.Single(await FoodLog.DayAsync(App.Database.Db, ProfileId, Today)).Amounts()[Nutrient.Protein]);
     }
+
+    [Fact]
+    public async Task Another_profile_starts_with_a_clear_screen()
+    {
+        var cut = await FoodAsync();
+        await SaveGranolaAsync(cut);
+        await TypeAsync(cut, "#food-amount", "3");
+        await TypeAsync(cut, "#quick-name", "Half typed");
+
+        // The signed-in user's profile is replaced in one write, so the tab stays on screen and follows the new profile.
+        const string other = "0192f0c0-0000-7000-8000-000000000002";
+        await App.Database.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("DELETE FROM profiles WHERE id = ?", [ProfileId]);
+            await tx.Execute(
+                "INSERT INTO profiles (id, user_id, display_name, unit_prefs, onboarded_at, timezone, currency) VALUES (?, ?, 'Alex', '{}', '2026-10-29T08:00:00.000Z', 'UTC', 'USD')",
+                [other, App.Auth.UserId]);
+        });
+        await FoodLog.QuickAddAsync(App.Database.Db, other, "lunch", Today, "Alex's lunch", 400, null, null, null, App.Clock);
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Alex's lunch", cut.Find(".food-entry").TextContent, StringComparison.Ordinal);
+            Assert.Empty(cut.FindAll("#log-food"));
+            Assert.Equal("", cut.Find("#quick-name").GetAttribute("value") ?? "");
+            // Alex isn't in the household yet, so its foods aren't offered.
+            Assert.Contains("hasn't synced", cut.Find("[aria-labelledby=new-food-title]").TextContent, StringComparison.Ordinal);
+        }, Wait);
+        Assert.DoesNotContain("Granola", cut.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_day_that_cannot_be_read_says_so_instead_of_loading()
+    {
+        await SignedInAndOnboardedAsync();
+        await App.Database.Db.Execute("DROP VIEW food_log_entries");
+        var cut = Render<Routes>();
+        cut.WaitForAssertion(() => cut.Find("nav.tabs"), Wait);
+        Services.GetRequiredService<NavigationManager>().NavigateTo("food");
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("couldn't be read", cut.Find("[aria-labelledby=food-total-title]").TextContent, StringComparison.Ordinal);
+            // Recently logged foods read the same table, so whichever failed read reports last owns the alert.
+            Assert.StartsWith("Couldn't read your ", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal);
+        }, Wait);
+        Assert.DoesNotContain("Loading your food log", cut.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Household_foods_that_cannot_be_read_are_not_shown_as_unsynced()
+    {
+        await SignedInAndOnboardedAsync();
+        await App.Database.Db.Execute("DROP VIEW household_members");
+        var cut = Render<Routes>();
+        cut.WaitForAssertion(() => cut.Find("nav.tabs"), Wait);
+        Services.GetRequiredService<NavigationManager>().NavigateTo("food");
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("couldn't be read", cut.Find("[aria-labelledby=new-food-title]").TextContent, StringComparison.Ordinal);
+            Assert.Contains("Couldn't read your household's foods", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal);
+        }, Wait);
+        Assert.DoesNotContain("hasn't synced", cut.Markup, StringComparison.Ordinal);
+    }
 }

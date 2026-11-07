@@ -8,6 +8,7 @@
 @implements IDisposable
 @inject FoodService Foods
 @inject ProfileService Profiles
+@inject ILogger<Food> Logger
 
 <div class="page">
     <div class="page-head">
@@ -36,7 +37,11 @@
 
         <section class="card" aria-labelledby="food-total-title">
             <h2 id="food-total-title">@(date == Foods.Today ? "Today" : date.ToString("dddd, d MMMM", CultureInfo.CurrentCulture))</h2>
-            @if (!loaded)
+            @if (readFailed)
+            {
+                <p class="muted">This day couldn't be read on this device.</p>
+            }
+            else if (!loaded)
             {
                 <p class="muted" role="status">Loading your food log</p>
             }
@@ -172,7 +177,11 @@
 
         <section class="card" aria-labelledby="new-food-title">
             <h2 id="new-food-title">New food</h2>
-            @if (households.Length == 0)
+            @if (choicesFailed)
+            {
+                <p class="muted">Your household's foods couldn't be read on this device.</p>
+            }
+            else if (households.Length == 0)
             {
                 <p class="muted">Foods are shared with your household. Your household hasn't synced to this device yet.</p>
             }
@@ -215,7 +224,11 @@
     private string? watchedProfile, error, status, confirmDelete;
     private CancellationTokenSource? watch;
     private DateOnly date;
-    private bool loaded, busy;
+    private bool loaded, busy, readFailed, choicesFailed;
+
+    // Bumped whenever the screen starts following another profile (or none). Work that started earlier checks it after
+    // each await, so nothing it reads or saves lands on the next profile's screen.
+    private int generation, runGeneration;
     private FoodLogEntryRow[] entries = [];
     private NutrientTotal total = NutrientTotal.Empty;
     private string meal = "breakfast", query = "", amount = "", unit = "";
@@ -255,7 +268,9 @@
         }
 
         StopWatching();
+        generation++;
         watchedProfile = profileId;
+        choicesFailed = false;
         error = status = confirmDelete = null;
         entries = []; total = NutrientTotal.Empty; results = []; chosen = null; households = [];
         query = amount = quickName = quickEnergy = quickProtein = quickCarbohydrate = quickFat = "";
@@ -274,7 +289,7 @@
     private void WatchDay()
     {
         StopWatching();
-        loaded = false;
+        loaded = readFailed = false;
         confirmDelete = null;
         var profile = watchedProfile;
         var day = date;
@@ -301,9 +316,14 @@
             }
             catch (Exception e) when (e is not ObjectDisposedException)
             {
+                LogReadFailed(Logger, "food log", e.GetType().Name);
                 await InvokeAsync(() =>
                 {
                     if (token.IsCancellationRequested) return;
+                    // Nothing half-read stays on screen: the day is shown as unreadable, not as loading or as it was.
+                    entries = [];
+                    total = NutrientTotal.Empty;
+                    readFailed = true;
                     error = "Couldn't read your food log on this device. Leave this tab and come back to try again.";
                     StateHasChanged();
                 });
@@ -320,21 +340,27 @@
 
     private async Task LoadChoicesAsync()
     {
-        var profile = watchedProfile;
+        var started = generation;
         try
         {
             var nextHouseholds = await Foods.HouseholdsAsync();
             var nextResults = string.IsNullOrWhiteSpace(query) ? await Foods.RecentAsync() : await Foods.SearchAsync(query);
-            if (profile != Foods.ProfileId) return;
+            if (started != generation) return;
             households = nextHouseholds;
             results = nextResults;
+            choicesFailed = false;
             if (!households.Any(h => h.Id == householdId)) householdId = households.FirstOrDefault()?.Id ?? "";
-            StateHasChanged();
         }
-        catch (Exception e) when (e is InvalidOperationException)
+        catch (Exception e) when (e is not OperationCanceledException)
         {
-            // The profile went away while loading; Follow clears the screen.
+            // A read that started for an earlier profile doesn't matter any more; Follow cleared the screen.
+            if (started != generation) return;
+            LogReadFailed(Logger, "household foods", e.GetType().Name);
+            choicesFailed = true;
+            error = "Couldn't read your household's foods on this device. Leave this tab and come back to try again.";
         }
+
+        StateHasChanged();
     }
 
     private async Task MoveAsync(int days)
@@ -359,15 +385,40 @@
     {
         query = e.Value?.ToString() ?? "";
         var asked = query;
-        var profile = watchedProfile;
-        var found = string.IsNullOrWhiteSpace(asked) ? await Foods.RecentAsync() : await Foods.SearchAsync(asked);
-        if (asked == query && profile == Foods.ProfileId) results = found;
+        var started = generation;
+        try
+        {
+            var found = string.IsNullOrWhiteSpace(asked) ? await Foods.RecentAsync() : await Foods.SearchAsync(asked);
+            if (asked == query && started == generation) results = found;
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            if (started != generation) return;
+            LogReadFailed(Logger, "food search", x.GetType().Name);
+            results = [];
+            error = "Couldn't search your household's foods on this device. Try again.";
+        }
     }
 
     private async Task ChooseAsync(string id)
     {
         error = null;
-        var row = await Foods.FoodAsync(id);
+        var started = generation;
+        FoodRow? row;
+        try
+        {
+            row = await Foods.FoodAsync(id);
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            if (started != generation) return;
+            LogReadFailed(Logger, "food", x.GetType().Name);
+            error = "Couldn't read that food on this device. Try again.";
+            return;
+        }
+
+        // Chosen for an earlier profile: the next one's form stays as Follow left it.
+        if (started != generation) return;
         chosen = row?.ToFood();
         if (chosen is null)
         {
@@ -408,6 +459,7 @@
         var (u, portion) = SplitUnit();
         var name = chosen.Name;
         await Foods.LogAsync(chosen.Id, meal, date, quantity, u, portion);
+        if (!Current) return;
         chosen = null;
         amount = "";
         status = $"Logged {name} in {MealName(meal).ToLowerInvariant()}. Saved on this device, ready to sync.";
@@ -419,6 +471,7 @@
         var energy = Optional(quickEnergy, "energy");
         await Foods.QuickAddAsync(meal, date, quickName, energy is { } e ? ToKcal(e) : null,
             Optional(quickProtein, "protein"), Optional(quickCarbohydrate, "carbohydrate"), Optional(quickFat, "fat"));
+        if (!Current) return;
         quickName = quickEnergy = quickProtein = quickCarbohydrate = quickFat = "";
         status = $"Added to {MealName(meal).ToLowerInvariant()}. Saved on this device, ready to sync.";
     });
@@ -433,15 +486,18 @@
         var input = new FoodInput(foodName, string.IsNullOrWhiteSpace(foodBrand) ? null : foodBrand, basis, per,
             energy is { } e ? ToKcal(e) : null, Optional(foodProtein, "protein"), Optional(foodCarbohydrate, "carbohydrate"), Optional(foodFat, "fat"), portions);
         var id = await Foods.AddFoodAsync(householdId, input);
+        if (!Current) return;
         var name = input.Name.Trim();
         ClearNewFood();
         await ChooseAsync(id);
+        if (!Current) return;
         status = $"Saved {name} for your household. Enter an amount above to log it.";
     });
 
     private Task DeleteAsync(string id) => RunAsync(async () =>
     {
         await Foods.DeleteAsync(id);
+        if (!Current) return;
         confirmDelete = null;
         status = "Entry deleted.";
     });
@@ -450,22 +506,28 @@
     {
         if (busy || watchedProfile is null || watchedProfile != Foods.ProfileId) return;
         busy = true;
+        runGeneration = generation;
         error = status = null;
         try
         {
             await action();
         }
-        catch (ValidationException e)
+        catch (ValidationException e) when (Current)
         {
             error = string.Join(" ", e.Errors.Select(x => x.ErrorMessage).Distinct(StringComparer.Ordinal));
         }
-        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        catch (Exception e) when (Current && e is ArgumentException or InvalidOperationException)
         {
             error = e.Message;
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        catch (Exception e) when (Current && e is not OperationCanceledException)
         {
+            LogSaveFailed(Logger, e.GetType().Name);
             error = "Couldn't save on this device. Try again.";
+        }
+        catch (Exception e) when (!Current && e is not OperationCanceledException)
+        {
+            // Started for an earlier profile: its outcome isn't the current profile's to see.
         }
         finally
         {
@@ -539,6 +601,21 @@
         "carbohydrate" => "Carbohydrate",
         _ => "Fat",
     };
+
+    /// <summary>Whether the save in progress started for the profile the screen follows now.</summary>
+    private bool Current => runGeneration == generation;
+
+    // The kind of read and the exception's type only: never the rows, food names or amounts. (The logging source
+    // generator can't see Razor's generated class, so the messages are defined here.)
+    private static readonly Action<ILogger, string, string, Exception?> ReadFailedMessage =
+        LoggerMessage.Define<string, string>(LogLevel.Warning, new EventId(1, "FoodReadFailed"), "The Food tab couldn't read the {What}: {Error}");
+
+    private static readonly Action<ILogger, string, Exception?> SaveFailedMessage =
+        LoggerMessage.Define<string>(LogLevel.Warning, new EventId(2, "FoodSaveFailed"), "The Food tab couldn't save: {Error}");
+
+    private static void LogReadFailed(ILogger logger, string what, string error) => ReadFailedMessage(logger, what, error, null);
+
+    private static void LogSaveFailed(ILogger logger, string error) => SaveFailedMessage(logger, error, null);
 
     public void Dispose()
     {
