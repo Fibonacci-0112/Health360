@@ -241,6 +241,9 @@
         if (profile == Workouts.ProfileId && exercise == historyExercise) history = loaded;
     }
 
+    // The error a load that succeeds clears. Any other error answers the user's last tap and stays until their next one,
+    // so a background reload (a sync, another device's change) cannot hide it.
+    private const string ReadFailed = "Couldn't read your workouts on this device. Leave this tab and come back to try again.";
     private CancellationTokenSource? watch;
     private string? watchedProfile;
 
@@ -279,6 +282,7 @@
         watch?.Dispose();
         watch = null;
         watchedProfile = profileId;
+        error = null;
         volume = []; history = []; historyExercise = "";
         loaded = false;
         active = null;
@@ -353,7 +357,7 @@
             {
                 if (!token.IsCancellationRequested)
                 {
-                    error = "Couldn't read your workouts on this device. Leave this tab and come back to try again.";
+                    error = ReadFailed;
                     watchedProfile = null;
                     StateHasChanged();
                 }
@@ -393,13 +397,13 @@
             cardio = newCardio;
             volume = newVolume;
             loaded = true;
-            error = null;
+            if (error is ReadFailed) error = null;
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
             if (!token.IsCancellationRequested)
             {
-                error = "Couldn't read your workouts on this device. Leave this tab and come back to try again.";
+                error = ReadFailed;
             }
         }
     }
