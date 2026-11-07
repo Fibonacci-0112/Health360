@@ -173,7 +173,23 @@
 
     private void Changed() => _ = InvokeAsync(RefreshAsync);
 
-    private async Task RefreshAsync()
+    // The refresh started last. A newer refresh supersedes an older one, which then returns without clearing `loading`
+    // (the zone watcher starts one whenever synced zones change), so code that needs settled zones waits for this until
+    // no refresh is running instead of reading a half-loaded form.
+    private Task refreshing = Task.CompletedTask;
+
+    private Task RefreshAsync() => refreshing = RefreshCoreAsync();
+
+    private async Task SettledAsync()
+    {
+        while (!refreshing.IsCompleted)
+        {
+            try { await refreshing; }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    private async Task RefreshCoreAsync()
     {
         if (disposed)
         {
@@ -378,6 +394,8 @@
     {
         preview = null;
         error = null;
+        // A tap that lands while a background refresh runs waits for it rather than failing or doing nothing.
+        await SettledAsync();
         if (physiology is null || loading || profileId != Workouts.ProfileId)
         {
             error = "Wait for your physiology and zones to load.";
@@ -391,6 +409,7 @@
         var shownZones = ZoneKey(zones);
         var resets = zoneResets;
         await RefreshAsync();
+        await SettledAsync();
         if (physiology is null || loading || error is not null || Body.Failed || !zonesReady || profileId != Workouts.ProfileId) return;
         // The start date can move onto another zone set without a refresh; never swap watch times for a fallback.
         if (entry.ZoneSeconds is not null && (ZoneKey(zones) != shownZones || zoneResets != resets))

@@ -161,6 +161,27 @@ public sealed class CardioTests : AppTestContext
     }
 
     [Fact]
+    public async Task An_estimate_requested_while_the_zones_refresh_waits_for_them()
+    {
+        var cut = await CardioAsync();
+        await TypeAsync(cut, "#cardio-duration", "30");
+        await TypeAsync(cut, "#cardio-average", "150");
+        var activity = cut.Find("#cardio-activity").GetAttribute("value")!;
+
+        // Start a refresh (as a synced zone change does) and tap Estimate while it may still be reading the zones. Whether
+        // the read yields first varies, so the overlap is tried several times; every tap must produce the estimate.
+        for (var i = 0; i < 10; i++)
+        {
+            var refreshing = ChangeAsync(cut, "#cardio-activity", activity);
+            await ClickAsync(cut, "#preview-cardio");
+            await refreshing;
+
+            Assert.Single(cut.FindAll(".cardio-estimate"));
+            Assert.DoesNotContain("Wait for your physiology", cut.Markup, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task Medication_suppresses_age_based_zones_and_hr_energy()
     {
         var cut = await CardioAsync(medication: true);
