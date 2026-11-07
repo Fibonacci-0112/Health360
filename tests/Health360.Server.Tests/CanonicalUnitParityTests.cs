@@ -1,3 +1,4 @@
+using Health360.Domain.Nutrition;
 using Health360.Domain.Training;
 using Health360.Domain.Units;
 using Npgsql;
@@ -205,6 +206,44 @@ public sealed class CanonicalUnitParityTests
         }
 
         Assert.True(mismatches.Count == 0, string.Join("\n", mismatches.Take(20)));
+    }
+
+    /// <summary>
+    /// <c>recipe_ingredients.base_amount</c> and <c>food_log_entries.base_amount</c> come from
+    /// <c>private.food_amount_base</c>; the app computes them with <see cref="FoodAmount.ToBase(double, Unit, FoodBasis)"/>.
+    /// They must agree bit for bit for every unit a food's basis accepts, or a logged amount would change when it syncs back.
+    /// </summary>
+    [Fact]
+    public async Task FoodAmountsConvertExactlyAsDomainDoes()
+    {
+        Assert.SkipUnless(ConnectionString is { Length: > 0 }, $"Set {EnvironmentVariable} to run the database tests.");
+
+        var cases = (
+            from basis in Enum.GetValues<FoodBasis>()
+            let baseUnit = FoodBases.BaseUnit(basis)
+            from unit in Unit.OfDimension(baseUnit.Dimension)
+            from value in Values().Where(v => v >= 0)
+            select (Value: value, From: unit.Code, To: FoodBases.Code(basis), Expected: FoodAmount.ToBase(value, unit, basis))).ToList();
+
+        await AssertSameAsync(cases, "select private.food_amount_base(c.value, c.from_unit, c.to_unit, null)");
+    }
+
+    /// <summary>The seeded <c>nutrients</c> rows are Domain's catalogue: the same codes, units and order.</summary>
+    [Fact]
+    public async Task NutrientsAreDomainsCatalogue()
+    {
+        Assert.SkipUnless(ConnectionString is { Length: > 0 }, $"Set {EnvironmentVariable} to run the database tests.");
+
+        await using var connection = await OpenAsync();
+        await using var command = new NpgsqlCommand("select code, unit from public.nutrients order by position", connection);
+        await using var reader = await command.ExecuteReaderAsync(Ct);
+        var rows = new List<(string Code, string Unit)>();
+        while (await reader.ReadAsync(Ct))
+        {
+            rows.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        Assert.Equal(Nutrient.All.Select(n => (n.Code, NutrientUnits.Code(n.Unit))), rows);
     }
 
     private static async Task AssertSameAsync(
