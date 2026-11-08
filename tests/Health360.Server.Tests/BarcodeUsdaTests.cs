@@ -21,21 +21,27 @@ public sealed class BarcodeUsdaTests
            "foodNutrients":[{"nutrientId":1008,"value":375},{"nutrientId":1003,"value":10},{"nutrientId":1005,"value":75}]}]}
         """;
 
-    private sealed class Stub(HttpStatusCode status, string body) : HttpMessageHandler
+    private sealed class Stub(HttpStatusCode status, string body, Func<HttpRequestMessage, string>? respond = null, Exception? throws = null) : HttpMessageHandler
     {
         public HttpRequestMessage? Last { get; private set; }
+
+        public int Calls { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Last = request;
-            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
+            Calls++;
+            return throws is not null
+                ? Task.FromException<HttpResponseMessage>(throws)
+                : Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(respond?.Invoke(request) ?? body) });
         }
     }
 
-    private static WebApplicationFactory<Program> Create(ServerFactory factory, Stub? stub, string? key = "usda-test-key") =>
+    private static WebApplicationFactory<Program> Create(ServerFactory factory, Stub? stub, string? key = "usda-test-key", int perHour = 120) =>
         factory.WithWebHostBuilder(builder =>
         {
             builder.UseSetting("Usda:ApiKey", key ?? "");
+            builder.UseSetting("Usda:RequestsPerUserPerHour", perHour.ToString(System.Globalization.CultureInfo.InvariantCulture));
             builder.ConfigureTestServices(services =>
                 services.AddHttpClient(UsdaBrandedClient.HttpClientName)
                     .ConfigurePrimaryHttpMessageHandler(() => stub ?? new Stub(HttpStatusCode.OK, "{}")));
@@ -99,6 +105,83 @@ public sealed class BarcodeUsdaTests
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, a.StatusCode);
         Assert.Equal(HttpStatusCode.BadGateway, b.StatusCode);
+    }
+
+    [Fact]
+    public async Task Of_several_records_with_the_gtin_the_latest_published_wins()
+    {
+        await using var factory = new ServerFactory();
+        var body = """
+            {"foods":[
+              {"fdcId":10,"description":"OLD","gtinUpc":"36000291452","publishedDate":"2019-04-01","foodNutrients":[{"nutrientId":1008,"value":400}]},
+              {"fdcId":11,"description":"NEW","gtinUpc":"036000291452","publishedDate":"2024-10-31","foodNutrients":[{"nutrientId":1008,"value":375}]},
+              {"fdcId":12,"description":"MIDDLE","gtinUpc":"36000291452","publishedDate":"2021-01-01","foodNutrients":[]}]}
+            """;
+        using var client = Create(factory, new Stub(HttpStatusCode.OK, body)).CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(UserA));
+
+        var match = await client.GetFromJsonAsync<BarcodeMatch>("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
+
+        Assert.Equal("NEW", match!.Name);
+        Assert.Equal(375, match.Energy);
+    }
+
+    [Fact]
+    public async Task Reads_later_pages_up_to_the_page_count()
+    {
+        await using var factory = new ServerFactory();
+        var stub = new Stub(HttpStatusCode.OK, "", request => request.RequestUri!.Query.Contains("pageNumber=2", StringComparison.Ordinal)
+            ? """{"totalPages":2,"foods":[{"fdcId":7,"description":"ON PAGE TWO","gtinUpc":"36000291452","foodNutrients":[]}]}"""
+            : """{"totalPages":2,"foods":[{"fdcId":6,"description":"OTHER","gtinUpc":"1","foodNutrients":[]}]}""");
+        using var client = Create(factory, stub).CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(UserA));
+
+        var match = await client.GetFromJsonAsync<BarcodeMatch>("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
+
+        Assert.Equal("ON PAGE TWO", match!.Name);
+        Assert.Equal(2, stub.Calls);
+    }
+
+    [Fact]
+    public async Task A_timeout_or_unreadable_response_from_USDA_is_a_502()
+    {
+        await using var factory = new ServerFactory();
+        using var timeout = Create(factory, new Stub(HttpStatusCode.OK, "", throws: new TaskCanceledException("timed out"))).CreateClient();
+        timeout.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(UserA));
+        using var garbage = Create(factory, new Stub(HttpStatusCode.OK, "<html>not json")).CreateClient();
+        garbage.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(UserA));
+
+        using var a = await timeout.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
+        using var b = await garbage.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadGateway, a.StatusCode);
+        Assert.Equal(HttpStatusCode.BadGateway, b.StatusCode);
+    }
+
+    [Fact]
+    public async Task Each_user_gets_a_fixed_number_of_lookups_and_the_rest_never_reach_USDA()
+    {
+        await using var factory = new ServerFactory();
+        var stub = new Stub(HttpStatusCode.OK, Search);
+        var app = Create(factory, stub, perHour: 2);
+        using var userA = app.CreateClient();
+        userA.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(UserA));
+        using var userB = app.CreateClient();
+        userB.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(Guid.Parse("018f0000-0000-7000-8000-00000000000b")));
+
+        var codes = new[] { "036000291452", "036000291452", "036000291452" };
+        var statuses = new List<HttpStatusCode>();
+        foreach (var code in codes)
+        {
+            using var response = await userA.GetAsync($"/foods/barcode/{code}/usda", TestContext.Current.CancellationToken);
+            statuses.Add(response.StatusCode);
+        }
+
+        using var other = await userB.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
+
+        Assert.Equal([HttpStatusCode.OK, HttpStatusCode.OK, HttpStatusCode.TooManyRequests], statuses);
+        Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+        Assert.Equal(3, stub.Calls); // two for A, one for B: A's third never reached USDA
     }
 
     [Fact]
