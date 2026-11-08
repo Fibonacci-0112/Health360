@@ -156,12 +156,49 @@ public static class FoodLibrary
     public static Task<FoodRow[]> SearchAsync(IPowerSyncDatabase db, string? query, int limit, string? householdId = null)
     {
         ArgumentNullException.ThrowIfNull(db);
-        var pattern = "%" + EscapeLike(query?.Trim() ?? "") + "%";
-        return db.GetAll<FoodRow>(
-            $"SELECT {Columns} FROM foods f WHERE f.household_id IS NOT NULL AND (? IS NULL OR f.household_id = ?) " +
-            "AND (f.name LIKE ? ESCAPE '\\' OR coalesce(f.brand, '') LIKE ? ESCAPE '\\') " +
-            "ORDER BY f.name COLLATE NOCASE, f.id LIMIT ?",
-            [householdId, householdId, pattern, pattern, limit]);
+        // Every word must appear in the name or the brand, as the catalogue search matches (search_catalogue_foods),
+        // so a household copy is found by any query that found its catalogue food.
+        var words = (query ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Take(MaxSearchWords).ToList();
+        var sql = new System.Text.StringBuilder(
+            $"SELECT {Columns} FROM foods f WHERE f.household_id IS NOT NULL AND (? IS NULL OR f.household_id = ?) ");
+        var parameters = new List<object?> { householdId, householdId };
+        foreach (var word in words)
+        {
+            sql.Append("AND (f.name LIKE ? ESCAPE '\\' OR coalesce(f.brand, '') LIKE ? ESCAPE '\\') ");
+            var pattern = "%" + EscapeLike(word) + "%";
+            parameters.Add(pattern);
+            parameters.Add(pattern);
+        }
+
+        sql.Append("ORDER BY f.name COLLATE NOCASE, f.id LIMIT ?");
+        parameters.Add(limit);
+        return db.GetAll<FoodRow>(sql.ToString(), [.. parameters]);
+    }
+
+    /// <summary>The most words of a query matched; a longer query is matched on its first words.</summary>
+    public const int MaxSearchWords = 20;
+
+    /// <summary>Which of <paramref name="catalogueIds"/> the household already has a copy of on this device.</summary>
+    public static async Task<IReadOnlySet<string>> CopiedAsync(IPowerSyncDatabase db, string householdId, IEnumerable<string> catalogueIds)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(catalogueIds);
+        var ids = catalogueIds.Distinct(StringComparer.Ordinal).ToList();
+        if (ids.Count == 0 || string.IsNullOrEmpty(householdId))
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        var rows = await db.GetAll<CopiedFrom>(
+            $"SELECT copied_from AS Id FROM foods WHERE household_id = ? AND copied_from IN ({string.Join(", ", ids.Select(_ => "?"))})",
+            [householdId, .. ids]).ConfigureAwait(false);
+        return rows.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+    }
+
+    internal sealed class CopiedFrom
+    {
+        public string Id { get; set; } = "";
     }
 
     /// <summary>The foods this profile logged most recently that are still on this device, newest first.</summary>

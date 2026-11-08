@@ -73,8 +73,9 @@ public sealed class CatalogueFoodTests : AppTestContext
         Assert.Equal(1, await App.Database.Db.Get<long>(
             "SELECT count(*) FROM ps_crud WHERE json_extract(data, '$.type') = 'foods' AND json_extract(data, '$.data.copied_from') = ?", [Chicken]));
 
-        // Searched again, the food is the household's: listed with its foods, not offered from the catalogue again.
-        await TypeAsync(cut, "#food-search", "chicke");
+        // Searched again, by words that match the catalogue name separately, the food is the household's: listed with
+        // its foods, not offered from the catalogue again.
+        await TypeAsync(cut, "#food-search", "chick brea");
         cut.WaitForAssertion(() => Assert.Contains("Chicken breast", cut.Find("#food-results").TextContent, StringComparison.Ordinal), Wait);
         Assert.Empty(cut.FindAll("#catalogue-results"));
     }
@@ -117,5 +118,54 @@ public sealed class CatalogueFoodTests : AppTestContext
         cut.WaitForAssertion(() => cut.Find("#recipe-list"), Wait);
         var recipe = Assert.Single(await Recipes.ListAsync(App.Database.Db));
         Assert.Equal(CopyId, Assert.Single(recipe.Ingredients).FoodId);
+    }
+
+    [Fact]
+    public async Task Another_households_copy_does_not_hide_the_catalogue_food_from_the_household_adding_it()
+    {
+        const string Cabin = "0192f0c0-0000-7000-8000-0000000000a2";
+        var cut = await OpenAsync("food", "#food-search");
+        await App.Database.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("INSERT INTO households (id, name) VALUES (?, 'Cabin')", [Cabin]);
+            await tx.Execute("INSERT INTO household_members (id, household_id, profile_id) VALUES ('hm2', ?, ?)", [Cabin, ProfileId]);
+        });
+        await FoodLibrary.CopyFromCatalogueAsync(App.Database.Db, Household, ChickenBreast(), App.Clock);
+        cut.WaitForAssertion(() => cut.Find("#new-food-household"), Wait);
+
+        // Home has it: not offered while Home is where new foods go.
+        await ChangeAsync(cut, "#new-food-household", Household);
+        await TypeAsync(cut, "#food-search", "chicken");
+        cut.WaitForAssertion(() => Assert.Contains("Chicken breast", cut.Find("#food-results").TextContent, StringComparison.Ordinal), Wait);
+        Assert.Empty(cut.FindAll("#catalogue-results"));
+
+        // Cabin hasn't: offered, and using it makes Cabin's own copy.
+        await ChangeAsync(cut, "#new-food-household", Cabin);
+        await TypeAsync(cut, "#food-search", "chicke");
+        cut.WaitForAssertion(() => cut.Find("#catalogue-results"), Wait);
+        await ClickAsync(cut, "[aria-label='Use Chicken breast from the USDA catalogue']");
+        cut.WaitForAssertion(() => cut.Find("#log-food"), Wait);
+        var cabinCopy = FoodCopy.IdFor(Guid.Parse(Cabin), Guid.Parse(Chicken)).ToString("D");
+        Assert.Equal(Cabin, (await FoodLibrary.GetAsync(App.Database.Db, cabinCopy))!.HouseholdId);
+    }
+
+    [Fact]
+    public async Task Changing_a_recipes_household_clears_the_catalogue_results_of_the_old_search()
+    {
+        const string Cabin = "0192f0c0-0000-7000-8000-0000000000a2";
+        var cut = await OpenAsync("food/recipes/new", "#ingredient-search");
+        await App.Database.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("INSERT INTO households (id, name) VALUES (?, 'Cabin')", [Cabin]);
+            await tx.Execute("INSERT INTO household_members (id, household_id, profile_id) VALUES ('hm2', ?, ?)", [Cabin, ProfileId]);
+        });
+        cut.WaitForAssertion(() => cut.Find("#recipe-household"), Wait);
+
+        await TypeAsync(cut, "#ingredient-search", "chicken");
+        cut.WaitForAssertion(() => cut.Find("#ingredient-catalogue"), Wait);
+        await ChangeAsync(cut, "#recipe-household", Cabin);
+
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("#ingredient-catalogue")), Wait);
+        Assert.Equal("", cut.Find("#ingredient-search").GetAttribute("value"));
     }
 }

@@ -9,7 +9,7 @@
 -- Matching: every word of the query must appear in the name or the brand, case-insensitively, as a substring, so
 -- "chick brea" finds "Chicken, breast". LIKE wildcards in the query match only themselves. Ranking, best first:
 -- the name starts with the whole query, then the name starts with the first word, then shorter names (fewer
--- unrelated words), then name and id for a stable order. 13,510 imported rows scan in a few milliseconds, so there
+-- unrelated words), then name and id for a stable order. The 100-character limit bounds the number of words. 13,510 imported rows scan in a few milliseconds, so there
 -- is no search index yet; one comes with the Open Food Facts import, if its size needs it.
 
 create function public.search_catalogue_foods(query text, max_results integer default 20)
@@ -40,7 +40,7 @@ language sql stable security invoker set search_path = '' as $$
   from public.foods f, q
   where f.household_id is null
     and char_length(q.whole) between 2 and 100
-    and cardinality(q.words) between 1 and 8
+    and cardinality(q.words) >= 1
     and not exists (
       select 1 from unnest(q.words) as w
       where not (lower(f.name) like '%' || w || '%' escape '\'

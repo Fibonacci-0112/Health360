@@ -2,7 +2,7 @@
 -- only, ranked by how the name starts, callable by signed-in users only. Runs as `authenticated`.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(13);
+select plan(14);
 
 insert into auth.users (id, email) values ('00000000-0000-0000-0000-00000000000a', 'a@example.com');
 select set_config('t.a', (select id::text from profiles where user_id = '00000000-0000-0000-0000-00000000000a'), true);
@@ -46,6 +46,8 @@ select is(array(select name from search_catalogue_foods('100%')), array['Milk, 1
   'a % in the query is a literal percent sign, not a wildcard');
 select is((select count(*) from search_catalogue_foods('2_')), 0::bigint, 'an underscore is literal too');
 select is((select count(*) from search_catalogue_foods('c')), 0::bigint, 'a one-character query returns nothing');
+select is(array(select name from search_catalogue_foods('chicken broilers or fryers breast meat only cooked roasted')),
+  array['Chicken, broilers or fryers, breast, meat only, cooked, roasted'], 'a long query of nine matching words still matches');
 select is((select count(*) from search_catalogue_foods('chicken', 1)), 1::bigint, 'max_results limits the results');
 select is((select count(*) from search_catalogue_foods('milk', 500)), 2::bigint, 'a limit over 50 is capped, not refused');
 

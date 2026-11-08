@@ -125,6 +125,22 @@ public class CatalogueSearchTests
         await Assert.ThrowsAsync<ArgumentException>(() => FoodLibrary.CopyFromCatalogueAsync(t.Db, Household, food, Clock));
     }
 
+    [Fact]
+    public async Task HouseholdSearchMatchesEachWordAsTheCatalogueDoesAndCopiesAreFoundById()
+    {
+        await using var t = await TestDatabase.OpenAsync();
+        await t.Db.Execute("INSERT INTO households (id, name) VALUES (?, 'Home')", [Household]);
+        var id = await FoodLibrary.CopyFromCatalogueAsync(t.Db, Household, PostgrestCatalogueSearch.Parse(ChickenJson)![0], Clock);
+
+        Assert.Contains(await FoodLibrary.SearchAsync(t.Db, "chick brea", 20, Household), f => f.Id == id);
+        Assert.Contains(await FoodLibrary.SearchAsync(t.Db, "BREAST chicken", 20, Household), f => f.Id == id);
+        Assert.Empty(await FoodLibrary.SearchAsync(t.Db, "chicken thigh", 20, Household));
+
+        Assert.Equal([Chicken], await FoodLibrary.CopiedAsync(t.Db, Household, [Chicken, "50000000-0000-0000-0000-000000000009"]));
+        Assert.Empty(await FoodLibrary.CopiedAsync(t.Db, "0192f0c0-0000-7000-8000-0000000000a2", [Chicken]));
+        Assert.Empty(await FoodLibrary.CopiedAsync(t.Db, Household, []));
+    }
+
     private sealed class Server : HttpMessageHandler
     {
         private readonly Queue<(HttpStatusCode Status, string Body)?> responses = new();
