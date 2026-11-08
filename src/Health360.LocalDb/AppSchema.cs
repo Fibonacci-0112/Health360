@@ -403,12 +403,31 @@ public static class AppSchema
     public static Table WorkoutState { get; } = new("workout_state",
         Columns(("profile_id", ColumnType.Text), ("value", ColumnType.Text)), new TableOptions(localOnly: true));
 
+    /// <summary>
+    /// U: how the profile's daily targets are set, one row per profile with an id derived from it
+    /// (<see cref="NutritionTargetStore.IdFor"/>). It holds the settings, not computed grams: a formula target is
+    /// computed from the physiology profile whenever it is shown. Energy is in kcal; the protein ratio is as entered.
+    /// </summary>
+    public static Table NutritionTargets { get; } = Synced("nutrition_targets",
+        ("profile_id", ColumnType.Text),
+        ("method", ColumnType.Text),
+        ("energy_adjustment_kcal", ColumnType.Real),
+        ("protein_basis", ColumnType.Text),
+        ("protein_ratio", ColumnType.Real),
+        ("protein_ratio_unit", ColumnType.Text),
+        ("protein_ratio_g_per_kg", ColumnType.Real),
+        ("fat_percent", ColumnType.Real),
+        ("manual_energy_kcal", ColumnType.Real),
+        ("manual_protein_g", ColumnType.Real),
+        ("manual_fat_g", ColumnType.Real),
+        ("manual_carbohydrate_g", ColumnType.Real));
+
     public static IReadOnlyList<Table> Tables { get; } =
         [
             Profiles, Households, HouseholdMembers, SharingGrants, Consents, ReferenceDatasets, MetricDefinitions,
             MeasurementGroups, Measurements, ZoneSets, MetricPinsTable, ProgressPhotos, Exercises, WorkoutTemplates,
             TemplateExercises, WorkoutSessions, CardioEstimates, SessionExercises, SetLogs, TrainingLocations, Programs, ScheduledWorkouts,
-            PersonalRecords, Nutrients, Foods, Recipes, RecipeIngredients, FoodLogEntries, FailedUploadsTable, PhotoUploadsTable,
+            PersonalRecords, Nutrients, Foods, Recipes, RecipeIngredients, FoodLogEntries, NutritionTargets, FailedUploadsTable, PhotoUploadsTable,
             PhotoDeletionsTable, WorkoutState,
         ];
 
@@ -499,6 +518,8 @@ public static class AppSchema
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {
             ["metric_pins"] = ["measurement_id"],
+            // Clearing a manual value on one device must clear it on the server, not keep the old one.
+            ["nutrition_targets"] = ["manual_energy_kcal", "manual_protein_g", "manual_fat_g", "manual_carbohydrate_g"],
         };
 
     /// <summary>Tables the client may write. Everything else synced is read-only on the client.</summary>
@@ -508,7 +529,7 @@ public static class AppSchema
                 "profiles", "consents", "sharing_grants", "measurement_groups", "measurements", "zone_sets", "metric_pins",
                 "progress_photos", "exercises", "workout_templates", "template_exercises", "workout_sessions",
                 "session_exercises", "set_logs", "cardio_estimates", "training_locations", "programs", "scheduled_workouts", "personal_records",
-                "foods", "recipes", "recipe_ingredients", "food_log_entries",
+                "foods", "recipes", "recipe_ingredients", "food_log_entries", "nutrition_targets",
             ],
             StringComparer.Ordinal);
 

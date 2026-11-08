@@ -57,6 +57,9 @@ public sealed partial class BodyData : IDisposable
     /// <summary>True when a watched query failed; what's shown may then be out of date.</summary>
     public bool Failed => measurementsFailed || pinsFailed || definitionsFailed;
 
+    /// <summary>True when a read <see cref="Profile"/> is built from failed (measurements or pins), so it may be out of date.</summary>
+    public bool ProfileFailed => measurementsFailed || pinsFailed;
+
     /// <summary>
     /// Restarts a watch that failed, so leaving a screen and coming back retries. Pages call it when they open.
     /// A watch that is running is left alone. <see cref="Failed"/> clears once the restarted watch answers.

@@ -420,6 +420,51 @@ Golden values (test fixture): 80 g oats (379 kcal, 13.2 g protein, 10.1 g fiber 
 | Per 100 g, raw weight 232 g | 598.16 × 100 / 232 | 257.83 kcal |
 | Per 100 g, cooked weight 400 g | 598.16 × 100 / 400 | 149.54 kcal |
 
+## Nutrition targets (step 1.3)
+
+`Nutrition/NutritionTargets` computes a profile's daily energy, protein, fat and carbohydrate targets from its settings (one `nutrition_targets` row) and the physiology profile. The row stores the settings, never computed grams, so a formula target is computed again whenever it is shown: entering or deleting a lab RMR, a weigh-in or a body-fat value changes it at once.
+
+**Formula** (`method` `formula`):
+
+- Energy = maintenance energy (resolved RMR × PAL, [Activity level and maintenance energy](#activity-level-and-maintenance-energy)) + the user's adjustment in kcal/day (negative for a deficit, 0 by default). Always an estimate, because maintenance is. Choosing the adjustment from a goal, its pace warnings and the calorie floor belong to the goal wizard (step 4).
+- Protein = ratio × reference mass, the ratio converted to g/kg with `ProteinRatio.ToGPerKg` (g/lb ÷ 0.45359237). The reference mass is the trend body weight, or fat-free mass when the user picks lean mass; fat-free mass needs a measured body-fat percentage ([Body composition](#body-composition)). The ratio is stored as entered with its unit, and the server recomputes `protein_ratio_g_per_kg` with `private.protein_ratio_g_per_kg` (bit for bit, `CanonicalUnitParityTests`). Switching the unit in the editor converts the number shown to 2 decimals, so the daily grams stay the same beyond that rounding.
+- Fat = energy × fat share ÷ 9.
+- Carbohydrate = (energy − 4 × protein − 9 × fat) ÷ 4: what protein and fat leave.
+- The factors are the general 4, 4 and 9 kcal/g the label checks use ([Label checks](#label-checks-step-13)).
+
+**Defaults**, before the user saves anything: no adjustment, protein 1.6 g/kg of body weight, fat 30% of energy.
+
+- 1.6 g/kg is where Morton et al. (2018) found that more protein stopped adding fat-free mass during resistance training: "Protein supplementation beyond total protein intakes of 1.62 g/kg/day resulted in no further RET-induced gains in FFM". The source is a meta-analysis of 49 randomised trials (1,863 healthy adults). Morton, R. W. et al. A systematic review, meta-analysis and meta-regression of the effect of protein supplementation on resistance training-induced gains in muscle mass and strength in healthy adults. *Br J Sports Med* 52(6):376–384, [DOI](https://doi.org/10.1136/bjsports-2017-097608) (abstract checked through PubMed).
+- 30% fat is a **product default, not a sourced figure**. The Dietary Reference Intakes' acceptable macronutrient ranges weren't checked against the primary report (its online pages are images), so the app doesn't cite them or warn against them yet.
+- Users whose protein unit is g/lb see 1.6 g/kg as 0.73 g/lb, and that is what is stored if they save it.
+
+**Not computed, and said so:** each missing value is left unknown rather than set to 0, with the reason shown.
+
+- Without maintenance energy (no RMR or no activity level), there is no energy, fat or carbohydrate target.
+- Without a weigh-in, or without fat-free mass for a lean-mass ratio, there is no protein or carbohydrate target.
+- A total of 0 kcal or less after the adjustment gives no energy target.
+- When protein and fat need more energy than the target, no carbohydrate target is set, rather than clamping it at 0.
+
+**Manual** (`method` `manual`): the user's own energy target (required) and any of protein, carbohydrate and fat in grams. It is an explicit override that no profile change recomputes. The formula settings are kept while it is in use, so switching back restores them.
+
+**Energy units.** Energy is stored in kcal and shown in the user's unit (exactly 4.184 kJ per kcal). An energy left as the editor showed it keeps its stored kcal, so a kJ display's rounding never changes a saved value.
+
+**Exercise energy** is never added to the target ([Workout and cardio energy](#workout-and-cardio-energy-step-12)).
+
+**The Food tab** shows each target against the day's total, with what is left or over. A total marked "at least" leaves at most what is shown. A past day is compared with the current targets, because earlier targets aren't kept yet; they will be once the goal wizard links goals to targets.
+
+Golden values (test fixture: male, 30, 180 cm, moderately active, 80 kg; Mifflin-St Jeor 1781.6 kcal; maintenance 1781.6 × 1.85 = 3295.96 kcal), at −500 kcal, 1.6 g/kg and 30% fat:
+
+| | Hand calculation | Result |
+|---|---|---|
+| Energy | 3295.96 − 500 | 2795.96 kcal |
+| Protein | 1.6 × 80 | 128 g |
+| Fat | 2795.96 × 0.30 ÷ 9 | 93.199 g |
+| Carbohydrate | (2795.96 − 4 × 128 − 9 × 93.199) ÷ 4 | 361.293 g |
+| With a lab RMR of 1700 | 1700 × 1.85 − 500; carbohydrate (2645 − 512 − 793.5) ÷ 4 | 2645 kcal; 334.875 g |
+| 0.8 g/lb instead | 0.8 ÷ 0.45359237 × 80 | 141.096 g |
+| Lean mass at 25% body fat | 1.6 × 60; RMR switches to Katch-McArdle, 1666 × 1.85 − 500 | 96 g; 2582.1 kcal |
+
 ## USDA FoodData Central import (step 1.3)
 
 Implemented in `tools/importers` (`FoodDataCentral`, `FoodImporter`); tests in `tests/Health360.Importers.Tests`. It reads the JSON downloads of Foundation Foods, SR Legacy and FNDDS survey foods from [FoodData Central](https://fdc.nal.usda.gov/download-datasets) (public domain, CC0 1.0) and upserts them as catalogue foods (`household_id` null, `source` `usda_fdc`, `external_id` the `fdcId`, `basis` g). Branded foods are not imported. The mapping was checked against the Foundation 2024-10-31, SR Legacy 2018-04 and FNDDS 2024-10-31 files: 286, 7,793 and 5,431 foods.
@@ -481,7 +526,7 @@ A property test rounds labels built from exact 4/4/9 energy with the FDA rules, 
 
 ## What the 1.1 exit criterion proves
 
-Step 1.1 proves that entering a lab RMR changes the physiology profile's maintenance estimate at once, and that deleting it falls back to the next value or the estimate. It also proves that a measured max HR replaces the Tanaka estimate, and that the zones derived from max HR follow it (`HeartRateZoneRules.Derive`). Nutrition targets built on this come in step 1.3 and have their own integration test (PLAN.md §3).
+Step 1.1 proves that entering a lab RMR changes the physiology profile's maintenance estimate at once, and that deleting it falls back to the next value or the estimate. It also proves that a measured max HR replaces the Tanaka estimate, and that the zones derived from max HR follow it (`HeartRateZoneRules.Derive`). Nutrition targets built on this are step 1.3's: `NutritionTargetsTests` (Domain and UI) show formula targets, stored ones included, following a lab RMR being entered and deleted ([Nutrition targets](#nutrition-targets-step-13)).
 
 ## Still to specify
 
