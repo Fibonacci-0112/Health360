@@ -154,4 +154,51 @@ public sealed class NutritionTargetsTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Contains("Enter fat as a percentage", cut.Find(".error").TextContent, StringComparison.Ordinal), Wait);
         Assert.Null(await NutritionTargetStore.GetAsync(App.Database.Db, ProfileId));
     }
+
+    [Fact]
+    public async Task Saving_without_changes_keeps_stored_values_the_display_rounds()
+    {
+        var cut = await FoodAsync();
+        // Finer than the editor shows, and a g/lb ratio exactly at the 10 g/kg limit that rounds to above it.
+        var manual = TargetSettings.Default with
+        {
+            Method = TargetMethod.Manual,
+            ProteinRatio = 4.5359237,
+            ProteinRatioUnit = Health360.Domain.Units.ProteinRatioUnit.GramsPerPound,
+            FatPercent = 27.55,
+            ManualEnergyKcal = 2400.4,
+            ManualProteinG = 123.44,
+            ManualFatG = 70.06,
+        };
+        await NutritionTargetStore.SaveAsync(App.Database.Db, ProfileId, manual, App.Clock);
+
+        await EditorAsync(cut);
+        Assert.Equal("123.4", cut.Find("#target-manual-protein").GetAttribute("value"));
+        await SubmitAsync(cut, "#targets-form");
+        cut.WaitForAssertion(() => Assert.Contains("Targets saved", cut.Markup, StringComparison.Ordinal), Wait);
+        Assert.Equal(manual, (await NutritionTargetStore.GetAsync(App.Database.Db, ProfileId))!.ToSettings());
+
+        // The formula view of the same row saves unchanged too, the boundary ratio included.
+        await ClickAsync(() => cut.FindAll("[role=radio]").Single(e => e.TextContent.Contains("From my profile", StringComparison.Ordinal)));
+        await SubmitAsync(cut, "#targets-form");
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".error")), Wait);
+        var formula = (await NutritionTargetStore.GetAsync(App.Database.Db, ProfileId))!.ToSettings()!;
+        Assert.Equal((TargetMethod.Formula, 4.5359237, 27.55), (formula.Method, formula.ProteinRatio, formula.FatPercent));
+    }
+
+    [Fact]
+    public async Task An_invalid_hidden_formula_field_does_not_block_a_manual_target()
+    {
+        var cut = await FoodAsync();
+        await EditorAsync(cut);
+        await TypeAsync(cut, "#target-fat-percent", "abc");
+        await ClickAsync(() => cut.FindAll("[role=radio]").Single(e => e.TextContent.Contains("My own numbers", StringComparison.Ordinal)));
+        await TypeAsync(cut, "#target-manual-energy", "2200");
+        await SubmitAsync(cut, "#targets-form");
+        cut.WaitForAssertion(() => Assert.Contains("Targets saved", cut.Markup, StringComparison.Ordinal), Wait);
+
+        // The formula settings the form was filled with are kept for switching back.
+        var saved = (await NutritionTargetStore.GetAsync(App.Database.Db, ProfileId))!.ToSettings()!;
+        Assert.Equal((TargetMethod.Manual, 2200.0, TargetSettings.DefaultFatPercent), (saved.Method, saved.ManualEnergyKcal!.Value, saved.FatPercent));
+    }
 }

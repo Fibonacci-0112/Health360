@@ -28,7 +28,7 @@
     }
     else
     {
-        <form class="card" id="targets-form" @onsubmit="SaveAsync">
+        <form class="card" id="targets-form" @onsubmit="SaveAsync" @onsubmit:preventDefault>
             <p class="field-label" id="targets-method">How they're set</p>
             <ChoiceGroup LabelledBy="targets-method" Options="Methods" Labels="MethodNames" Value="@method" ValueChanged="code => method = code ?? method" />
             @if (method == NutritionTargetStore.FormulaMethod)
@@ -134,10 +134,11 @@
     private string adjustment = "", ratio = "", fatPercent = "", manualEnergy = "", manualProtein = "", manualCarbohydrate = "", manualFat = "";
     private int generation;
 
-    // What the form was filled with: an energy left as shown keeps its stored kcal, so a kJ display's rounding never
-    // changes a saved value.
+    // What the form was filled with. A field left as shown keeps its stored value, so the display's rounding (a kJ
+    // energy, a ratio to 2 decimals, grams to 1) never changes a saved value or pushes one past a limit.
     private TargetSettings? filled;
-    private string filledAdjustment = "", filledManualEnergy = "";
+    private string filledAdjustment = "", filledRatio = "", filledFatPercent = "", filledManualEnergy = "", filledManualProtein = "",
+        filledManualCarbohydrate = "", filledManualFat = "";
 
     protected override async Task OnInitializedAsync()
     {
@@ -196,7 +197,12 @@
         manualCarbohydrate = s.ManualCarbohydrateG is { } c ? Text(c, 1) : "";
         manualFat = s.ManualFatG is { } f ? Text(f, 1) : "";
         filledAdjustment = adjustment;
+        filledRatio = ratio;
+        filledFatPercent = fatPercent;
         filledManualEnergy = manualEnergy;
+        filledManualProtein = manualProtein;
+        filledManualCarbohydrate = manualCarbohydrate;
+        filledManualFat = manualFat;
     }
 
     /// <summary>Switching the ratio's unit converts the number typed, so the daily grams stay the same beyond rounding.</summary>
@@ -214,37 +220,80 @@
     /// <summary>The settings the form describes, or why they can't be used.</summary>
     private (TargetSettings? Settings, string? Problem) Read()
     {
-        double? Optional(string text) => string.IsNullOrWhiteSpace(text) ? null : NumberText.Parse(text);
-        var adjustmentValue = string.IsNullOrWhiteSpace(adjustment) ? 0 : NumberText.Parse(adjustment);
-        if (adjustmentValue is not { } adj || !double.IsFinite(adj)) return (null, "Enter the energy adjustment as a number, or 0.");
-        var adjKcal = adjustment == filledAdjustment && filled is not null ? filled.EnergyAdjustmentKcal : ToKcal(adj);
-        if (adjKcal is < -5000 or > 5000) return (null, $"Keep the adjustment within ± {MetricDisplay.Energy(5000, Foods.UnitPrefs.Energy)}.");
-        if (NumberText.Parse(ratio) is not { } ratioValue || ProteinRatio.ToGPerKg(ratioValue, ratioUnit) is not (> 0 and <= 10))
-            return (null, $"Enter protein as more than 0 and at most {Text(ProteinRatio.FromGPerKg(10, ratioUnit), 2)} {TargetDisplay.RatioUnitName(ratioUnit)}.");
-        if (NumberText.Parse(fatPercent) is not { } fat || fat is <= 0 or >= 100) return (null, "Enter fat as a percentage between 0 and 100.");
-
-        double? energyKcal = null, protein = null, carbohydrate = null, fatG = null;
         var manual = method == NutritionTargetStore.ManualMethod;
-        if (manual)
+        var (formula, formulaProblem) = ReadFormula();
+        if (formula is null)
         {
-            if (Optional(manualEnergy) is not { } energy || ToKcal(energy) is not (> 0 and <= 20000))
-                return (null, "Enter an energy target, more than 0.");
-            energyKcal = manualEnergy == filledManualEnergy && filled?.ManualEnergyKcal is { } kept ? kept : ToKcal(energy);
-            foreach (var (text, name) in new[] { (manualProtein, "protein"), (manualCarbohydrate, "carbohydrate"), (manualFat, "fat") })
-            {
-                if (!string.IsNullOrWhiteSpace(text) && Optional(text) is not (>= 0 and <= 2000))
-                    return (null, $"Enter {name} as grams from 0 to 2000, or leave it blank.");
-            }
-
-            protein = Optional(manualProtein);
-            carbohydrate = Optional(manualCarbohydrate);
-            fatG = Optional(manualFat);
+            // The formula fields are hidden while the method is manual: they mustn't block a manual target, so the
+            // settings they were filled with are kept instead.
+            if (!manual) return (null, formulaProblem);
+            formula = filled ?? TargetsCard.StartingSettings(Foods.UnitPrefs);
         }
 
-        return (new TargetSettings(manual ? TargetMethod.Manual : TargetMethod.Formula, adjKcal, ratioValue, ratioUnit,
-            basis == NutritionTargetStore.LeanMassBasis ? ProteinBasis.LeanMass : ProteinBasis.BodyWeight, fat,
-            energyKcal, protein, fatG, carbohydrate), null);
+        if (!manual)
+        {
+            return (formula with { Method = TargetMethod.Formula, ManualEnergyKcal = null, ManualProteinG = null, ManualFatG = null, ManualCarbohydrateG = null }, null);
+        }
+
+        var energy = Kept(manualEnergy, filledManualEnergy, filled?.ManualEnergyKcal)
+            ?? (Optional(manualEnergy) is { } typed ? ToKcal(typed) : null);
+        if (energy is not (> 0 and <= 20000))
+        {
+            return (null, "Enter an energy target, more than 0.");
+        }
+
+        var grams = new List<double?>();
+        foreach (var (text, shown, stored, name) in new[]
+        {
+            (manualProtein, filledManualProtein, filled?.ManualProteinG, "protein"),
+            (manualCarbohydrate, filledManualCarbohydrate, filled?.ManualCarbohydrateG, "carbohydrate"),
+            (manualFat, filledManualFat, filled?.ManualFatG, "fat"),
+        })
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                grams.Add(null);
+                continue;
+            }
+
+            var value = Kept(text, shown, stored) ?? Optional(text);
+            if (value is not (>= 0 and <= 2000))
+                return (null, $"Enter {name} as grams from 0 to 2000, or leave it blank.");
+            grams.Add(value);
+        }
+
+        return (formula with
+        {
+            Method = TargetMethod.Manual,
+            ManualEnergyKcal = energy,
+            ManualProteinG = grams[0],
+            ManualCarbohydrateG = grams[1],
+            ManualFatG = grams[2],
+        }, null);
     }
+
+    /// <summary>The formula fields as settings (manual values left empty), or why they can't be used.</summary>
+    private (TargetSettings? Settings, string? Problem) ReadFormula()
+    {
+        double? adjKcal = string.IsNullOrWhiteSpace(adjustment) ? 0
+            : Kept(adjustment, filledAdjustment, filled?.EnergyAdjustmentKcal) ?? (NumberText.Parse(adjustment) is { } adj ? ToKcal(adj) : null);
+        if (adjKcal is not { } kcal || !double.IsFinite(kcal)) return (null, "Enter the energy adjustment as a number, or 0.");
+        if (kcal is < -5000 or > 5000) return (null, $"Keep the adjustment within ± {MetricDisplay.Energy(5000, Foods.UnitPrefs.Energy)}.");
+        var ratioValue = filled is not null && ratioUnit == filled.ProteinRatioUnit ? Kept(ratio, filledRatio, filled.ProteinRatio) : null;
+        ratioValue ??= NumberText.Parse(ratio);
+        if (ratioValue is not { } r || ProteinRatio.ToGPerKg(r, ratioUnit) is not (> 0 and <= 10))
+            return (null, $"Enter protein as more than 0 and at most {Text(ProteinRatio.FromGPerKg(10, ratioUnit), 2)} {TargetDisplay.RatioUnitName(ratioUnit)}.");
+        if ((Kept(fatPercent, filledFatPercent, filled?.FatPercent) ?? NumberText.Parse(fatPercent)) is not { } fat || fat is <= 0 or >= 100)
+            return (null, "Enter fat as a percentage between 0 and 100.");
+
+        return (new TargetSettings(TargetMethod.Formula, kcal, r, ratioUnit,
+            basis == NutritionTargetStore.LeanMassBasis ? ProteinBasis.LeanMass : ProteinBasis.BodyWeight, fat), null);
+    }
+
+    /// <summary>The stored value when the field still shows exactly what it was filled with; otherwise null.</summary>
+    private static double? Kept(string text, string shown, double? stored) => text == shown ? stored : null;
+
+    private static double? Optional(string text) => string.IsNullOrWhiteSpace(text) ? null : NumberText.Parse(text);
 
     private (DailyTargets? Targets, TargetSettings? Settings, string? Problem) Preview()
     {
