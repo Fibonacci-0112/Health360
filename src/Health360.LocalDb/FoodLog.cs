@@ -149,16 +149,19 @@ public static class FoodLibrary
         "f.energy_100 AS Energy100, f.protein_100 AS Protein100, f.carbohydrate_100 AS Carbohydrate100, f.fat_100 AS Fat100, " +
         "f.nutrients_100 AS Nutrients100, f.portions AS Portions";
 
-    /// <summary>The household foods whose name or brand contains <paramref name="query"/>, by name; all of them when it is empty.</summary>
-    public static Task<FoodRow[]> SearchAsync(IPowerSyncDatabase db, string? query, int limit)
+    /// <summary>
+    /// The household foods whose name or brand contains <paramref name="query"/>, by name; all of them when it is empty.
+    /// With <paramref name="householdId"/>, only that household's, filtered before the limit.
+    /// </summary>
+    public static Task<FoodRow[]> SearchAsync(IPowerSyncDatabase db, string? query, int limit, string? householdId = null)
     {
         ArgumentNullException.ThrowIfNull(db);
         var pattern = "%" + EscapeLike(query?.Trim() ?? "") + "%";
         return db.GetAll<FoodRow>(
-            $"SELECT {Columns} FROM foods f WHERE f.household_id IS NOT NULL " +
+            $"SELECT {Columns} FROM foods f WHERE f.household_id IS NOT NULL AND (? IS NULL OR f.household_id = ?) " +
             "AND (f.name LIKE ? ESCAPE '\\' OR coalesce(f.brand, '') LIKE ? ESCAPE '\\') " +
             "ORDER BY f.name COLLATE NOCASE, f.id LIMIT ?",
-            [pattern, pattern, limit]);
+            [householdId, householdId, pattern, pattern, limit]);
     }
 
     /// <summary>The foods this profile logged most recently that are still on this device, newest first.</summary>

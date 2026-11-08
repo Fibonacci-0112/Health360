@@ -227,6 +227,34 @@ public sealed class RecipesTests
         Assert.Equal(["Overnight oats"], (await Recipes.SearchAsync(t.Db, "oats", 10)).Select(r => r.Name));
     }
 
+    [Fact]
+    public async Task A_household_search_filters_before_the_limit()
+    {
+        await using var t = await OpenAsync();
+        for (var i = 0; i < 3; i++)
+        {
+            await FoodLibrary.AddAsync(t.Db, OtherHousehold, new FoodInput($"Oat bar {i}", null, FoodBasis.Mass, 100, 400, 8, 60, 15, []), clock);
+        }
+
+        var ours = await FoodLibrary.AddAsync(t.Db, Household, new FoodInput("Oat milk", null, FoodBasis.Volume, 100, 46, 1, 6.5, 1.5, []), clock);
+
+        Assert.DoesNotContain(await FoodLibrary.SearchAsync(t.Db, "oat", 2), f => f.Id == ours);
+        Assert.Equal([ours], (await FoodLibrary.SearchAsync(t.Db, "oat", 2, Household)).Select(f => f.Id));
+    }
+
+    [Fact]
+    public async Task Every_recipe_is_listed_when_no_limit_is_given()
+    {
+        await using var t = await OpenAsync();
+        var p = await StockAsync(t);
+        for (var i = 0; i < 22; i++)
+        {
+            await Recipes.CreateAsync(t.Db, Household, Porridge(p) with { Name = $"Porridge {i:00}" }, clock);
+        }
+
+        Assert.Equal(22, (await Recipes.SearchAsync(t.Db, null, -1)).Length);
+    }
+
     /// <summary>Moves a second on at each read, so rows written one after another sort in that order.</summary>
     private sealed class StepClock(DateTimeOffset start) : TimeProvider
     {

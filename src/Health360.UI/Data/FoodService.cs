@@ -28,7 +28,7 @@ public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, T
     public IAsyncEnumerable<WorkoutLog.ChangeStamp[]> WatchChoices(CancellationToken cancellationToken) =>
         FoodLibrary.WatchChoices(db, RequireProfile(), cancellationToken);
 
-    public Task<FoodRow[]> SearchAsync(string? query) => FoodLibrary.SearchAsync(db, query, 20);
+    public Task<FoodRow[]> SearchAsync(string? query, string? householdId = null) => FoodLibrary.SearchAsync(db, query, 20, householdId);
 
     public Task<FoodRow[]> RecentAsync() => FoodLibrary.RecentAsync(db, RequireProfile(), 8);
 
@@ -41,6 +41,9 @@ public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, T
         FoodLog.QuickAddAsync(db, RequireProfile(), meal, date, name, energy, protein, carbohydrate, fat, clock);
 
     public Task<RecipeRow[]> SearchRecipesAsync(string? query) => Recipes.SearchAsync(db, query, 20);
+
+    /// <summary>Every household recipe, for the recipe list.</summary>
+    public Task<RecipeRow[]> AllRecipesAsync() => Recipes.SearchAsync(db, null, -1);
 
     public Task<RecipeDetail?> RecipeAsync(string id) => Recipes.GetAsync(db, id);
 

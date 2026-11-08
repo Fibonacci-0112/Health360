@@ -81,6 +81,7 @@
                                 <select aria-label="@($"{row.FoodName} unit")" @bind="row.Unit" disabled="@(row.Food is null)">
                                     @if (row.Food is { } food)
                                     {
+                                        @if (RetiredPortion(row) is { } retired) { <option value="@row.Unit">× @retired (no longer listed)</option> }
                                         @foreach (var portion in food.Portions) { <option value="@("portion:" + portion.Name)">× @portion.Name</option> }
                                         @foreach (var unitCode in FoodLog.UnitsFor(food.Basis)) { <option value="@unitCode">@UnitName(unitCode)</option> }
                                     }
@@ -157,10 +158,34 @@
     private readonly List<Row> rows = [];
     private FoodRow[] matches = [];
 
-    protected override async Task OnInitializedAsync()
+    private bool subscribed, started;
+    private string? shownRecipeId;
+
+    // The same editor serves /food/recipes/new and /food/recipes/{id}, so moving between them changes only the
+    // parameter: the form is loaded afresh whenever the recipe it shows changes.
+    protected override async Task OnParametersSetAsync()
     {
-        owner = Foods.ProfileId;
-        Profiles.Changed += ProfileChanged;
+        if (!subscribed)
+        {
+            subscribed = true;
+            owner = Foods.ProfileId;
+            Profiles.Changed += ProfileChanged;
+        }
+
+        if (started && RecipeId == shownRecipeId) return;
+        started = true;
+        shownRecipeId = RecipeId;
+        watch?.Cancel();
+        watch?.Dispose();
+        watch = null;
+        loaded = notFound = incomplete = confirmDelete = false;
+        error = null;
+        households = [];
+        householdId = name = cookedWeight = query = "";
+        servings = "1";
+        cookedUnit = "g";
+        rows.Clear();
+        matches = [];
         if (owner is null)
         {
             Navigation.NavigateTo("food");
@@ -187,6 +212,7 @@
                     Id = i.Id, FoodId = i.FoodId, FoodName = i.FoodName ?? "Unknown food", Food = i.Food(),
                     Amount = i.Quantity.ToString(CultureInfo.InvariantCulture),
                     Unit = i.QuantityUnit == "portion" ? "portion:" + i.PortionName : i.QuantityUnit,
+                    Saved = new SavedAmount(i.FoodId, i.Quantity, i.QuantityUnit == "portion" ? "portion:" + i.PortionName : i.QuantityUnit, i.BaseAmount),
                 }));
             }
             else
@@ -200,6 +226,66 @@
         }
 
         loaded = true;
+        WatchSync();
+    }
+
+    private CancellationTokenSource? watch;
+
+    /// <summary>
+    /// Fills in what syncs while the editor is open: the households for a new recipe, and the foods of ingredients that
+    /// hadn't reached this device. What the user has typed is left as it is.
+    /// </summary>
+    private void WatchSync()
+    {
+        if (notFound || owner is null) return;
+        watch = new CancellationTokenSource();
+        var token = watch.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var _ in Foods.WatchChoices(token))
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        if (token.IsCancellationRequested || owner != Foods.ProfileId) return;
+                        await RefreshSyncedAsync();
+                        if (token.IsCancellationRequested) return;
+                        StateHasChanged();
+                    });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception e) when (e is not ObjectDisposedException)
+            {
+                // A failed refresh leaves the editor as it was; saving still checks everything again.
+            }
+        }, CancellationToken.None);
+    }
+
+    private async Task RefreshSyncedAsync()
+    {
+        if (RecipeId is null)
+        {
+            if (households.Length > 0) return;
+            households = await Foods.HouseholdsAsync();
+            if (string.IsNullOrEmpty(householdId)) householdId = households.FirstOrDefault()?.Id ?? "";
+            return;
+        }
+
+        if (!incomplete || await Foods.RecipeAsync(RecipeId) is not { } recipe || recipe.Recipe.Id != shownRecipeId) return;
+        foreach (var ingredient in recipe.Ingredients)
+        {
+            if (rows.FirstOrDefault(r => r.Id == ingredient.Id) is { Food: null } row && ingredient.Food() is { } food)
+            {
+                row.Food = food;
+                row.FoodName = food.Name;
+            }
+        }
+
+        incomplete = !recipe.Complete;
     }
 
     private void ProfileChanged() => _ = InvokeAsync(() =>
@@ -229,8 +315,9 @@
 
         try
         {
-            var found = await Foods.SearchAsync(asked);
-            if (asked == query && owner == Foods.ProfileId) matches = [.. found.Where(f => f.HouseholdId == householdId)];
+            // Only the recipe's household's foods, filtered before the limit, so another household's can't crowd them out.
+            var found = await Foods.SearchAsync(asked, householdId);
+            if (asked == query && owner == Foods.ProfileId) matches = found;
         }
         catch (Exception x) when (x is not OperationCanceledException)
         {
@@ -289,9 +376,7 @@
                 var ingredients = rows.Select(r =>
                 {
                     var quantity = NumberText.Parse(r.Amount) ?? throw new ArgumentException($"Enter an amount for {r.FoodName}.");
-                    var (unit, portion) = Split(r.Unit);
-                    var (baseAmount, _) = FoodLog.Compute(r.Food!, quantity, unit, portion);
-                    return new RecipeIngredient(r.Food!.Per100, r.Food.Basis, baseAmount);
+                    return new RecipeIngredient(r.Food!.Per100, r.Food.Basis, BaseAmount(r, quantity));
                 }).ToList();
                 var cooked = NumberText.Parse(cookedWeight) is { } w && w > 0 ? UnitCodes.Convert(w, cookedUnit, "g") : null;
                 var nutrition = RecipeNutrition.Compute(ingredients, count, cooked);
@@ -344,6 +429,7 @@
             var ingredients = rows.Select(r =>
             {
                 var quantity = NumberText.Parse(r.Amount) ?? throw new ArgumentException($"Enter an amount for {r.FoodName}.");
+                CheckRetired(r, quantity);
                 var (unit, portion) = Split(r.Unit);
                 return new RecipeIngredientInput(r.Id, r.FoodId, quantity, unit, portion);
             }).ToList();
@@ -398,6 +484,34 @@
         }
     }
 
+    /// <summary>
+    /// An ingredient's amount in its food's basis: the stored amount while it is as saved (the server keeps that amount
+    /// even if the food's portion changed since), otherwise computed from what is entered now.
+    /// </summary>
+    private static double BaseAmount(Row row, double quantity)
+    {
+        if (Unchanged(row, quantity)) return row.Saved!.BaseAmount;
+        CheckRetired(row, quantity);
+        var (unit, portion) = Split(row.Unit);
+        return FoodLog.Compute(row.Food!, quantity, unit, portion).BaseAmount;
+    }
+
+    private static bool Unchanged(Row row, double quantity) =>
+        row.Saved is { } saved && saved.FoodId == row.FoodId && saved.Quantity.Equals(quantity) && saved.Unit == row.Unit;
+
+    /// <summary>The saved portion's name when the food no longer lists it, or null.</summary>
+    private static string? RetiredPortion(Row row) =>
+        row.Food is { } food && Split(row.Unit) is (null, { } portion) && food.Portions.All(p => p.Name != portion) ? portion : null;
+
+    /// <summary>A portion the food no longer lists can stay as saved, but can't be given a new amount.</summary>
+    private static void CheckRetired(Row row, double quantity)
+    {
+        if (RetiredPortion(row) is { } portion && !Unchanged(row, quantity))
+        {
+            throw new ArgumentException($"{row.FoodName} no longer lists \"{portion}\": choose another unit or portion to change its amount.");
+        }
+    }
+
     private static (string? Unit, string? Portion) Split(string unit) =>
         unit.StartsWith("portion:", StringComparison.Ordinal) ? (null, unit["portion:".Length..]) : (unit, null);
 
@@ -409,7 +523,15 @@
         _ => code,
     };
 
-    public void Dispose() => Profiles.Changed -= ProfileChanged;
+    public void Dispose()
+    {
+        Profiles.Changed -= ProfileChanged;
+        watch?.Cancel();
+        watch?.Dispose();
+    }
+
+    /// <summary>An ingredient as it was saved: what was entered and the amount the database holds.</summary>
+    private sealed record SavedAmount(string FoodId, double Quantity, string Unit, double BaseAmount);
 
     private sealed class Row
     {
@@ -424,5 +546,7 @@
         public string Amount { get; set; } = "";
 
         public string Unit { get; set; } = "";
+
+        public SavedAmount? Saved { get; init; }
     }
 }
