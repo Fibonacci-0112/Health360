@@ -272,4 +272,36 @@ public sealed class RecipeTests : AppTestContext
 
         cut.WaitForAssertion(() => Assert.Contains("Couldn't refresh this recipe", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
     }
+
+    [Fact]
+    public async Task A_chosen_household_that_goes_away_takes_its_ingredients_with_it()
+    {
+        await StockAsync();
+        await App.Database.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("INSERT INTO households (id, name) VALUES ('0192f0c0-0000-7000-8000-0000000000a2', 'Cabin')");
+            await tx.Execute("INSERT INTO household_members (id, household_id, profile_id) VALUES ('hm2', '0192f0c0-0000-7000-8000-0000000000a2', ?)", [ProfileId]);
+            await tx.Execute("DELETE FROM ps_crud");
+        });
+        var cut = Open("food/recipes/new");
+        // Households are listed by name, so Cabin comes first; Home holds the foods.
+        cut.WaitForAssertion(() => cut.Find("#recipe-household"), Wait);
+        await ChangeAsync(cut, "#recipe-household", Household);
+        await TypeAsync(cut, "#recipe-name", "Porridge");
+        await AddIngredientAsync(cut, "oat", "Oats", "80");
+
+        // The membership of the chosen household is removed on another device and syncs here.
+        await App.Database.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("DELETE FROM household_members WHERE id = 'hm'");
+            await tx.Execute("DELETE FROM ps_crud");
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Empty(cut.FindAll("#ingredient-list li"));
+            Assert.Empty(cut.FindAll("#recipe-household"));
+        }, Wait);
+        Assert.Equal("Porridge", cut.Find("#recipe-name").GetAttribute("value"));
+    }
 }

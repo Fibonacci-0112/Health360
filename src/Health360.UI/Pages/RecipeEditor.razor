@@ -308,7 +308,14 @@
             var next = await Foods.HouseholdsAsync();
             if (generation != loadGeneration) return;
             households = next;
-            if (!households.Any(h => h.Id == householdId)) householdId = households.FirstOrDefault()?.Id ?? "";
+            if (!households.Any(h => h.Id == householdId))
+            {
+                // The chosen household went away: its foods can't go in another household's recipe.
+                var hadOne = !string.IsNullOrEmpty(householdId);
+                householdId = households.FirstOrDefault()?.Id ?? "";
+                if (hadOne) ClearIngredients();
+            }
+
             return;
         }
 
@@ -336,11 +343,19 @@
     private void HouseholdChanged(ChangeEventArgs e)
     {
         householdId = e.Value?.ToString() ?? "";
-        // Ingredients must be foods of the recipe's own household.
+        ClearIngredients();
+    }
+
+    /// <summary>Ingredients must be foods of the recipe's own household, so a change of household starts them afresh.</summary>
+    private void ClearIngredients()
+    {
         rows.Clear();
         matches = [];
         query = "";
+        if (error == SearchFailed) error = null;
     }
+
+    private const string SearchFailed = "Couldn't search your household's foods on this device. Try again.";
 
     private async Task SearchAsync(ChangeEventArgs e)
     {
@@ -358,11 +373,15 @@
             // Only the recipe's household's foods, filtered before the limit, so another household's can't crowd them out.
             var found = await Foods.SearchAsync(asked, household);
             // A search for other text, or for the household chosen before, no longer applies.
-            if (asked == query && household == householdId && owner == Foods.ProfileId) matches = found;
+            if (asked == query && household == householdId && owner == Foods.ProfileId)
+            {
+                matches = found;
+                if (error == SearchFailed) error = null;
+            }
         }
         catch (Exception x) when (x is not OperationCanceledException)
         {
-            if (asked == query && household == householdId) error = "Couldn't search your household's foods on this device. Try again.";
+            if (asked == query && household == householdId) error = SearchFailed;
         }
     }
 
