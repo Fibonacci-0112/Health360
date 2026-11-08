@@ -268,6 +268,24 @@ public sealed class BarcodeOpenFoodFactsTests
     }
 
     [Fact]
+    public async Task A_lookup_cancelled_before_it_is_sent_does_not_spend_the_shared_budget()
+    {
+        await using var factory = new ServerFactory();
+        var stub = new Stub(HttpStatusCode.OK, Found);
+        var app = Create(factory, stub, upstreamPerMinute: 1, time: new Clock());
+        using var client = Authorized(app);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        var off = app.Services.GetRequiredService<OpenFoodFactsClient>();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => off.FindAsync("03017620422003", cancelled.Token));
+        using var response = await client.GetAsync("/foods/barcode/3017620422003/off", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode); // the one request in the budget was still there
+        Assert.Single(stub.Paths);
+    }
+
+    [Fact]
     public async Task Requires_a_token()
     {
         await using var factory = new ServerFactory();

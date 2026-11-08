@@ -32,6 +32,8 @@ public sealed partial class OpenFoodFactsClient(IHttpClientFactory httpClientFac
 
         foreach (var form in LookupForms(gtin14))
         {
+            // A caller that has already gone away must not spend the shared allowance on a request never sent.
+            cancellationToken.ThrowIfCancellationRequested();
             if (!budget.TryTake())
             {
                 throw new OpenFoodFactsBudgetExhaustedException();
