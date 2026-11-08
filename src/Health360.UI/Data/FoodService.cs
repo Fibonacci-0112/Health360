@@ -40,6 +40,19 @@ public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, T
     public Task<string> QuickAddAsync(string meal, DateOnly date, string? name, double? energy, double? protein, double? carbohydrate, double? fat) =>
         FoodLog.QuickAddAsync(db, RequireProfile(), meal, date, name, energy, protein, carbohydrate, fat, clock);
 
+    public Task<RecipeRow[]> SearchRecipesAsync(string? query) => Recipes.SearchAsync(db, query, 20);
+
+    public Task<RecipeDetail?> RecipeAsync(string id) => Recipes.GetAsync(db, id);
+
+    public Task<string> CreateRecipeAsync(string householdId, RecipeInput input) => Recipes.CreateAsync(db, householdId, input, clock);
+
+    public Task UpdateRecipeAsync(string id, RecipeInput input) => Recipes.UpdateAsync(db, id, input, clock);
+
+    public Task DeleteRecipeAsync(string id) => Recipes.DeleteAsync(db, id);
+
+    public Task<string> LogRecipeAsync(string recipeId, string meal, DateOnly date, double quantity, string unit) =>
+        FoodLog.LogRecipeAsync(db, RequireProfile(), recipeId, meal, date, quantity, unit, clock);
+
     public Task DeleteAsync(string entryId) => FoodLog.DeleteAsync(db, RequireProfile(), entryId);
 
     public Task<string> AddFoodAsync(string householdId, FoodInput input) => FoodLibrary.AddAsync(db, householdId, input, clock);

@@ -173,7 +173,7 @@ public static class FoodLibrary
     }
 
     /// <summary>
-    /// Fires now and after every change to what the Food tab offers: the profile's households and the household foods,
+    /// Fires now and after every change to what the Food tab offers: the profile's households, the household foods and recipes,
     /// whether written here or synced from another device. The caller reloads its choices.
     /// </summary>
     public static IAsyncEnumerable<WorkoutLog.ChangeStamp[]> WatchChoices(PowerSyncDatabase db, string profileId, CancellationToken cancellationToken)
@@ -182,7 +182,9 @@ public static class FoodLibrary
         return db.Watch<WorkoutLog.ChangeStamp>(
             "SELECT (SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM household_members WHERE profile_id = ?) || " +
             "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM households) || " +
-            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') FROM foods WHERE household_id IS NOT NULL) AS Stamp",
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM foods WHERE household_id IS NOT NULL) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM recipes) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') FROM recipe_ingredients) AS Stamp",
             [profileId], new SQLWatchOptions { Signal = cancellationToken, TriggerImmediately = true });
     }
 
@@ -366,6 +368,71 @@ public static class FoodLog
             "INSERT INTO food_log_entries (id, profile_id, logged_at, local_date, meal, entry_method, name, energy, protein, carbohydrate, fat, " +
             "nutrients, incomplete_nutrients, is_estimate, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'quick_add', ?, ?, ?, ?, ?, '{}', '[]', 0, ?, ?)",
             [id, profileId, LoggedAt(date, clock), Day(date), meal, label, energy, protein, carbohydrate, fat, now, now]).ConfigureAwait(false);
+        return id;
+    }
+
+    /// <summary>The units a recipe is logged in: servings, or a weight of the finished dish when its weight is known.</summary>
+    public static IReadOnlyList<string> RecipeUnits(bool weighed) => weighed ? ["serving", "g", "kg", "oz", "lb"] : ["serving"];
+
+    /// <summary>
+    /// The nutrients in an amount of a recipe: servings × its per-serving values (<see cref="NutrientTotal.Times"/>), or a
+    /// weight of the dish × its values per 100 g (<see cref="NutrientAmounts.ForAmount"/>), which needs the dish's weight.
+    /// Nutrients some ingredients didn't list stay marked as lower bounds.
+    /// </summary>
+    /// <exception cref="ArgumentException">The amount or unit doesn't fit the recipe.</exception>
+    /// <exception cref="InvalidOperationException">An ingredient's food isn't on this device.</exception>
+    public static (double? Grams, NutrientTotal Amounts) ComputeRecipe(RecipeDetail recipe, double quantity, string unit)
+    {
+        ArgumentNullException.ThrowIfNull(recipe);
+        if (!double.IsFinite(quantity) || quantity <= 0 || quantity > 100000)
+        {
+            throw new ArgumentException("Enter an amount more than 0.", nameof(quantity));
+        }
+
+        var nutrition = recipe.Nutrition()
+            ?? throw new InvalidOperationException("Some of this recipe's ingredients haven't synced to this device yet.");
+        if (unit == "serving")
+        {
+            return (null, nutrition.PerServing.Times(quantity));
+        }
+
+        if (!RecipeUnits(true).Contains(unit) || nutrition.Per100g is not { } per100)
+        {
+            throw new ArgumentException("This dish's weight isn't known: weigh it in the recipe, or log servings.", nameof(unit));
+        }
+
+        var grams = UnitCodes.Convert(quantity, unit, "g")!.Value;
+        return (grams, per100 with { Amounts = per100.Amounts.ForAmount(grams) });
+    }
+
+    /// <summary>
+    /// Logs an amount of a household recipe in a meal (<c>recipe</c>): a snapshot of its nutrients now, so editing the
+    /// recipe later leaves the entry as it was.
+    /// </summary>
+    public static async Task<string> LogRecipeAsync(
+        IPowerSyncDatabase db, string profileId, string recipeId, string meal, DateOnly date, double quantity, string unit, TimeProvider clock)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentException.ThrowIfNullOrEmpty(profileId);
+        ArgumentNullException.ThrowIfNull(clock);
+        CheckMeal(meal);
+        var id = ExerciseLibrary.NewId(clock);
+        await db.WriteTransaction(async tx =>
+        {
+            var recipe = await Recipes.RecipeAsync(tx, recipeId).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("That recipe is no longer on this device.");
+            var detail = new RecipeDetail(recipe, await Recipes.IngredientsAsync(tx, recipeId).ConfigureAwait(false));
+            var (grams, total) = ComputeRecipe(detail, quantity, unit);
+            var amounts = total.Amounts;
+            var now = Timestamps.UtcNow(clock);
+            await tx.Execute(
+                "INSERT INTO food_log_entries (id, profile_id, logged_at, local_date, meal, entry_method, recipe_id, name, quantity, quantity_unit, " +
+                "basis, base_amount, energy, protein, carbohydrate, fat, nutrients, incomplete_nutrients, is_estimate, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, 'recipe', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                [id, profileId, LoggedAt(date, clock), Day(date), meal, recipe.Id, Trim(recipe.Name, 200), quantity, unit,
+                    grams is null ? null : "g", grams, amounts[Nutrient.Energy], amounts[Nutrient.Protein], amounts[Nutrient.Carbohydrate],
+                    amounts[Nutrient.Fat], OtherNutrientsJson(amounts), Recipes.IncompleteJson(amounts, total.Incomplete), now, now]).ConfigureAwait(false);
+        }).ConfigureAwait(false);
         return id;
     }
 

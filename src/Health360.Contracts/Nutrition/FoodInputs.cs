@@ -88,3 +88,43 @@ public sealed class FoodInputValidator : AbstractValidator<FoodInput>
         });
     }
 }
+
+/// <summary>
+/// One ingredient of a recipe as entered: a household food, and an amount in <paramref name="Unit"/> (a mass or volume
+/// code that fits the food's basis) or, when <paramref name="Unit"/> is null, a number of the food's portion
+/// <paramref name="PortionName"/>. <paramref name="Id"/> is the existing row's, so an unchanged ingredient is kept as
+/// it is.
+/// </summary>
+public sealed record RecipeIngredientInput(string? Id, string FoodId, double Quantity, string? Unit, string? PortionName);
+
+/// <summary>A household recipe as entered: servings, the finished dish's weight when it was weighed, and its ingredients in order.</summary>
+public sealed record RecipeInput(string Name, double Servings, double? CookedWeight, string? CookedWeightUnit, IReadOnlyList<RecipeIngredientInput> Ingredients);
+
+/// <summary>The <c>recipes</c> and <c>recipe_ingredients</c> checks a recipe must pass before it is written.</summary>
+public sealed class RecipeInputValidator : AbstractValidator<RecipeInput>
+{
+    public static IReadOnlyList<string> CookedWeightUnits { get; } = ["g", "kg", "oz", "lb"];
+
+    public RecipeInputValidator()
+    {
+        RuleFor(x => x.Name).Must(n => n is not null && n.Trim().Length is >= 1 and <= 200).WithMessage("Give the recipe a name.");
+        RuleFor(x => x.Servings).Must(s => double.IsFinite(s) && s > 0 && s <= 1000).WithMessage("Enter how many servings it makes, more than 0.");
+        RuleFor(x => x.CookedWeight)
+            .Must(w => w is null || (double.IsFinite(w.Value) && w.Value > 0))
+            .WithMessage("Enter the cooked weight as more than 0, or leave it blank.");
+        RuleFor(x => x.CookedWeightUnit)
+            .Must((x, unit) => x.CookedWeight is null ? unit is null : unit is not null && CookedWeightUnits.Contains(unit))
+            .WithMessage("Choose g, kg, oz or lb for the cooked weight.");
+        RuleFor(x => x.Ingredients).Must(i => i.Count is >= 1 and <= 100).WithMessage("Add between 1 and 100 ingredients.");
+        RuleForEach(x => x.Ingredients).ChildRules(ingredient =>
+        {
+            ingredient.RuleFor(i => i.FoodId).NotEmpty().WithMessage("Choose a food for each ingredient.");
+            ingredient.RuleFor(i => i.Quantity)
+                .Must(q => double.IsFinite(q) && q > 0 && q <= 100000)
+                .WithMessage("Enter an amount more than 0 for each ingredient.");
+            ingredient.RuleFor(i => i.PortionName)
+                .Must((i, p) => i.Unit is not null ? p is null : p is not null && p.Trim().Length is >= 1 and <= 80)
+                .WithMessage("Choose a unit or one of the food's portions for each ingredient.");
+        });
+    }
+}

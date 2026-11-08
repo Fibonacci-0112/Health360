@@ -1,0 +1,160 @@
+using Bunit;
+using Health360.Contracts.Nutrition;
+using Health360.Domain.Nutrition;
+using Health360.LocalDb;
+using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Health360.UI.Tests.Components;
+
+public sealed class RecipeTests : AppTestContext
+{
+    private const string Household = "0192f0c0-0000-7000-8000-0000000000a1";
+
+    private DateOnly Today => DateOnly.FromDateTime(App.Clock.Now.DateTime);
+
+    private sealed record Pantry(string Oats, string Banana, string PeanutButter);
+
+    /// <summary>The golden fixture of docs/calculations.md (Recipes), as household foods synced to this device.</summary>
+    private async Task<Pantry> StockAsync()
+    {
+        await SignedInAndOnboardedAsync();
+        await App.Database.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("INSERT INTO households (id, name) VALUES (?, 'Home')", [Household]);
+            await tx.Execute("INSERT INTO household_members (id, household_id, profile_id) VALUES ('hm', ?, ?)", [Household, ProfileId]);
+        });
+        var oats = await FoodLibrary.AddAsync(App.Database.Db, Household, new FoodInput("Oats", null, FoodBasis.Mass, 100, 379, 13.2, 67.7, 6.5, []), App.Clock);
+        var banana = await FoodLibrary.AddAsync(App.Database.Db, Household, new FoodInput("Banana", null, FoodBasis.Mass, 100, 89, 1.09, 22.84, 0.33, []), App.Clock);
+        var peanutButter = await FoodLibrary.AddAsync(App.Database.Db, Household, new FoodInput("Peanut butter", null, FoodBasis.Mass, 100, 588, 25.1, 19.6, 50.4, []), App.Clock);
+        await App.Database.Db.Execute("DELETE FROM ps_crud");
+        return new Pantry(oats, banana, peanutButter);
+    }
+
+    private IRenderedComponent<Routes> Open(string route)
+    {
+        var cut = Render<Routes>();
+        cut.WaitForAssertion(() => cut.Find("nav.tabs"), Wait);
+        Services.GetRequiredService<NavigationManager>().NavigateTo(route);
+        return cut;
+    }
+
+    private async Task AddIngredientAsync(IRenderedComponent<Routes> cut, string search, string food, string grams)
+    {
+        await TypeAsync(cut, "#ingredient-search", search);
+        cut.WaitForAssertion(() => cut.Find($"button[aria-label='Add {food}']"), Wait);
+        await ClickAsync(cut, $"button[aria-label='Add {food}']");
+        cut.WaitForAssertion(() => cut.Find($"input[aria-label='{food} amount']"), Wait);
+        await ChangeAsync(cut, $"select[aria-label='{food} unit']", "g");
+        await TypeAsync(cut, $"input[aria-label='{food} amount']", grams);
+    }
+
+    [Fact]
+    public async Task A_new_recipe_totals_its_ingredients_as_the_hand_calculation_does_and_is_saved()
+    {
+        await StockAsync();
+        var cut = Open("food/recipes");
+        cut.WaitForAssertion(() => Assert.Contains("No recipes yet", cut.Markup, StringComparison.Ordinal), Wait);
+        await ClickAsync(cut, "#new-recipe");
+        cut.WaitForAssertion(() => cut.Find("#recipe-name"), Wait);
+
+        await TypeAsync(cut, "#recipe-name", "Porridge");
+        await TypeAsync(cut, "#recipe-servings", "2");
+        await AddIngredientAsync(cut, "oat", "Oats", "80");
+        await AddIngredientAsync(cut, "bana", "Banana", "120");
+        await AddIngredientAsync(cut, "peanut", "Peanut butter", "32");
+
+        // 598.16 kcal for the dish, 299.08 per serving; 232 g raw, so 257.8 kcal per 100 g.
+        cut.WaitForAssertion(() =>
+        {
+            var nutrition = cut.Find("#recipe-nutrition").TextContent;
+            Assert.Contains("Per serving: 299 kcal", nutrition, StringComparison.Ordinal);
+            Assert.Contains("Whole recipe: 598 kcal", nutrition, StringComparison.Ordinal);
+            Assert.Contains("per 100 g of the dish: 258 kcal", nutrition, StringComparison.Ordinal);
+        }, Wait);
+        await SubmitAsync(cut, "#save-recipe");
+
+        cut.WaitForAssertion(() => Assert.Contains("299 kcal per serving", cut.Find("#recipe-list").TextContent, StringComparison.Ordinal), Wait);
+        var saved = (await Recipes.GetAsync(App.Database.Db, Assert.Single(await Recipes.SearchAsync(App.Database.Db, "", 10)).Id))!;
+        Assert.Equal(["Oats", "Banana", "Peanut butter"], saved.Ingredients.Select(i => i.FoodName));
+        Assert.Equal(598.16, saved.Nutrition()!.Total.Amounts[Nutrient.Energy]!.Value, 9);
+        Assert.True(await App.Database.Db.Get<long>("SELECT count(*) FROM ps_crud", []) >= 4);
+    }
+
+    [Fact]
+    public async Task An_edited_recipe_keeps_the_ingredients_left_alone_and_can_be_deleted()
+    {
+        var p = await StockAsync();
+        var id = await Recipes.CreateAsync(App.Database.Db, Household, new RecipeInput("Porridge", 2, null, null,
+            [new(null, p.Oats, 80, "g", null), new(null, p.Banana, 120, "g", null), new(null, p.PeanutButter, 32, "g", null)]), App.Clock);
+        var before = (await Recipes.GetAsync(App.Database.Db, id))!.Ingredients;
+        var cut = Open($"food/recipes/{id}");
+        cut.WaitForAssertion(() => Assert.Equal("Porridge", cut.Find("#recipe-name").GetAttribute("value")), Wait);
+
+        await ClickAsync(cut, "button[aria-label='Remove Peanut butter']");
+        await TypeAsync(cut, "#recipe-servings", "1");
+        await SubmitAsync(cut, "#save-recipe");
+        cut.WaitForAssertion(() => cut.Find("#recipe-list"), Wait);
+
+        var after = (await Recipes.GetAsync(App.Database.Db, id))!;
+        Assert.Equal([before[0].Id, before[1].Id], after.Ingredients.Select(i => i.Id));
+        Assert.Equal(1, after.Recipe.Servings);
+
+        await ClickAsync(cut, "button[aria-label='Edit Porridge']");
+        cut.WaitForAssertion(() => cut.Find("#delete-recipe"), Wait);
+        await ClickAsync(cut, "#delete-recipe");
+        cut.WaitForAssertion(() => Assert.Contains("Delete Porridge for the whole household?", cut.Find("[role=alertdialog]").TextContent, StringComparison.Ordinal), Wait);
+        await ClickAsync(cut, "#delete-recipe-confirm");
+        cut.WaitForAssertion(() => Assert.Contains("No recipes yet", cut.Markup, StringComparison.Ordinal), Wait);
+        Assert.Null(await Recipes.GetAsync(App.Database.Db, id));
+    }
+
+    [Fact]
+    public async Task A_recipe_is_logged_from_the_food_tab_by_servings_and_by_weight_once_weighed()
+    {
+        var p = await StockAsync();
+        await Recipes.CreateAsync(App.Database.Db, Household, new RecipeInput("Porridge", 2, 400, "g",
+            [new(null, p.Oats, 80, "g", null), new(null, p.Banana, 120, "g", null), new(null, p.PeanutButter, 32, "g", null)]), App.Clock);
+        var cut = Open("food");
+        cut.WaitForAssertion(() => cut.Find("#food-search"), Wait);
+        await ChangeAsync(cut, "#food-meal", "breakfast");
+
+        await TypeAsync(cut, "#food-search", "porr");
+        cut.WaitForAssertion(() => cut.Find("button[aria-label='Choose recipe Porridge']"), Wait);
+        await ClickAsync(cut, "button[aria-label='Choose recipe Porridge']");
+        cut.WaitForAssertion(() => cut.Find("#recipe-amount"), Wait);
+        await TypeAsync(cut, "#recipe-amount", "1.5");
+        // 299.08 × 1.5 = 448.62 kcal.
+        cut.WaitForAssertion(() => Assert.Contains("Energy 449 kcal", cut.Find("#recipe-preview").TextContent, StringComparison.Ordinal), Wait);
+        await SubmitAsync(cut, "#log-recipe");
+        cut.WaitForAssertion(() => Assert.Contains("1.5 servings", cut.Find("[aria-labelledby=meal-breakfast-title]").TextContent, StringComparison.Ordinal), Wait);
+
+        // A minute later, so the two entries sort in the order they were logged.
+        App.Clock.Advance(TimeSpan.FromMinutes(1));
+        await ClickAsync(cut, "button[aria-label='Choose recipe Porridge']");
+        cut.WaitForAssertion(() => cut.Find("#recipe-unit"), Wait);
+        await ChangeAsync(cut, "#recipe-unit", "g");
+        await TypeAsync(cut, "#recipe-amount", "100");
+        await SubmitAsync(cut, "#log-recipe");
+
+        // 598.16 × 100 / 400 = 149.54 kcal in 100 g of the 400 g dish.
+        cut.WaitForAssertion(() => Assert.Contains("100 g", cut.Find("[aria-labelledby=meal-breakfast-title]").TextContent, StringComparison.Ordinal), Wait);
+        var entries = await FoodLog.DayAsync(App.Database.Db, ProfileId, Today);
+        Assert.Equal([448.62, 149.54], entries.Select(e => Math.Round(e.Energy!.Value, 9)));
+        Assert.All(entries, e => Assert.Equal("recipe", e.EntryMethod));
+    }
+
+    [Fact]
+    public async Task A_recipe_whose_food_has_not_synced_is_shown_but_not_saved()
+    {
+        var p = await StockAsync();
+        var id = await Recipes.CreateAsync(App.Database.Db, Household, new RecipeInput("Porridge", 2, null, null,
+            [new(null, p.Oats, 80, "g", null), new(null, p.Banana, 120, "g", null)]), App.Clock);
+        await App.Database.Db.Execute("UPDATE recipe_ingredients SET food_id = 'not-here' WHERE food_id = ?", [p.Banana]);
+
+        var cut = Open($"food/recipes/{id}");
+        cut.WaitForAssertion(() => cut.Find("#recipe-incomplete"), Wait);
+        Assert.True(cut.Find("#save-recipe").HasAttribute("disabled"));
+        Assert.Contains("Not on this device yet", cut.Find("#ingredient-list").TextContent, StringComparison.Ordinal);
+    }
+}

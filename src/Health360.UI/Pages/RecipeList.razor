@@ -1,0 +1,150 @@
+@page "/food/recipes"
+@using System.Globalization
+@using Health360.Domain.Nutrition
+@implements IDisposable
+@inject FoodService Foods
+@inject ProfileService Profiles
+@inject NavigationManager Navigation
+
+<div class="page">
+    <div class="page-head">
+        <h1>Recipes</h1>
+        <NavLink class="top-link" href="food">Food</NavLink>
+    </div>
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+    @if (watchedProfile is null)
+    {
+        <p class="muted" role="status">Waiting for your profile to sync to this device</p>
+    }
+    else
+    {
+        <p class="muted small">Recipes are shared with your household. Each one totals its ingredients; log a serving, or a weight of the dish once it has been weighed, from the Food tab.</p>
+        <button type="button" class="primary" id="new-recipe" @onclick="@(() => Navigation.NavigateTo("food/recipes/new"))">New recipe</button>
+        @if (!loaded)
+        {
+            <p class="muted" role="status">Loading your recipes</p>
+        }
+        else if (recipes.Count == 0)
+        {
+            <p class="muted">No recipes yet.</p>
+        }
+        else
+        {
+            <ul class="measurement-list" id="recipe-list">
+                @foreach (var recipe in recipes)
+                {
+                    <li class="measurement" @key="recipe.Recipe.Id">
+                        <span class="measurement-text">
+                            <span class="strong">@recipe.Recipe.Name</span>
+                            <span class="muted small">@Summary(recipe)</span>
+                        </span>
+                        <button type="button" class="secondary compact" aria-label="@($"Edit {recipe.Recipe.Name}")"
+                                @onclick="@(() => Navigation.NavigateTo($"food/recipes/{recipe.Recipe.Id}"))">Edit</button>
+                    </li>
+                }
+            </ul>
+        }
+    }
+</div>
+
+@code {
+    private string? watchedProfile, error;
+    private bool loaded;
+    private List<RecipeDetail> recipes = [];
+    private CancellationTokenSource? watch;
+    private int generation;
+
+    protected override void OnInitialized()
+    {
+        Profiles.Changed += ProfileChanged;
+        Follow();
+    }
+
+    private void ProfileChanged() => _ = InvokeAsync(() =>
+    {
+        if (Foods.ProfileId != watchedProfile)
+        {
+            Follow();
+            StateHasChanged();
+        }
+    });
+
+    private void Follow()
+    {
+        watch?.Cancel();
+        watch?.Dispose();
+        watch = null;
+        generation++;
+        watchedProfile = Foods.ProfileId;
+        recipes = [];
+        loaded = false;
+        error = null;
+        if (watchedProfile is null) return;
+
+        var started = generation;
+        watch = new CancellationTokenSource();
+        var token = watch.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var _ in Foods.WatchChoices(token))
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        if (token.IsCancellationRequested || started != generation) return;
+                        await LoadAsync(started);
+                    });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception e) when (e is not ObjectDisposedException)
+            {
+                await InvokeAsync(() =>
+                {
+                    if (token.IsCancellationRequested || started != generation) return;
+                    error = "Couldn't read your recipes on this device. Leave this page and come back to try again.";
+                    StateHasChanged();
+                });
+            }
+        }, CancellationToken.None);
+    }
+
+    private async Task LoadAsync(int started)
+    {
+        var rows = await Foods.SearchRecipesAsync(null);
+        var details = new List<RecipeDetail>();
+        foreach (var row in rows)
+        {
+            if (await Foods.RecipeAsync(row.Id) is { } detail) details.Add(detail);
+        }
+
+        if (started != generation) return;
+        recipes = details;
+        loaded = true;
+        StateHasChanged();
+    }
+
+    private string Summary(RecipeDetail recipe)
+    {
+        var servings = recipe.Recipe.Servings == 1 ? "1 serving" : $"{recipe.Recipe.Servings.ToString("0.##", CultureInfo.CurrentCulture)} servings";
+        var ingredients = recipe.Ingredients.Count == 1 ? "1 ingredient" : $"{recipe.Ingredients.Count} ingredients";
+        if (recipe.Nutrition() is not { } nutrition) return $"{servings} · {ingredients} · some haven't synced to this device yet";
+        var energy = nutrition.PerServing.Amounts[Nutrient.Energy] is { } kcal
+            ? (nutrition.PerServing.Incomplete.Contains(Nutrient.Energy.Code) ? "at least " : "") + MetricDisplay.Energy(kcal, Foods.UnitPrefs.Energy) + " per serving"
+            : "energy not listed";
+        return $"{servings} · {ingredients} · {energy}";
+    }
+
+    public void Dispose()
+    {
+        Profiles.Changed -= ProfileChanged;
+        watch?.Cancel();
+        watch?.Dispose();
+    }
+}

@@ -113,7 +113,8 @@
                 <label for="food-search">Search your household's foods</label>
                 <input id="food-search" type="search" value="@query" @oninput="SearchAsync" autocomplete="off" />
             </div>
-            <p class="muted small">Search covers foods your household has added. The USDA catalogue and barcode lookup come with online search.</p>
+            <p class="muted small">Search covers your household's foods and recipes. The USDA catalogue and barcode lookup come with online search.
+                <NavLink href="food/recipes" id="recipes-link">Recipes</NavLink></p>
             @if (results.Length > 0)
             {
                 <p class="muted small">@(string.IsNullOrWhiteSpace(query) ? "Recently logged" : "Matching foods")</p>
@@ -128,9 +129,23 @@
                     }
                 </ul>
             }
-            else if (!string.IsNullOrWhiteSpace(query))
+            @if (recipeResults.Length > 0)
             {
-                <p class="muted">No household food matches. Add it below, or use quick add.</p>
+                <p class="muted small">@(string.IsNullOrWhiteSpace(query) ? "Your recipes" : "Matching recipes")</p>
+                <ul class="measurement-list" id="recipe-results">
+                    @foreach (var recipe in recipeResults)
+                    {
+                        <li class="measurement">
+                            <span class="measurement-text"><span>@recipe.Name</span>
+                                <span class="muted small">Recipe · @ServingsText(recipe.Servings)</span></span>
+                            <button type="button" class="secondary" aria-label="@($"Choose recipe {recipe.Name}")" @onclick="() => ChooseRecipeAsync(recipe.Id)">Choose</button>
+                        </li>
+                    }
+                </ul>
+            }
+            @if (results.Length == 0 && recipeResults.Length == 0 && !string.IsNullOrWhiteSpace(query))
+            {
+                <p class="muted">No household food or recipe matches. Add it below, or use quick add.</p>
             }
 
             @if (chosen is not null)
@@ -157,6 +172,33 @@
                     <div class="inline">
                         <button type="submit" class="primary" id="log-food" disabled="@busy">Log food</button>
                         <button type="button" class="secondary" @onclick="() => chosen = null">Cancel</button>
+                    </div>
+                </form>
+            }
+            @if (chosenRecipe is not null)
+            {
+                <form class="form" id="log-recipe-form" @onsubmit="LogRecipeAsync" @onsubmit:preventDefault>
+                    <p><strong>@chosenRecipe.Recipe.Name</strong> · recipe, @ServingsText(chosenRecipe.Recipe.Servings)</p>
+                    @if (!chosenRecipe.Complete)
+                    {
+                        <p class="muted">Some of this recipe's ingredients haven't synced to this device yet, so it can't be logged here.</p>
+                    }
+                    <div class="field">
+                        <label for="recipe-amount">Amount</label>
+                        <div class="inline">
+                            <input id="recipe-amount" inputmode="decimal" @bind="recipeAmount" @bind:event="oninput" />
+                            <select id="recipe-unit" aria-label="Recipe amount unit" @bind="recipeUnit">
+                                @foreach (var unitCode in FoodLog.RecipeUnits(chosenRecipe.Nutrition()?.Per100g is not null))
+                                {
+                                    <option value="@unitCode">@(unitCode == "serving" ? "servings" : UnitName(unitCode))</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                    <p class="muted" id="recipe-preview">@RecipePreviewText()</p>
+                    <div class="inline">
+                        <button type="submit" class="primary" id="log-recipe" disabled="@(busy || !chosenRecipe.Complete)">Log recipe</button>
+                        <button type="button" class="secondary" @onclick="() => chosenRecipe = null">Cancel</button>
                     </div>
                 </form>
             }
@@ -240,6 +282,9 @@
     private string meal = "breakfast", query = "", amount = "", unit = "";
     private FoodRow[] results = [];
     private LoggableFood? chosen;
+    private RecipeRow[] recipeResults = [];
+    private RecipeDetail? chosenRecipe;
+    private string recipeAmount = "1", recipeUnit = "serving";
     private string quickName = "", quickEnergy = "", quickProtein = "", quickCarbohydrate = "", quickFat = "";
     private WorkoutService.HouseholdChoice[] households = [];
     private string householdId = "", foodName = "", foodBrand = "", foodPer = "100", foodBasis = "g", foodPortion = "";
@@ -280,6 +325,7 @@
         choicesFailed = false;
         error = status = confirmDelete = null;
         entries = []; total = NutrientTotal.Empty; results = []; chosen = null; households = [];
+        recipeResults = []; chosenRecipe = null;
         query = amount = quickName = quickEnergy = quickProtein = quickCarbohydrate = quickFat = "";
         ClearNewFood();
         if (profileId is null)
@@ -400,10 +446,11 @@
         {
             var nextHouseholds = await Foods.HouseholdsAsync();
             var nextResults = string.IsNullOrWhiteSpace(asked) ? await Foods.RecentAsync() : await Foods.SearchAsync(asked);
+            var nextRecipes = await Foods.SearchRecipesAsync(asked);
             if (started != generation) return;
             households = nextHouseholds;
             // Matches for text the user has since changed stay out: the search for the new text owns the list.
-            if (asked == query) results = nextResults;
+            if (asked == query) (results, recipeResults) = (nextResults, nextRecipes);
             choicesFailed = false;
             if (error == ChoicesReadFailed) error = null;
             if (!households.Any(h => h.Id == householdId)) householdId = households.FirstOrDefault()?.Id ?? "";
@@ -446,8 +493,9 @@
         try
         {
             var found = string.IsNullOrWhiteSpace(asked) ? await Foods.RecentAsync() : await Foods.SearchAsync(asked);
+            var foundRecipes = await Foods.SearchRecipesAsync(asked);
             if (asked != query || started != generation) return;
-            results = found;
+            (results, recipeResults) = (found, foundRecipes);
             if (error == SearchFailed) error = null;
         }
         catch (Exception x) when (x is not OperationCanceledException)
@@ -456,6 +504,7 @@
             if (asked != query || started != generation) return;
             LogReadFailed(Logger, "food search", x.GetType().Name);
             results = [];
+            recipeResults = [];
             error = SearchFailed;
         }
     }
@@ -479,6 +528,7 @@
 
         // Chosen for an earlier profile: the next one's form stays as Follow left it.
         if (started != generation) return;
+        chosenRecipe = null;
         chosen = row?.ToFood();
         if (chosen is null)
         {
@@ -491,6 +541,66 @@
             : chosen.Basis == FoodBasis.Mass ? UnitPrefOptions.FoodMass.ToCode(Foods.UnitPrefs.FoodMass) : UnitPrefOptions.Volume.ToCode(Foods.UnitPrefs.Volume);
         amount = chosen.Portions.Count > 0 ? "1" : "";
     }
+
+    private async Task ChooseRecipeAsync(string id)
+    {
+        error = null;
+        var started = generation;
+        RecipeDetail? recipe;
+        try
+        {
+            recipe = await Foods.RecipeAsync(id);
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            if (started != generation) return;
+            LogReadFailed(Logger, "recipe", x.GetType().Name);
+            error = "Couldn't read that recipe on this device. Try again.";
+            return;
+        }
+
+        if (started != generation) return;
+        if (recipe is null)
+        {
+            error = "That recipe is no longer on this device.";
+            return;
+        }
+
+        chosen = null;
+        chosenRecipe = recipe;
+        recipeAmount = "1";
+        recipeUnit = "serving";
+    }
+
+    private string RecipePreviewText()
+    {
+        if (chosenRecipe is null || NumberText.Parse(recipeAmount) is not { } quantity || quantity <= 0) return "Enter an amount to see what it holds.";
+        try
+        {
+            var (_, amounts) = FoodLog.ComputeRecipe(chosenRecipe, quantity, recipeUnit);
+            return string.Join(" · ", Nutrient.Macros.Select(n => amounts.Amounts[n] is { } v
+                ? $"{MacroName(n)} {(amounts.Incomplete.Contains(n.Code) ? "at least " : "")}{(n == Nutrient.Energy ? MetricDisplay.Energy(v, Foods.UnitPrefs.Energy) : MetricDisplay.Format(v, "g"))}"
+                : $"{MacroName(n)} not listed"));
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            return e.Message;
+        }
+    }
+
+    private Task LogRecipeAsync() => RunAsync(async () =>
+    {
+        if (chosenRecipe is null) return;
+        var quantity = NumberText.Parse(recipeAmount) ?? throw new ArgumentException("Enter the amount as a number.");
+        var name = chosenRecipe.Recipe.Name;
+        await Foods.LogRecipeAsync(chosenRecipe.Recipe.Id, meal, date, quantity, recipeUnit);
+        if (!Current) return;
+        chosenRecipe = null;
+        status = $"Logged {name} in {MealName(meal).ToLowerInvariant()}. Saved on this device, ready to sync.";
+    });
+
+    private static string ServingsText(double servings) =>
+        servings == 1 ? "1 serving" : $"{servings.ToString("0.##", CultureInfo.CurrentCulture)} servings";
 
     private (string? Unit, string? Portion) SplitUnit() =>
         unit.StartsWith("portion:", StringComparison.Ordinal) ? (null, unit["portion:".Length..]) : (unit, null);
@@ -635,7 +745,12 @@
     {
         if (entry.Quantity is not { } quantity) return entry.EntryMethod == "quick_add" ? "Quick add" : "";
         var number = quantity.ToString("0.##", CultureInfo.CurrentCulture);
-        return entry.QuantityUnit == "portion" ? $"{number} × {entry.PortionName}" : $"{number} {UnitName(entry.QuantityUnit ?? "")}";
+        return entry.QuantityUnit switch
+        {
+            "portion" => $"{number} × {entry.PortionName}",
+            "serving" => quantity == 1 ? "1 serving" : $"{number} servings",
+            _ => $"{number} {UnitName(entry.QuantityUnit ?? "")}",
+        };
     }
 
     private static string UnitName(string code) => code switch

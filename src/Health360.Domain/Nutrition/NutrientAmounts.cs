@@ -104,6 +104,20 @@ public sealed class NutrientAmounts : IEquatable<NutrientAmounts>
         return Map(v => v / divisor);
     }
 
+    /// <summary>
+    /// Each amount × <paramref name="factor"/>, for example a recipe's per-serving values × the servings eaten. A
+    /// factor of 0 gives zero amounts, not unknown ones.
+    /// </summary>
+    public NutrientAmounts Times(double factor)
+    {
+        if (!double.IsFinite(factor) || factor < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(factor), factor, "Must be a finite, non-negative number");
+        }
+
+        return Map(v => v * factor);
+    }
+
     private NutrientAmounts Map(Func<double, double> f) =>
         values.Count == 0 ? Empty : new(values.ToFrozenDictionary(kv => kv.Key, kv => f(kv.Value), StringComparer.Ordinal));
 
@@ -160,4 +174,7 @@ public sealed record NutrientTotal(NutrientAmounts Amounts, IReadOnlySet<string>
 
     /// <summary>Each amount divided by <paramref name="divisor"/>; what is incomplete stays incomplete.</summary>
     public NutrientTotal DividedBy(double divisor) => this with { Amounts = Amounts.DividedBy(divisor) };
+
+    /// <summary>Each amount × <paramref name="factor"/>; what is incomplete stays incomplete.</summary>
+    public NutrientTotal Times(double factor) => this with { Amounts = Amounts.Times(factor) };
 }

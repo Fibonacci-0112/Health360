@@ -1,0 +1,428 @@
+@page "/food/recipes/new"
+@page "/food/recipes/{RecipeId}"
+@using System.Globalization
+@using FluentValidation
+@using Health360.Contracts.Body
+@using Health360.Contracts.Nutrition
+@using Health360.Domain.Nutrition
+@using Health360.Domain.Units
+@implements IDisposable
+@inject FoodService Foods
+@inject ProfileService Profiles
+@inject NavigationManager Navigation
+
+<div class="page">
+    <div class="page-head">
+        <h1>@(RecipeId is null ? "New recipe" : "Edit recipe")</h1>
+        <NavLink class="top-link" href="food/recipes">Recipes</NavLink>
+    </div>
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+    @if (!loaded)
+    {
+        <p class="muted" role="status">Loading</p>
+    }
+    else if (notFound)
+    {
+        <p class="muted">This recipe is no longer on this device.</p>
+    }
+    else if (RecipeId is null && households.Length == 0)
+    {
+        <p class="muted">Recipes are shared with your household. Your household hasn't synced to this device yet.</p>
+    }
+    else
+    {
+        @if (incomplete)
+        {
+            <p class="muted" id="recipe-incomplete">Some of this recipe's ingredients haven't synced to this device yet, so it can be viewed here but not saved.</p>
+        }
+        <form class="form" id="recipe-form" @onsubmit="SaveAsync" @onsubmit:preventDefault>
+            <section class="card" aria-labelledby="recipe-details-title">
+                <h2 id="recipe-details-title">Recipe</h2>
+                @if (RecipeId is null && households.Length > 1)
+                {
+                    <div class="field"><label for="recipe-household">Household</label>
+                        <select id="recipe-household" value="@householdId" @onchange="HouseholdChanged">
+                            @foreach (var household in households) { <option value="@household.Id">@household.Name</option> }
+                        </select></div>
+                }
+                <div class="field"><label for="recipe-name">Name</label><input id="recipe-name" @bind="name" @bind:event="oninput" /></div>
+                <div class="field"><label for="recipe-servings">Servings it makes</label><input id="recipe-servings" inputmode="decimal" @bind="servings" @bind:event="oninput" /></div>
+                <div class="field">
+                    <label for="recipe-cooked">Cooked weight (optional)</label>
+                    <div class="inline">
+                        <input id="recipe-cooked" inputmode="decimal" @bind="cookedWeight" @bind:event="oninput" />
+                        <select id="recipe-cooked-unit" aria-label="Cooked weight unit" @bind="cookedUnit">
+                            @foreach (var unitCode in RecipeInputValidator.CookedWeightUnits) { <option value="@unitCode">@unitCode</option> }
+                        </select>
+                    </div>
+                </div>
+                <p class="muted small">Weigh the finished dish to log it by weight later. Without it, servings are the only measure (or the raw ingredients' weight, when every one is weighed).</p>
+            </section>
+
+            <section class="card" aria-labelledby="recipe-ingredients-title">
+                <h2 id="recipe-ingredients-title">Ingredients</h2>
+                @if (rows.Count == 0)
+                {
+                    <p class="muted">No ingredients yet. Find your household's foods below.</p>
+                }
+                <ul class="measurement-list" id="ingredient-list">
+                    @for (var i = 0; i < rows.Count; i++)
+                    {
+                        var index = i;
+                        var row = rows[i];
+                        <li class="measurement ingredient" @key="row">
+                            <span class="measurement-text"><span>@row.FoodName</span>
+                                @if (row.Food is null) { <span class="muted small">Not on this device yet</span> }</span>
+                            <span class="inline">
+                                <input class="set-input" inputmode="decimal" aria-label="@($"{row.FoodName} amount")" @bind="row.Amount" @bind:event="oninput" disabled="@(row.Food is null)" />
+                                <select aria-label="@($"{row.FoodName} unit")" @bind="row.Unit" disabled="@(row.Food is null)">
+                                    @if (row.Food is { } food)
+                                    {
+                                        @foreach (var portion in food.Portions) { <option value="@("portion:" + portion.Name)">× @portion.Name</option> }
+                                        @foreach (var unitCode in FoodLog.UnitsFor(food.Basis)) { <option value="@unitCode">@UnitName(unitCode)</option> }
+                                    }
+                                    else
+                                    {
+                                        <option value="@row.Unit">@row.Unit</option>
+                                    }
+                                </select>
+                                <button type="button" class="secondary compact" aria-label="@($"Move {row.FoodName} up")" disabled="@(index == 0)" @onclick="() => Move(index, -1)">↑</button>
+                                <button type="button" class="secondary compact" aria-label="@($"Move {row.FoodName} down")" disabled="@(index == rows.Count - 1)" @onclick="() => Move(index, 1)">↓</button>
+                                <button type="button" class="secondary compact" aria-label="@($"Remove {row.FoodName}")" @onclick="() => rows.RemoveAt(index)">Remove</button>
+                            </span>
+                        </li>
+                    }
+                </ul>
+                <div class="field">
+                    <label for="ingredient-search">Add an ingredient from your household's foods</label>
+                    <input id="ingredient-search" type="search" value="@query" @oninput="SearchAsync" autocomplete="off" />
+                </div>
+                @if (matches.Length > 0)
+                {
+                    <ul class="measurement-list" id="ingredient-matches">
+                        @foreach (var match in matches)
+                        {
+                            <li class="measurement">
+                                <span>@match.Name@(match.Brand is null ? "" : $" ({match.Brand})")</span>
+                                <button type="button" class="secondary compact" aria-label="@($"Add {match.Name}")" @onclick="() => Add(match)">Add</button>
+                            </li>
+                        }
+                    </ul>
+                }
+                else if (!string.IsNullOrWhiteSpace(query))
+                {
+                    <p class="muted">No household food matches. Add it on the Food tab first.</p>
+                }
+            </section>
+
+            <section class="card" aria-labelledby="recipe-nutrition-title">
+                <h2 id="recipe-nutrition-title">Nutrition</h2>
+                <div id="recipe-nutrition">@NutritionText()</div>
+            </section>
+
+            <div class="inline">
+                <button type="submit" class="primary" id="save-recipe" disabled="@(busy || incomplete)">Save recipe</button>
+                @if (RecipeId is not null)
+                {
+                    @if (confirmDelete)
+                    {
+                        <div class="confirm" role="alertdialog" aria-labelledby="recipe-confirm">
+                            <p id="recipe-confirm">Delete @name for the whole household? Entries already logged from it stay.</p>
+                            <div class="inline">
+                                <button type="button" class="danger" id="delete-recipe-confirm" disabled="@busy" @onclick="DeleteAsync">Delete</button>
+                                <button type="button" class="secondary" disabled="@busy" @onclick="() => confirmDelete = false">Keep</button>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <button type="button" class="secondary" id="delete-recipe" @onclick="() => confirmDelete = true">Delete recipe</button>
+                    }
+                }
+            </div>
+        </form>
+    }
+</div>
+
+@code {
+    [Parameter] public string? RecipeId { get; set; }
+
+    private string? owner, error;
+    private bool loaded, notFound, incomplete, busy, confirmDelete;
+    private WorkoutService.HouseholdChoice[] households = [];
+    private string householdId = "", name = "", servings = "1", cookedWeight = "", cookedUnit = "g", query = "";
+    private readonly List<Row> rows = [];
+    private FoodRow[] matches = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        owner = Foods.ProfileId;
+        Profiles.Changed += ProfileChanged;
+        if (owner is null)
+        {
+            Navigation.NavigateTo("food");
+            return;
+        }
+
+        try
+        {
+            households = await Foods.HouseholdsAsync();
+            if (RecipeId is null)
+            {
+                householdId = households.FirstOrDefault()?.Id ?? "";
+            }
+            else if (await Foods.RecipeAsync(RecipeId) is { } recipe)
+            {
+                householdId = recipe.Recipe.HouseholdId;
+                name = recipe.Recipe.Name;
+                servings = recipe.Recipe.Servings.ToString(CultureInfo.InvariantCulture);
+                cookedWeight = recipe.Recipe.CookedWeight?.ToString(CultureInfo.InvariantCulture) ?? "";
+                cookedUnit = recipe.Recipe.CookedWeightUnit ?? "g";
+                incomplete = !recipe.Complete;
+                rows.AddRange(recipe.Ingredients.Select(i => new Row
+                {
+                    Id = i.Id, FoodId = i.FoodId, FoodName = i.FoodName ?? "Unknown food", Food = i.Food(),
+                    Amount = i.Quantity.ToString(CultureInfo.InvariantCulture),
+                    Unit = i.QuantityUnit == "portion" ? "portion:" + i.PortionName : i.QuantityUnit,
+                }));
+            }
+            else
+            {
+                notFound = true;
+            }
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            error = "Couldn't read the recipe on this device. Leave this page and come back to try again.";
+        }
+
+        loaded = true;
+    }
+
+    private void ProfileChanged() => _ = InvokeAsync(() =>
+    {
+        // Another profile's household recipes aren't this one's to edit.
+        if (Foods.ProfileId != owner) Navigation.NavigateTo("food");
+    });
+
+    private void HouseholdChanged(ChangeEventArgs e)
+    {
+        householdId = e.Value?.ToString() ?? "";
+        // Ingredients must be foods of the recipe's own household.
+        rows.Clear();
+        matches = [];
+        query = "";
+    }
+
+    private async Task SearchAsync(ChangeEventArgs e)
+    {
+        query = e.Value?.ToString() ?? "";
+        var asked = query;
+        if (string.IsNullOrWhiteSpace(asked))
+        {
+            matches = [];
+            return;
+        }
+
+        try
+        {
+            var found = await Foods.SearchAsync(asked);
+            if (asked == query && owner == Foods.ProfileId) matches = [.. found.Where(f => f.HouseholdId == householdId)];
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            if (asked == query) error = "Couldn't search your household's foods on this device. Try again.";
+        }
+    }
+
+    private void Add(FoodRow match)
+    {
+        if (match.ToFood() is not { } food)
+        {
+            error = $"{match.Name} can't be read on this device.";
+            return;
+        }
+
+        var prefs = Foods.UnitPrefs;
+        rows.Add(new Row
+        {
+            FoodId = food.Id, FoodName = food.Name, Food = food,
+            Amount = food.Portions.Count > 0 ? "1" : "",
+            Unit = food.Portions.Count > 0
+                ? "portion:" + food.Portions[0].Name
+                : food.Basis == FoodBasis.Mass ? UnitPrefOptions.FoodMass.ToCode(prefs.FoodMass) : UnitPrefOptions.Volume.ToCode(prefs.Volume),
+        });
+        query = "";
+        matches = [];
+    }
+
+    private void Move(int index, int by)
+    {
+        var target = index + by;
+        if (target < 0 || target >= rows.Count) return;
+        (rows[index], rows[target]) = (rows[target], rows[index]);
+    }
+
+    /// <summary>What the recipe holds as entered so far, through the same calculation saving and logging use.</summary>
+    private RenderFragment NutritionText() => builder =>
+    {
+        string text;
+        if (incomplete)
+        {
+            text = "Shown once every ingredient has synced to this device.";
+        }
+        else if (rows.Count == 0)
+        {
+            text = "Add ingredients to see what the recipe holds.";
+        }
+        else if (NumberText.Parse(servings) is not { } count || count <= 0)
+        {
+            text = "Enter how many servings it makes.";
+        }
+        else
+        {
+            try
+            {
+                var ingredients = rows.Select(r =>
+                {
+                    var quantity = NumberText.Parse(r.Amount) ?? throw new ArgumentException($"Enter an amount for {r.FoodName}.");
+                    var (unit, portion) = Split(r.Unit);
+                    var (baseAmount, _) = FoodLog.Compute(r.Food!, quantity, unit, portion);
+                    return new RecipeIngredient(r.Food!.Per100, r.Food.Basis, baseAmount);
+                }).ToList();
+                var cooked = NumberText.Parse(cookedWeight) is { } w && w > 0 ? UnitCodes.Convert(w, cookedUnit, "g") : null;
+                var nutrition = RecipeNutrition.Compute(ingredients, count, cooked);
+                builder.OpenElement(0, "p");
+                builder.AddContent(1, "Per serving: " + Macros(nutrition.PerServing));
+                builder.CloseElement();
+                builder.OpenElement(2, "p");
+                builder.AddAttribute(3, "class", "muted small");
+                builder.AddContent(4, "Whole recipe: " + Macros(nutrition.Total)
+                    + (nutrition.Per100g is { } per100 ? $" · per 100 g of the dish: {Macros(per100, energyOnly: true)}" : " · weigh the dish to log it by weight"));
+                builder.CloseElement();
+                if (Nutrient.Macros.Any(n => nutrition.Total.Incomplete.Contains(n.Code)))
+                {
+                    builder.OpenElement(5, "p");
+                    builder.AddAttribute(6, "class", "muted small");
+                    builder.AddContent(7, "\"At least\": some ingredients don't list that value.");
+                    builder.CloseElement();
+                }
+
+                return;
+            }
+            catch (ArgumentException e)
+            {
+                text = e.Message;
+            }
+        }
+
+        builder.OpenElement(8, "p");
+        builder.AddAttribute(9, "class", "muted");
+        builder.AddContent(10, text);
+        builder.CloseElement();
+    };
+
+    private string Macros(NutrientTotal total, bool energyOnly = false) => string.Join(" · ",
+        (energyOnly ? [Nutrient.Energy] : Nutrient.Macros).Select(n => total.Amounts[n] is { } v
+            ? (total.Incomplete.Contains(n.Code) ? "at least " : "") + (n == Nutrient.Energy ? MetricDisplay.Energy(v, Foods.UnitPrefs.Energy) : $"{MetricDisplay.Format(v, "g")} {n.Code}")
+            : $"{n.Code} not listed"));
+
+    private async Task SaveAsync()
+    {
+        if (busy || incomplete || owner != Foods.ProfileId) return;
+        busy = true;
+        error = null;
+        try
+        {
+            var count = NumberText.Parse(servings) ?? throw new ArgumentException("Enter how many servings it makes as a number.");
+            double? cooked = string.IsNullOrWhiteSpace(cookedWeight)
+                ? null
+                : NumberText.Parse(cookedWeight) ?? throw new ArgumentException("Enter the cooked weight as a number, or leave it blank.");
+            var ingredients = rows.Select(r =>
+            {
+                var quantity = NumberText.Parse(r.Amount) ?? throw new ArgumentException($"Enter an amount for {r.FoodName}.");
+                var (unit, portion) = Split(r.Unit);
+                return new RecipeIngredientInput(r.Id, r.FoodId, quantity, unit, portion);
+            }).ToList();
+            var input = new RecipeInput(name, count, cooked, cooked is null ? null : cookedUnit, ingredients);
+            if (RecipeId is null)
+            {
+                if (string.IsNullOrEmpty(householdId)) throw new ArgumentException("Choose a household first.");
+                await Foods.CreateRecipeAsync(householdId, input);
+            }
+            else
+            {
+                await Foods.UpdateRecipeAsync(RecipeId, input);
+            }
+
+            if (owner == Foods.ProfileId) Navigation.NavigateTo("food/recipes");
+        }
+        catch (ValidationException e)
+        {
+            error = string.Join(" ", e.Errors.Select(x => x.ErrorMessage).Distinct(StringComparer.Ordinal));
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            error = e.Message;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            error = "Couldn't save the recipe on this device. Try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (busy || RecipeId is null || owner != Foods.ProfileId) return;
+        busy = true;
+        error = null;
+        try
+        {
+            await Foods.DeleteRecipeAsync(RecipeId);
+            if (owner == Foods.ProfileId) Navigation.NavigateTo("food/recipes");
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            error = "Couldn't delete the recipe on this device. Try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private static (string? Unit, string? Portion) Split(string unit) =>
+        unit.StartsWith("portion:", StringComparison.Ordinal) ? (null, unit["portion:".Length..]) : (unit, null);
+
+    private static string UnitName(string code) => code switch
+    {
+        "fl_oz" => "fl oz",
+        "cup" => "cups",
+        "l" => "L",
+        _ => code,
+    };
+
+    public void Dispose() => Profiles.Changed -= ProfileChanged;
+
+    private sealed class Row
+    {
+        public string? Id { get; set; }
+
+        public string FoodId { get; set; } = "";
+
+        public string FoodName { get; set; } = "";
+
+        public LoggableFood? Food { get; set; }
+
+        public string Amount { get; set; } = "";
+
+        public string Unit { get; set; } = "";
+    }
+}
