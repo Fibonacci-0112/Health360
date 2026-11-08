@@ -472,6 +472,8 @@
         if (copying || busy) return;
         var household = householdId;
         var started = owner;
+        // The recipe it was asked for: one opened meanwhile, in the same household or not, doesn't get the ingredient.
+        var generation = loadGeneration;
         if (string.IsNullOrEmpty(household))
         {
             error = "Choose a household first.";
@@ -483,7 +485,7 @@
         {
             var id = await Foods.CopyFromCatalogueAsync(household, row);
             var copy = await Foods.FoodAsync(id);
-            if (household != householdId || started != owner || owner != Foods.ProfileId) return;
+            if (generation != loadGeneration || household != householdId || started != owner || owner != Foods.ProfileId) return;
             if (copy is null)
             {
                 error = $"{row.Name} couldn't be added to your household on this device.";
@@ -495,7 +497,8 @@
         catch (Exception x) when (x is not OperationCanceledException)
         {
             LogFailed(Logger, "catalogue copy", x.GetType().Name);
-            if (household == householdId && started == owner) error = $"{row.Name} couldn't be added to your household on this device. Try again.";
+            if (generation == loadGeneration && household == householdId && started == owner)
+                error = $"{row.Name} couldn't be added to your household on this device. Try again.";
         }
         finally
         {
