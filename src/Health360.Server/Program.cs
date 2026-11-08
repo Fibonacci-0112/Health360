@@ -2,12 +2,14 @@ using Health360.Server.Ai;
 using Health360.Server.Auth;
 using Health360.Server.Data;
 using Health360.Server.Endpoints;
+using Health360.Server.Foods;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSupabaseAuthentication(builder.Configuration);
 builder.Services.AddUserDatabase(builder.Configuration);
 builder.Services.AddClaude(builder.Configuration);
+builder.Services.AddFoodLookup(builder.Configuration);
 
 var app = builder.Build();
 
@@ -20,5 +22,6 @@ app.UseRateLimiter();
 app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
 app.MapAccountEndpoints();
 app.MapAiEndpoints();
+app.MapFoodEndpoints();
 
 app.Run();
