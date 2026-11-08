@@ -168,4 +168,62 @@ public sealed class CatalogueFoodTests : AppTestContext
         cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("#ingredient-catalogue")), Wait);
         Assert.Equal("", cut.Find("#ingredient-search").GetAttribute("value"));
     }
+
+    [Fact]
+    public async Task A_copy_beyond_the_household_results_limit_stays_reachable_through_its_catalogue_row()
+    {
+        var cut = await OpenAsync("food", "#food-search");
+        var copyId = await FoodLibrary.CopyFromCatalogueAsync(App.Database.Db, Household, ChickenBreast(), App.Clock);
+        // 20 household foods that sort before the copy fill the household results, so the copy isn't listed.
+        await App.Database.Db.WriteTransaction(async tx =>
+        {
+            for (var i = 0; i < 20; i++)
+            {
+                await tx.Execute(
+                    "INSERT INTO foods (id, household_id, source, name, basis, energy_100, nutrients_100, portions, verified) " +
+                    "VALUES (?, ?, 'custom', ?, 'g', 100, '{}', '[]', 0)",
+                    [$"0192f0c0-0000-7000-8000-0000000001{i:D2}", Household, $"Aaa chicken {i:D2}"]);
+            }
+        });
+
+        await TypeAsync(cut, "#food-search", "chicken");
+        cut.WaitForAssertion(() => cut.Find("#catalogue-results"), Wait);
+        Assert.DoesNotContain("Chicken breast", cut.Find("#food-results").TextContent, StringComparison.Ordinal);
+
+        // Using it reuses the existing copy rather than making another.
+        await ClickAsync(cut, "[aria-label='Use Chicken breast from the USDA catalogue']");
+        cut.WaitForAssertion(() => cut.Find("#log-food"), Wait);
+        Assert.Contains("Chicken breast", cut.Find("#log-food-form").TextContent, StringComparison.Ordinal);
+        Assert.Equal(1, await App.Database.Db.Get<long>("SELECT count(*) FROM foods WHERE copied_from = ?", [Chicken]));
+        Assert.NotNull(await FoodLibrary.GetAsync(App.Database.Db, copyId));
+    }
+
+    [Fact]
+    public async Task Opening_another_recipe_clears_the_catalogue_results_of_the_last_search()
+    {
+        var cut = await OpenAsync("food/recipes/new", "#ingredient-search");
+        var copyId = await FoodLibrary.CopyFromCatalogueAsync(App.Database.Db, Household, ChickenBreast(), App.Clock);
+        var recipeId = await Recipes.CreateAsync(App.Database.Db, Household,
+            new Health360.Contracts.Nutrition.RecipeInput("Plain chicken", 1, null, null,
+                [new Health360.Contracts.Nutrition.RecipeIngredientInput(null, copyId, 100, "g", null)]), App.Clock);
+
+        await TypeAsync(cut, "#ingredient-search", "breas");
+        App.Catalogue.Foods.Add(new FoodRow
+        {
+            Id = "50000000-0000-0000-0000-000000000002",
+            Source = "usda_fdc",
+            Name = "Breaded fish",
+            Basis = "g",
+            Energy100 = 200,
+            Nutrients100 = "{}",
+            Portions = "[]",
+        });
+        await TypeAsync(cut, "#ingredient-search", "brea");
+        cut.WaitForAssertion(() => cut.Find("#ingredient-catalogue"), Wait);
+
+        await cut.InvokeAsync(() => Services.GetRequiredService<NavigationManager>().NavigateTo($"food/recipes/{recipeId}"));
+        cut.WaitForAssertion(() => Assert.Equal("Plain chicken", cut.Find("#recipe-name").GetAttribute("value")), Wait);
+        Assert.Empty(cut.FindAll("#ingredient-catalogue"));
+        Assert.Empty(cut.FindAll("#ingredient-matches"));
+    }
 }

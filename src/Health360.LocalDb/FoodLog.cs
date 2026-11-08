@@ -185,28 +185,6 @@ public static class FoodLibrary
     /// <summary>The longest query searched: a food's name is at most 200 characters. Every word of it is matched.</summary>
     public const int MaxQueryLength = 200;
 
-    /// <summary>Which of <paramref name="catalogueIds"/> the household already has a copy of on this device.</summary>
-    public static async Task<IReadOnlySet<string>> CopiedAsync(IPowerSyncDatabase db, string householdId, IEnumerable<string> catalogueIds)
-    {
-        ArgumentNullException.ThrowIfNull(db);
-        ArgumentNullException.ThrowIfNull(catalogueIds);
-        var ids = catalogueIds.Distinct(StringComparer.Ordinal).ToList();
-        if (ids.Count == 0 || string.IsNullOrEmpty(householdId))
-        {
-            return new HashSet<string>(StringComparer.Ordinal);
-        }
-
-        var rows = await db.GetAll<CopiedFrom>(
-            $"SELECT copied_from AS Id FROM foods WHERE household_id = ? AND copied_from IN ({string.Join(", ", ids.Select(_ => "?"))})",
-            [householdId, .. ids]).ConfigureAwait(false);
-        return rows.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
-    }
-
-    internal sealed class CopiedFrom
-    {
-        public string Id { get; set; } = "";
-    }
-
     /// <summary>The foods this profile logged most recently that are still on this device, newest first.</summary>
     public static Task<FoodRow[]> RecentAsync(IPowerSyncDatabase db, string profileId, int limit)
     {

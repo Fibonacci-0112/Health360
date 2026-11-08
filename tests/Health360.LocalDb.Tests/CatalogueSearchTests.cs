@@ -126,7 +126,7 @@ public class CatalogueSearchTests
     }
 
     [Fact]
-    public async Task HouseholdSearchMatchesEachWordAsTheCatalogueDoesAndCopiesAreFoundById()
+    public async Task HouseholdSearchMatchesEachWordAsTheCatalogueDoes()
     {
         await using var t = await TestDatabase.OpenAsync();
         await t.Db.Execute("INSERT INTO households (id, name) VALUES (?, 'Home')", [Household]);
@@ -141,9 +141,6 @@ public class CatalogueSearchTests
         Assert.Empty(await FoodLibrary.SearchAsync(t.Db, matching + " thigh", 20, Household));
         Assert.Empty(await FoodLibrary.SearchAsync(t.Db, new string('c', FoodLibrary.MaxQueryLength + 1), 20, Household));
 
-        Assert.Equal([Chicken], await FoodLibrary.CopiedAsync(t.Db, Household, [Chicken, "50000000-0000-0000-0000-000000000009"]));
-        Assert.Empty(await FoodLibrary.CopiedAsync(t.Db, "0192f0c0-0000-7000-8000-0000000000a2", [Chicken]));
-        Assert.Empty(await FoodLibrary.CopiedAsync(t.Db, Household, []));
     }
 
     private sealed class Server : HttpMessageHandler

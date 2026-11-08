@@ -35,10 +35,6 @@ public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, I
     public Task<CatalogueSearchResult> SearchCatalogueAsync(string query, CancellationToken cancellationToken = default) =>
         catalogue.SearchAsync(query, 20, cancellationToken);
 
-    /// <summary>Which of the catalogue foods the household already has a copy of on this device.</summary>
-    public Task<IReadOnlySet<string>> CopiedAsync(string householdId, IEnumerable<string> catalogueIds) =>
-        FoodLibrary.CopiedAsync(db, householdId, catalogueIds);
-
     /// <summary>Copies a catalogue food into the household (or finds the copy already there) and returns the copy's id.</summary>
     public Task<string> CopyFromCatalogueAsync(string householdId, FoodRow catalogueFood) =>
         FoodLibrary.CopyFromCatalogueAsync(db, householdId, catalogueFood, clock);

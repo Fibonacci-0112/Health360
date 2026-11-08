@@ -181,13 +181,13 @@
     private string? catalogueNote;
     private bool catalogueSearched, copying;
 
-    // The catalogue foods the recipe's household already has a copy of, and which household that was.
-    private IReadOnlySet<string> catalogueCopied = new HashSet<string>(StringComparer.Ordinal);
-    private string? catalogueCopiedFor;
-
-    /// <summary>Catalogue matches, less those the recipe's household already has a copy of (listed with its foods).</summary>
-    private IReadOnlyList<FoodRow> CatalogueShown => catalogueCopiedFor == householdId
-        ? [.. catalogueMatches.Where(row => !catalogueCopied.Contains(row.Id))]
+    /// <summary>
+    /// Catalogue matches, less those whose copy in the recipe's household is listed with its foods just above. A copy
+    /// beyond that list's limit isn't listed, so its catalogue row stays, and adding it reuses the copy.
+    /// </summary>
+    private IReadOnlyList<FoodRow> CatalogueShown => Guid.TryParse(householdId, out var household)
+        ? [.. catalogueMatches.Where(row => !(Guid.TryParse(row.Id, out var food)
+            && matches.Any(m => m.Id == FoodCopy.IdFor(household, food).ToString("D"))))]
         : catalogueMatches;
 
     private bool subscribed, started;
@@ -218,6 +218,11 @@
         error = null;
         households = [];
         householdId = name = cookedWeight = query = "";
+        // Another recipe's search, the catalogue's part included, doesn't apply to this one.
+        matches = [];
+        catalogueMatches = [];
+        catalogueNote = null;
+        catalogueSearched = false;
         servings = "1";
         cookedUnit = "g";
         rows.Clear();
@@ -386,7 +391,6 @@
         catalogueMatches = [];
         catalogueNote = null;
         catalogueSearched = false;
-        catalogueCopiedFor = null;
         if (error == SearchFailed) error = null;
     }
 
@@ -448,25 +452,8 @@
         }
 
         if (asked != query || household != householdId || started != owner || owner != Foods.ProfileId) return;
-        IReadOnlySet<string> copied = new HashSet<string>(StringComparer.Ordinal);
-        if (answer.Foods.Count > 0 && !string.IsNullOrEmpty(household))
-        {
-            try
-            {
-                copied = await Foods.CopiedAsync(household, answer.Foods.Select(f => f.Id));
-            }
-            catch (Exception x) when (x is not OperationCanceledException)
-            {
-                // Then every result is offered; adding one already copied reuses the copy.
-                LogFailed(Logger, "catalogue copies", x.GetType().Name);
-            }
-
-            if (asked != query || household != householdId || started != owner || owner != Foods.ProfileId) return;
-        }
-
         catalogueSearched = true;
         catalogueMatches = [.. answer.Foods];
-        (catalogueCopied, catalogueCopiedFor) = (copied, household);
         catalogueNote = answer.Status switch
         {
             CatalogueSearchStatus.SignedOut => "Sign in again to search the USDA catalogue.",
