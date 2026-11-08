@@ -165,10 +165,10 @@ public sealed class BarcodeOpenFoodFactsTests
     }
 
     [Theory]
-    [InlineData("""{"product_name":"Cola","quantity":"1.5 L","nutriments":{"energy-kcal_100g":42}}""", "Volume")]
-    [InlineData("""{"product_name":"Juice","quantity":"33 cl","nutriments":{"energy-kcal_100g":45}}""", "Volume")]
-    [InlineData("""{"product_name":"Soda","quantity":"12 fl oz","nutriments":{"energy-kcal_100g":40}}""", "Volume")]
-    [InlineData("""{"product_name":"Milk","quantity":"1","product_quantity_unit":"l","nutriments":{"energy-kcal_100g":46}}""", "Volume")]
+    [InlineData("""{"product_name":"Cola","categories_tags":["en:beverages"],"quantity":"1.5 L","nutriments":{"energy-kcal_100g":42}}""", "Volume")]
+    [InlineData("""{"product_name":"Juice","categories_tags":["en:beverages"],"quantity":"33 cl","nutriments":{"energy-kcal_100g":45}}""", "Volume")]
+    [InlineData("""{"product_name":"Soda","categories_tags":["en:beverages"],"quantity":"12 fl oz","nutriments":{"energy-kcal_100g":40}}""", "Volume")]
+    [InlineData("""{"product_name":"Milk","categories_tags":["en:beverages"],"quantity":"1","product_quantity_unit":"l","nutriments":{"energy-kcal_100g":46}}""", "Volume")]
     [InlineData("""{"product_name":"Flour","quantity":"1 kg","nutriments":{"energy-kcal_100g":350}}""", "Mass")]
     [InlineData("""{"product_name":"Bar","quantity":"6 x 40g","nutriments":{"energy-kcal_100g":400}}""", "Mass")]
     [InlineData("""{"product_name":"Rice","quantity":"8 oz","nutriments":{"energy-kcal_100g":360}}""", "Mass")]
@@ -184,6 +184,10 @@ public sealed class BarcodeOpenFoodFactsTests
 
     [Theory]
     [InlineData("""{"product_name":"Mystery","nutriments":{"energy-kcal_100g":100}}""")]
+    // A non-beverage sold by volume is per 100 g in Open Food Facts (a recorded olive oil), so per 100 ml would be wrong.
+    [InlineData("""{"product_name":"Olive oil","quantity":"750 ml","categories_tags":["en:fats","en:vegetable-oils"],"nutriments":{"energy-kcal_100g":824}}""")]
+    [InlineData("""{"product_name":"Cola can","quantity":"330 g","categories_tags":["en:beverages"],"nutriments":{"energy-kcal_100g":42}}""")]
+    [InlineData("""{"product_name":"Uncategorised soda","quantity":"1.5 L","nutriments":{"energy-kcal_100g":42}}""")]
     [InlineData("""{"product_name":"Eggs","quantity":"12 pieces","nutriments":{"energy-kcal_100g":140}}""")]
     public async Task A_product_whose_basis_cannot_be_told_is_skipped_not_guessed(string product)
     {

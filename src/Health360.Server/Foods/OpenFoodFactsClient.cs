@@ -16,12 +16,12 @@ public sealed partial class OpenFoodFactsClient(IHttpClientFactory httpClientFac
 
     private const double KilojoulesPerKilocalorie = 4.184;
 
-    private const string Fields = "code,product_name,brands,quantity,product_quantity_unit,serving_quantity,nutriments";
+    private const string Fields = "code,product_name,brands,quantity,product_quantity_unit,serving_quantity,categories_tags,nutriments";
 
     /// <summary>
     /// The product with this GTIN, or null. Open Food Facts stores a UPC-A as 13 digits (with one leading zero) and
     /// an EAN-8 as 8, so a code is asked for in each form it fits (<see cref="LookupForms"/>) until one is found.
-    /// A product whose basis can't be told (<see cref="BasisOf"/>) is skipped, which reads as not found, so the
+    /// A product whose basis can't be established (<see cref="BasisOf"/>) is skipped, which reads as not found, so the
     /// app offers a label scan instead of values per the wrong basis. Its values are the crowd-sourced ones as
     /// entered; the confirm screen's checks apply to them as to any label.
     /// </summary>
@@ -84,11 +84,27 @@ public sealed partial class OpenFoodFactsClient(IHttpClientFactory httpClientFac
     }
 
     /// <summary>
-    /// What a product's values are per 100 of. Open Food Facts names every column <c>_100g</c> but holds liquids
-    /// per 100 ml, so the basis comes from the product's quantity: a volume unit is volume, a mass unit is mass.
-    /// A product with neither is unknown (null), never assumed.
+    /// What a product's values are per 100 of. Open Food Facts names every column <c>_100g</c> and records no
+    /// per-100 ml marker on the product: by its convention a beverage's values are per 100 ml and any other food's
+    /// per 100 g, whatever the package is measured in (an olive oil sold by the litre is still per 100 g). So the
+    /// basis needs both signals to agree: a beverage (<c>en:beverages</c> among its categories) sold by volume is
+    /// volume, and any other food sold by mass is mass. Every other combination (a non-beverage sold by volume, a
+    /// beverage sold by mass, or no readable quantity) is unknown (null), never assumed, so the app offers a label
+    /// scan instead of values per the wrong basis.
     /// </summary>
     internal static FoodBasis? BasisOf(Product product)
+    {
+        var isBeverage = product.Categories?.Contains("en:beverages") == true;
+        return (QuantityBasis(product), isBeverage) switch
+        {
+            (FoodBasis.Volume, true) => FoodBasis.Volume,
+            (FoodBasis.Mass, false) => FoodBasis.Mass,
+            _ => null,
+        };
+    }
+
+    /// <summary>What the package is measured in, from its quantity unit or text; null when neither says.</summary>
+    private static FoodBasis? QuantityBasis(Product product)
     {
         var unit = product.QuantityUnit?.Trim().ToLowerInvariant();
         if (unit is "ml" or "cl" or "dl" or "l")
@@ -138,6 +154,7 @@ public sealed partial class OpenFoodFactsClient(IHttpClientFactory httpClientFac
         [property: JsonPropertyName("quantity")] string? Quantity,
         [property: JsonPropertyName("product_quantity_unit")] string? QuantityUnit,
         [property: JsonPropertyName("serving_quantity"), JsonConverter(typeof(LenientNumber))] double? ServingQuantity,
+        [property: JsonPropertyName("categories_tags")] List<string>? Categories,
         [property: JsonPropertyName("nutriments")] Nutriments? Nutriments);
 
     internal sealed record Nutriments(
