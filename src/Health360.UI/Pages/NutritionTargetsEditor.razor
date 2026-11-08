@@ -311,7 +311,7 @@
         var (settings, problem) = Read();
         if (settings is null) return (null, null, problem);
         if (settings.Method == TargetMethod.Manual) return (NutritionTargets.Compute(settings, null), settings, null);
-        if (Body.Failed) return (null, null, "Your physiology profile couldn't be read on this device, so these targets can't be worked out. You can still save them.");
+        if (Body.ProfileFailed) return (null, null, "Your physiology profile couldn't be read on this device, so these targets can't be worked out. You can still save them.");
         return Body.Profile() is { } profile ? (NutritionTargets.Compute(settings, profile), settings, null) : (null, settings, null);
     }
 

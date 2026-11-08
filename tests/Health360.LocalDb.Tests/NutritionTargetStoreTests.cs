@@ -56,7 +56,7 @@ public class NutritionTargetStoreTests
     }
 
     [Fact]
-    public async Task SavingAgainUpdatesTheRowInOnePatchThatSendsClearedManualValues()
+    public async Task SavingAgainUploadsTheWholeRowAsOnePutWithClearedManualValues()
     {
         await using var t = await TestDatabase.OpenAsync();
         var manual = TargetSettings.Default with { Method = TargetMethod.Manual, ManualEnergyKcal = 2400, ManualProteinG = 150 };
@@ -71,15 +71,20 @@ public class NutritionTargetStoreTests
         Assert.Single(await t.Db.GetAll<Stamp>("SELECT created_at AS CreatedAt FROM nutrition_targets"));
         Assert.Equal(created.CreatedAt, (await t.Db.Get<Stamp>("SELECT created_at AS CreatedAt FROM nutrition_targets")).CreatedAt);
 
-        // One request, never a DELETE: a connection lost between a delete and a re-insert would leave the server
-        // without targets until the retry.
-        var patch = Assert.Single(await UploadAsync(t));
-        Assert.Equal(("PATCH", "nutrition_targets", NutritionTargetStore.IdFor(Profile)), (patch.Op, patch.Table, patch.Id));
-        Assert.Equal("formula", patch.Data!["method"]!.GetValue<string>());
-        foreach (var column in new[] { "manual_energy_kcal", "manual_protein_g" })
+        // One request with every setting: no DELETE (a lost connection between it and a re-insert would leave the
+        // server without targets), and no PATCH of only the changed columns (which would merge into what another
+        // device saved meanwhile instead of replacing it).
+        var put = Assert.Single(await UploadAsync(t));
+        Assert.Equal(("PUT", "nutrition_targets", NutritionTargetStore.IdFor(Profile)), (put.Op, put.Table, put.Id));
+        Assert.Equal(
+            ("formula", "body_weight", "g_per_kg", 1.6, 30.0, 0.0),
+            (put.Data!["method"]!.GetValue<string>(), put.Data["protein_basis"]!.GetValue<string>(),
+             put.Data["protein_ratio_unit"]!.GetValue<string>(), put.Data["protein_ratio"]!.GetValue<double>(),
+             put.Data["fat_percent"]!.GetValue<double>(), put.Data["energy_adjustment_kcal"]!.GetValue<double>()));
+        foreach (var column in new[] { "manual_energy_kcal", "manual_protein_g", "manual_fat_g", "manual_carbohydrate_g" })
         {
-            Assert.True(patch.Data.ContainsKey(column), column + " must be sent: " + patch.Data.ToJsonString());
-            Assert.Null(patch.Data[column]);
+            Assert.True(put.Data.ContainsKey(column), column + " must be sent: " + put.Data.ToJsonString());
+            Assert.Null(put.Data[column]);
         }
     }
 

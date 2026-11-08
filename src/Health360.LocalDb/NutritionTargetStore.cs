@@ -120,38 +120,23 @@ public static class NutritionTargetStore
         var manual = settings.Method == TargetMethod.Manual;
         await db.WriteTransaction(async tx =>
         {
-            var exists = await tx.GetOptional<Created>("SELECT created_at AS CreatedAt FROM nutrition_targets WHERE id = ?", [id])
-                .ConfigureAwait(false) is not null;
-            object?[] values =
-            [
-                manual ? ManualMethod : FormulaMethod, settings.EnergyAdjustmentKcal,
-                settings.ProteinBasis == ProteinBasis.LeanMass ? LeanMassBasis : BodyWeightBasis, settings.ProteinRatio,
-                UnitPrefOptions.ProteinRatio.ToCode(settings.ProteinRatioUnit), perKg, settings.FatPercent, settings.ManualEnergyKcal,
-                settings.ManualProteinG, settings.ManualFatG, settings.ManualCarbohydrateG,
-            ];
-            if (exists)
-            {
-                // An update, uploaded as one PATCH of the changed columns (cleared manual values as null). Not a delete
-                // and an insert: the uploader sends each queued op as its own request, so a connection lost between
-                // them would leave the server without targets, and other devices on the starting settings, until the
-                // retry. Nothing deletes a targets row (only the profile's own deletion cascades), so the PATCH has a
-                // row to match.
-                await tx.Execute(
-                    "UPDATE nutrition_targets SET method = ?, energy_adjustment_kcal = ?, protein_basis = ?, protein_ratio = ?, " +
-                    "protein_ratio_unit = ?, protein_ratio_g_per_kg = ?, fat_percent = ?, manual_energy_kcal = ?, manual_protein_g = ?, " +
-                    "manual_fat_g = ?, manual_carbohydrate_g = ?, updated_at = ? WHERE id = ?",
-                    [.. values, now, id]).ConfigureAwait(false);
-            }
-            else
-            {
-                // An insert uploads as an upsert (PUT) of every column, so a row another device saved first is replaced
-                // rather than refused as a duplicate.
-                await tx.Execute(
-                    "INSERT INTO nutrition_targets (method, energy_adjustment_kcal, protein_basis, protein_ratio, " +
-                    "protein_ratio_unit, protein_ratio_g_per_kg, fat_percent, manual_energy_kcal, manual_protein_g, manual_fat_g, " +
-                    "manual_carbohydrate_g, id, profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [.. values, id, profileId, now, now]).ConfigureAwait(false);
-            }
+            var created = await tx.GetOptional<Created>("SELECT created_at AS CreatedAt FROM nutrition_targets WHERE id = ?", [id])
+                .ConfigureAwait(false);
+            // INSERT OR REPLACE queues one PUT of the whole row, whether or not the row exists, and the upload is an
+            // upsert, with cleared manual values sent as null (AppSchema.NullableOnPut). So the last save wins whole:
+            // not a delete and an insert, two requests a lost connection could split, leaving the server without
+            // targets; and not an UPDATE, whose PATCH of only this device's changed columns would merge into what
+            // another device saved meanwhile.
+            await tx.Execute(
+                "INSERT OR REPLACE INTO nutrition_targets (id, profile_id, method, energy_adjustment_kcal, protein_basis, " +
+                "protein_ratio, protein_ratio_unit, protein_ratio_g_per_kg, fat_percent, manual_energy_kcal, manual_protein_g, " +
+                "manual_fat_g, manual_carbohydrate_g, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    id, profileId, manual ? ManualMethod : FormulaMethod, settings.EnergyAdjustmentKcal,
+                    settings.ProteinBasis == ProteinBasis.LeanMass ? LeanMassBasis : BodyWeightBasis, settings.ProteinRatio,
+                    UnitPrefOptions.ProteinRatio.ToCode(settings.ProteinRatioUnit), perKg, settings.FatPercent, settings.ManualEnergyKcal,
+                    settings.ManualProteinG, settings.ManualFatG, settings.ManualCarbohydrateG, created?.CreatedAt ?? now, now,
+                ]).ConfigureAwait(false);
         }).ConfigureAwait(false);
     }
 

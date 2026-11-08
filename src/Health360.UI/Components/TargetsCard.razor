@@ -16,7 +16,7 @@
     {
         <p class="muted" role="alert">Your targets couldn't be read on this device. Leave this page and come back to try again.</p>
     }
-    else if (settings is not null && targets is null && Body.Failed)
+    else if (settings is not null && targets is null && Body.ProfileFailed)
     {
         <p class="muted" role="alert" id="targets-profile-failed">Your physiology profile couldn't be read on this device, so targets from it can't be worked out. Leave this page and come back to try again.</p>
     }
@@ -162,7 +162,7 @@
         }
 
         var manual = settings.Method == TargetMethod.Manual;
-        var profile = manual || Body.Failed ? null : Body.Profile();
+        var profile = manual || Body.ProfileFailed ? null : Body.Profile();
         targets = manual || profile is not null ? NutritionTargets.Compute(settings, profile) : null;
     }
 
