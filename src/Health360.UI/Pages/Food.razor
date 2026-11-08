@@ -395,13 +395,15 @@
     private async Task LoadChoicesAsync()
     {
         var started = generation;
+        var asked = query;
         try
         {
             var nextHouseholds = await Foods.HouseholdsAsync();
-            var nextResults = string.IsNullOrWhiteSpace(query) ? await Foods.RecentAsync() : await Foods.SearchAsync(query);
+            var nextResults = string.IsNullOrWhiteSpace(asked) ? await Foods.RecentAsync() : await Foods.SearchAsync(asked);
             if (started != generation) return;
             households = nextHouseholds;
-            results = nextResults;
+            // Matches for text the user has since changed stay out: the search for the new text owns the list.
+            if (asked == query) results = nextResults;
             choicesFailed = false;
             if (error == ChoicesReadFailed) error = null;
             if (!households.Any(h => h.Id == householdId)) householdId = households.FirstOrDefault()?.Id ?? "";
