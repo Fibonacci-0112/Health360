@@ -156,13 +156,34 @@ public static class FoodLibrary
     public static Task<FoodRow[]> SearchAsync(IPowerSyncDatabase db, string? query, int limit, string? householdId = null)
     {
         ArgumentNullException.ThrowIfNull(db);
-        var pattern = "%" + EscapeLike(query?.Trim() ?? "") + "%";
-        return db.GetAll<FoodRow>(
-            $"SELECT {Columns} FROM foods f WHERE f.household_id IS NOT NULL AND (? IS NULL OR f.household_id = ?) " +
-            "AND (f.name LIKE ? ESCAPE '\\' OR coalesce(f.brand, '') LIKE ? ESCAPE '\\') " +
-            "ORDER BY f.name COLLATE NOCASE, f.id LIMIT ?",
-            [householdId, householdId, pattern, pattern, limit]);
+        // Every word must appear in the name or the brand, as the catalogue search matches (search_catalogue_foods),
+        // so a household copy is found by any query that found its catalogue food.
+        var text = (query ?? "").Trim();
+        if (text.Length > MaxQueryLength)
+        {
+            // Longer than any food name, so nothing can match every word; refused rather than searched by a prefix.
+            return Task.FromResult(Array.Empty<FoodRow>());
+        }
+
+        var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var sql = new System.Text.StringBuilder(
+            $"SELECT {Columns} FROM foods f WHERE f.household_id IS NOT NULL AND (? IS NULL OR f.household_id = ?) ");
+        var parameters = new List<object?> { householdId, householdId };
+        foreach (var word in words)
+        {
+            sql.Append("AND (f.name LIKE ? ESCAPE '\\' OR coalesce(f.brand, '') LIKE ? ESCAPE '\\') ");
+            var pattern = "%" + EscapeLike(word) + "%";
+            parameters.Add(pattern);
+            parameters.Add(pattern);
+        }
+
+        sql.Append("ORDER BY f.name COLLATE NOCASE, f.id LIMIT ?");
+        parameters.Add(limit);
+        return db.GetAll<FoodRow>(sql.ToString(), [.. parameters]);
     }
+
+    /// <summary>The longest query searched: a food's name is at most 200 characters. Every word of it is matched.</summary>
+    public const int MaxQueryLength = 200;
 
     /// <summary>The foods this profile logged most recently that are still on this device, newest first.</summary>
     public static Task<FoodRow[]> RecentAsync(IPowerSyncDatabase db, string profileId, int limit)
@@ -221,6 +242,51 @@ public static class FoodLibrary
                 [id, householdId, input.Name.Trim(), string.IsNullOrWhiteSpace(input.Brand) ? null : input.Brand.Trim(),
                     FoodBases.Code(input.Basis), per100[Nutrient.Energy], per100[Nutrient.Protein], per100[Nutrient.Carbohydrate],
                     per100[Nutrient.Fat], input.PortionsJson(), now, now]).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+        return id;
+    }
+
+    /// <summary>
+    /// Copies a catalogue food (from <see cref="ICatalogueSearch"/>) into the household so it can be logged and used in
+    /// recipes offline, and returns the copy's id. The id is <see cref="FoodCopy.IdFor"/>, the same on every device, so
+    /// a food already copied (here, or by another member and synced) is reused, unchanged, instead of copied again.
+    /// The local row holds the values the search returned; on upload the server fills the copy from the catalogue row
+    /// (<c>private.foods_copy</c>), and leaves an existing copy as it is.
+    /// </summary>
+    public static async Task<string> CopyFromCatalogueAsync(IPowerSyncDatabase db, string householdId, FoodRow catalogueFood, TimeProvider clock)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentException.ThrowIfNullOrEmpty(householdId);
+        ArgumentNullException.ThrowIfNull(catalogueFood);
+        ArgumentNullException.ThrowIfNull(clock);
+        if (catalogueFood.HouseholdId is not null || !Guid.TryParse(catalogueFood.Id, out var foodId))
+        {
+            throw new ArgumentException("Only a catalogue food can be copied into a household.", nameof(catalogueFood));
+        }
+
+        if (catalogueFood.Source is not ("usda_fdc" or "open_food_facts") || catalogueFood.ToFood() is null)
+        {
+            throw new ArgumentException("That catalogue food can't be used on this device.", nameof(catalogueFood));
+        }
+
+        var household = Guid.Parse(householdId);
+        var id = FoodCopy.IdFor(household, foodId).ToString("D");
+        var now = Timestamps.UtcNow(clock);
+        await db.WriteTransaction(async tx =>
+        {
+            _ = await tx.GetOptional<WorkoutPlans.IdOnly>("SELECT id AS Id FROM households WHERE id = ?", [householdId]).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("That household is no longer on this device.");
+            if (await tx.GetOptional<WorkoutPlans.IdOnly>("SELECT id AS Id FROM foods WHERE id = ?", [id]).ConfigureAwait(false) is not null)
+            {
+                return;
+            }
+
+            await tx.Execute(
+                "INSERT INTO foods (id, household_id, source, name, brand, basis, energy_100, protein_100, carbohydrate_100, fat_100, " +
+                "nutrients_100, portions, verified, copied_from, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                [id, household.ToString("D"), catalogueFood.Source, catalogueFood.Name, catalogueFood.Brand, catalogueFood.Basis,
+                    catalogueFood.Energy100, catalogueFood.Protein100, catalogueFood.Carbohydrate100, catalogueFood.Fat100,
+                    catalogueFood.Nutrients100 ?? "{}", catalogueFood.Portions ?? "[]", foodId.ToString("D"), now, now]).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return id;
     }

@@ -56,6 +56,7 @@ public sealed class App : IAsyncDisposable
         context.Services.AddSingleton<IDeviceLocale>(Locale);
         context.Services.AddSingleton(Database.Db);
         context.Services.AddSingleton<IRemoteWriter>(new NoWriter());
+        context.Services.AddSingleton<ICatalogueSearch>(Catalogue);
         context.Services.AddSingleton(new SupabaseAuthClient(Auth.Client(), FakeAuth.ApiKey, Clock));
         context.Services.AddSingleton<ISessionStore>(Store);
         context.Services.AddSingleton<SessionManager>();
@@ -84,6 +85,28 @@ public sealed class App : IAsyncDisposable
     {
         photos?.Dispose();
         return Database.DisposeAsync();
+    }
+
+    /// <summary>The online catalogue search; finds nothing until a test gives it foods or makes it fail.</summary>
+    public FakeCatalogue Catalogue { get; } = new();
+
+    /// <summary>An <see cref="ICatalogueSearch"/> over a list, matching every word of the query in the name.</summary>
+    public sealed class FakeCatalogue : ICatalogueSearch
+    {
+        public List<FoodRow> Foods { get; } = [];
+
+        public CatalogueSearchStatus Status { get; set; } = CatalogueSearchStatus.Found;
+
+        public List<string> Queries { get; } = [];
+
+        public Task<CatalogueSearchResult> SearchAsync(string query, int limit, CancellationToken cancellationToken)
+        {
+            Queries.Add(query);
+            if (Status != CatalogueSearchStatus.Found) return Task.FromResult(CatalogueSearchResult.Of(Status));
+            var words = query.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var found = query.Trim().Length < 2 ? [] : Foods.Where(f => words.All(w => f.Name.Contains(w, StringComparison.OrdinalIgnoreCase))).Take(limit).ToList();
+            return Task.FromResult(new CatalogueSearchResult(CatalogueSearchStatus.Found, found));
+        }
     }
 
     /// <summary>A server that is never reached: every write fails as if offline.</summary>

@@ -10,7 +10,7 @@ namespace Health360.UI.Data;
 /// The Food tab's access to the signed-in user's food log and the household's foods in the local database. Every
 /// write is local first and uploads when online, so a whole day can be logged offline.
 /// </summary>
-public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, TimeProvider clock)
+public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, ICatalogueSearch catalogue, TimeProvider clock)
 {
     public string? ProfileId => profiles.Profile?.Id;
 
@@ -30,6 +30,14 @@ public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, T
         FoodLibrary.WatchChoices(db, RequireProfile(), cancellationToken);
 
     public Task<FoodRow[]> SearchAsync(string? query, string? householdId = null) => FoodLibrary.SearchAsync(db, query, 20, householdId);
+
+    /// <summary>The USDA catalogue, searched online; the result says when it couldn't be (offline, signed out).</summary>
+    public Task<CatalogueSearchResult> SearchCatalogueAsync(string query, CancellationToken cancellationToken = default) =>
+        catalogue.SearchAsync(query, 20, cancellationToken);
+
+    /// <summary>Copies a catalogue food into the household (or finds the copy already there) and returns the copy's id.</summary>
+    public Task<string> CopyFromCatalogueAsync(string householdId, FoodRow catalogueFood) =>
+        FoodLibrary.CopyFromCatalogueAsync(db, householdId, catalogueFood, clock);
 
     public Task<FoodRow[]> RecentAsync() => FoodLibrary.RecentAsync(db, RequireProfile(), 8);
 

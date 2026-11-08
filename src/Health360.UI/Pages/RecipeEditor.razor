@@ -99,7 +99,7 @@
                     }
                 </ul>
                 <div class="field">
-                    <label for="ingredient-search">Add an ingredient from your household's foods</label>
+                    <label for="ingredient-search">Add an ingredient</label>
                     <input id="ingredient-search" type="search" value="@query" @oninput="SearchAsync" autocomplete="off" />
                 </div>
                 @if (matches.Length > 0)
@@ -114,9 +114,26 @@
                         }
                     </ul>
                 }
-                else if (!string.IsNullOrWhiteSpace(query))
+                @if (CatalogueShown.Count > 0)
                 {
-                    <p class="muted">No household food matches. Add it on the Food tab first.</p>
+                    <p class="muted small">From the USDA catalogue (added to your household when you use it)</p>
+                    <ul class="measurement-list" id="ingredient-catalogue">
+                        @foreach (var row in CatalogueShown)
+                        {
+                            <li class="measurement">
+                                <span>@row.Name@(row.Brand is null ? "" : $" ({row.Brand})")</span>
+                                <button type="button" class="secondary compact" disabled="@(copying || busy)" aria-label="@($"Add {row.Name} from the USDA catalogue")" @onclick="() => AddFromCatalogueAsync(row)">Add</button>
+                            </li>
+                        }
+                    </ul>
+                }
+                @if (catalogueNote is not null)
+                {
+                    <p class="muted small" id="ingredient-catalogue-note">@catalogueNote</p>
+                }
+                @if (matches.Length == 0 && CatalogueShown.Count == 0 && catalogueSearched && !string.IsNullOrWhiteSpace(query))
+                {
+                    <p class="muted">Nothing matches. Add the food on the Food tab first.</p>
                 }
             </section>
 
@@ -126,7 +143,7 @@
             </section>
 
             <div class="inline">
-                <button type="submit" class="primary" id="save-recipe" disabled="@(busy || incomplete)">Save recipe</button>
+                <button type="submit" class="primary" id="save-recipe" disabled="@(busy || copying || incomplete)">Save recipe</button>
                 @if (RecipeId is not null)
                 {
                     @if (confirmDelete)
@@ -159,6 +176,20 @@
     private readonly List<Row> rows = [];
     private FoodRow[] matches = [];
 
+    // The catalogue's answer for the current query, and a line about it when it couldn't be searched.
+    private FoodRow[] catalogueMatches = [];
+    private string? catalogueNote;
+    private bool catalogueSearched, copying;
+
+    /// <summary>
+    /// Catalogue matches, less those whose copy in the recipe's household is listed with its foods just above. A copy
+    /// beyond that list's limit isn't listed, so its catalogue row stays, and adding it reuses the copy.
+    /// </summary>
+    private IReadOnlyList<FoodRow> CatalogueShown => Guid.TryParse(householdId, out var household)
+        ? [.. catalogueMatches.Where(row => !(Guid.TryParse(row.Id, out var food)
+            && matches.Any(m => m.Id == FoodCopy.IdFor(household, food).ToString("D"))))]
+        : catalogueMatches;
+
     private bool subscribed, started;
     private string? shownRecipeId;
 
@@ -187,6 +218,11 @@
         error = null;
         households = [];
         householdId = name = cookedWeight = query = "";
+        // Another recipe's search, the catalogue's part included, doesn't apply to this one.
+        matches = [];
+        catalogueMatches = [];
+        catalogueNote = null;
+        catalogueSearched = false;
         servings = "1";
         cookedUnit = "g";
         rows.Clear();
@@ -352,6 +388,9 @@
         rows.Clear();
         matches = [];
         query = "";
+        catalogueMatches = [];
+        catalogueNote = null;
+        catalogueSearched = false;
         if (error == SearchFailed) error = null;
     }
 
@@ -362,6 +401,9 @@
         query = e.Value?.ToString() ?? "";
         var asked = query;
         var household = householdId;
+        catalogueMatches = [];
+        catalogueNote = null;
+        catalogueSearched = false;
         if (string.IsNullOrWhiteSpace(asked))
         {
             matches = [];
@@ -382,6 +424,85 @@
         catch (Exception x) when (x is not OperationCanceledException)
         {
             if (asked == query && household == householdId) error = SearchFailed;
+        }
+
+        await SearchCatalogueAsync(asked, household);
+    }
+
+    /// <summary>The online catalogue, after the household's own foods are listed, so a slow request never holds them up.</summary>
+    private async Task SearchCatalogueAsync(string asked, string household)
+    {
+        if (asked.Trim().Length < PostgrestCatalogueSearch.MinimumQueryLength)
+        {
+            catalogueSearched = true;
+            return;
+        }
+
+        var started = owner;
+        StateHasChanged();
+        CatalogueSearchResult answer;
+        try
+        {
+            answer = await Foods.SearchCatalogueAsync(asked);
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            LogFailed(Logger, "catalogue", x.GetType().Name);
+            answer = CatalogueSearchResult.Of(CatalogueSearchStatus.Unavailable);
+        }
+
+        if (asked != query || household != householdId || started != owner || owner != Foods.ProfileId) return;
+        catalogueSearched = true;
+        catalogueMatches = [.. answer.Foods];
+        catalogueNote = answer.Status switch
+        {
+            CatalogueSearchStatus.SignedOut => "Sign in again to search the USDA catalogue.",
+            CatalogueSearchStatus.Unavailable => "The USDA catalogue couldn't be searched, so you may be offline. Your household's foods are listed as usual.",
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// Copies a catalogue food into the recipe's household (or reuses the copy there) and adds it as an ingredient:
+    /// ingredients are always the household's own foods, so the recipe totals offline on every member's device.
+    /// </summary>
+    private async Task AddFromCatalogueAsync(FoodRow row)
+    {
+        // Not while saving: the ingredient would arrive after the save was taken.
+        if (copying || busy) return;
+        var household = householdId;
+        var started = owner;
+        // The recipe it was asked for: one opened meanwhile, in the same household or not, doesn't get the ingredient.
+        var generation = loadGeneration;
+        if (string.IsNullOrEmpty(household))
+        {
+            error = "Choose a household first.";
+            return;
+        }
+
+        copying = true;
+        try
+        {
+            var id = await Foods.CopyFromCatalogueAsync(household, row);
+            var copy = await Foods.FoodAsync(id);
+            if (generation != loadGeneration || household != householdId || started != owner || owner != Foods.ProfileId) return;
+            if (copy is null)
+            {
+                error = $"{row.Name} couldn't be added to your household on this device.";
+                return;
+            }
+
+            Add(copy);
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            LogFailed(Logger, "catalogue copy", x.GetType().Name);
+            if (generation == loadGeneration && household == householdId && started == owner)
+                error = $"{row.Name} couldn't be added to your household on this device. Try again.";
+        }
+        finally
+        {
+            copying = false;
         }
     }
 
@@ -404,6 +525,9 @@
         });
         query = "";
         matches = [];
+        catalogueMatches = [];
+        catalogueNote = null;
+        catalogueSearched = false;
     }
 
     private void Move(int index, int by)
@@ -477,7 +601,8 @@
 
     private async Task SaveAsync()
     {
-        if (busy || incomplete || owner != Foods.ProfileId) return;
+        // Not while a catalogue ingredient is being copied: the save would be taken before it is added.
+        if (busy || copying || incomplete || owner != Foods.ProfileId) return;
         busy = true;
         error = null;
         try

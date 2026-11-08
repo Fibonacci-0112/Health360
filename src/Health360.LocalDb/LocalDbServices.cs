@@ -10,6 +10,9 @@ public static class LocalDbServices
     /// <summary>How long one photo file upload may take before it is abandoned and retried later.</summary>
     public static readonly TimeSpan PhotoUploadTimeout = TimeSpan.FromMinutes(5);
 
+    /// <summary>How long a catalogue search may take before the Food tab treats the catalogue as offline.</summary>
+    public static readonly TimeSpan CatalogueSearchTimeout = TimeSpan.FromSeconds(10);
+
     /// <summary>
     /// Registers the PowerSync database, the PostgREST writer, the connector and <see cref="LocalDatabase"/>.
     /// The host registers what is platform- or session-specific: <see cref="SyncEndpoints"/>,
@@ -39,6 +42,15 @@ public static class LocalDbServices
             // The platform's default handler (AndroidMessageHandler on Android), so the OS trust store applies.
             var http = new HttpClient { BaseAddress = endpoints.SupabaseUrl };
             return new PostgrestWriter(
+                http, provider.GetRequiredService<ISupabaseSession>(), provider.GetRequiredService<IDatabaseOwnerStore>(), endpoints.SupabaseApiKey);
+        });
+        services.AddSingleton<ICatalogueSearch>(provider =>
+        {
+            var endpoints = provider.GetRequiredService<SyncEndpoints>();
+            // A short timeout: a search that can't answer quickly is treated as offline, and the household's own
+            // foods are still shown.
+            var http = new HttpClient { BaseAddress = endpoints.SupabaseUrl, Timeout = CatalogueSearchTimeout };
+            return new PostgrestCatalogueSearch(
                 http, provider.GetRequiredService<ISupabaseSession>(), provider.GetRequiredService<IDatabaseOwnerStore>(), endpoints.SupabaseApiKey);
         });
         services.AddSingleton<SupabaseConnector>();
