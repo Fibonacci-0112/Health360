@@ -225,6 +225,51 @@ public static class FoodLibrary
         return id;
     }
 
+    /// <summary>
+    /// Copies a catalogue food (from <see cref="ICatalogueSearch"/>) into the household so it can be logged and used in
+    /// recipes offline, and returns the copy's id. The id is <see cref="FoodCopy.IdFor"/>, the same on every device, so
+    /// a food already copied (here, or by another member and synced) is reused, unchanged, instead of copied again.
+    /// The local row holds the values the search returned; on upload the server fills the copy from the catalogue row
+    /// (<c>private.foods_copy</c>), and leaves an existing copy as it is.
+    /// </summary>
+    public static async Task<string> CopyFromCatalogueAsync(IPowerSyncDatabase db, string householdId, FoodRow catalogueFood, TimeProvider clock)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentException.ThrowIfNullOrEmpty(householdId);
+        ArgumentNullException.ThrowIfNull(catalogueFood);
+        ArgumentNullException.ThrowIfNull(clock);
+        if (catalogueFood.HouseholdId is not null || !Guid.TryParse(catalogueFood.Id, out var foodId))
+        {
+            throw new ArgumentException("Only a catalogue food can be copied into a household.", nameof(catalogueFood));
+        }
+
+        if (catalogueFood.Source is not ("usda_fdc" or "open_food_facts") || catalogueFood.ToFood() is null)
+        {
+            throw new ArgumentException("That catalogue food can't be used on this device.", nameof(catalogueFood));
+        }
+
+        var household = Guid.Parse(householdId);
+        var id = FoodCopy.IdFor(household, foodId).ToString("D");
+        var now = Timestamps.UtcNow(clock);
+        await db.WriteTransaction(async tx =>
+        {
+            _ = await tx.GetOptional<WorkoutPlans.IdOnly>("SELECT id AS Id FROM households WHERE id = ?", [householdId]).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("That household is no longer on this device.");
+            if (await tx.GetOptional<WorkoutPlans.IdOnly>("SELECT id AS Id FROM foods WHERE id = ?", [id]).ConfigureAwait(false) is not null)
+            {
+                return;
+            }
+
+            await tx.Execute(
+                "INSERT INTO foods (id, household_id, source, name, brand, basis, energy_100, protein_100, carbohydrate_100, fat_100, " +
+                "nutrients_100, portions, verified, copied_from, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                [id, household.ToString("D"), catalogueFood.Source, catalogueFood.Name, catalogueFood.Brand, catalogueFood.Basis,
+                    catalogueFood.Energy100, catalogueFood.Protein100, catalogueFood.Carbohydrate100, catalogueFood.Fat100,
+                    catalogueFood.Nutrients100 ?? "{}", catalogueFood.Portions ?? "[]", foodId.ToString("D"), now, now]).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+        return id;
+    }
+
     private static string EscapeLike(string text) =>
         text.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("%", "\\%", StringComparison.Ordinal).Replace("_", "\\_", StringComparison.Ordinal);
 }

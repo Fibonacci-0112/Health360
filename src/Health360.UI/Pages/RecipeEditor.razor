@@ -99,7 +99,7 @@
                     }
                 </ul>
                 <div class="field">
-                    <label for="ingredient-search">Add an ingredient from your household's foods</label>
+                    <label for="ingredient-search">Add an ingredient</label>
                     <input id="ingredient-search" type="search" value="@query" @oninput="SearchAsync" autocomplete="off" />
                 </div>
                 @if (matches.Length > 0)
@@ -114,9 +114,26 @@
                         }
                     </ul>
                 }
-                else if (!string.IsNullOrWhiteSpace(query))
+                @if (CatalogueShown.Count > 0)
                 {
-                    <p class="muted">No household food matches. Add it on the Food tab first.</p>
+                    <p class="muted small">From the USDA catalogue (added to your household when you use it)</p>
+                    <ul class="measurement-list" id="ingredient-catalogue">
+                        @foreach (var row in CatalogueShown)
+                        {
+                            <li class="measurement">
+                                <span>@row.Name@(row.Brand is null ? "" : $" ({row.Brand})")</span>
+                                <button type="button" class="secondary compact" disabled="@copying" aria-label="@($"Add {row.Name} from the USDA catalogue")" @onclick="() => AddFromCatalogueAsync(row)">Add</button>
+                            </li>
+                        }
+                    </ul>
+                }
+                @if (catalogueNote is not null)
+                {
+                    <p class="muted small" id="ingredient-catalogue-note">@catalogueNote</p>
+                }
+                @if (matches.Length == 0 && CatalogueShown.Count == 0 && catalogueSearched && !string.IsNullOrWhiteSpace(query))
+                {
+                    <p class="muted">Nothing matches. Add the food on the Food tab first.</p>
                 }
             </section>
 
@@ -158,6 +175,16 @@
     private string householdId = "", name = "", servings = "1", cookedWeight = "", cookedUnit = "g", query = "";
     private readonly List<Row> rows = [];
     private FoodRow[] matches = [];
+
+    // The catalogue's answer for the current query, and a line about it when it couldn't be searched.
+    private FoodRow[] catalogueMatches = [];
+    private string? catalogueNote;
+    private bool catalogueSearched, copying;
+
+    /// <summary>Catalogue matches, less those the recipe's household already has a copy of (listed with its foods).</summary>
+    private IReadOnlyList<FoodRow> CatalogueShown => [.. catalogueMatches.Where(row =>
+        !(Guid.TryParse(householdId, out var household) && Guid.TryParse(row.Id, out var food)
+          && matches.Any(m => m.Id == FoodCopy.IdFor(household, food).ToString("D"))))];
 
     private bool subscribed, started;
     private string? shownRecipeId;
@@ -362,6 +389,9 @@
         query = e.Value?.ToString() ?? "";
         var asked = query;
         var household = householdId;
+        catalogueMatches = [];
+        catalogueNote = null;
+        catalogueSearched = false;
         if (string.IsNullOrWhiteSpace(asked))
         {
             matches = [];
@@ -382,6 +412,81 @@
         catch (Exception x) when (x is not OperationCanceledException)
         {
             if (asked == query && household == householdId) error = SearchFailed;
+        }
+
+        await SearchCatalogueAsync(asked, household);
+    }
+
+    /// <summary>The online catalogue, after the household's own foods are listed, so a slow request never holds them up.</summary>
+    private async Task SearchCatalogueAsync(string asked, string household)
+    {
+        if (asked.Trim().Length < PostgrestCatalogueSearch.MinimumQueryLength)
+        {
+            catalogueSearched = true;
+            return;
+        }
+
+        var started = owner;
+        StateHasChanged();
+        CatalogueSearchResult answer;
+        try
+        {
+            answer = await Foods.SearchCatalogueAsync(asked);
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            LogFailed(Logger, "catalogue", x.GetType().Name);
+            answer = CatalogueSearchResult.Of(CatalogueSearchStatus.Unavailable);
+        }
+
+        if (asked != query || household != householdId || started != owner || owner != Foods.ProfileId) return;
+        catalogueSearched = true;
+        catalogueMatches = [.. answer.Foods];
+        catalogueNote = answer.Status switch
+        {
+            CatalogueSearchStatus.SignedOut => "Sign in again to search the USDA catalogue.",
+            CatalogueSearchStatus.Unavailable => "The USDA catalogue couldn't be searched, so you may be offline. Your household's foods are listed as usual.",
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// Copies a catalogue food into the recipe's household (or reuses the copy there) and adds it as an ingredient:
+    /// ingredients are always the household's own foods, so the recipe totals offline on every member's device.
+    /// </summary>
+    private async Task AddFromCatalogueAsync(FoodRow row)
+    {
+        if (copying) return;
+        var household = householdId;
+        var started = owner;
+        if (string.IsNullOrEmpty(household))
+        {
+            error = "Choose a household first.";
+            return;
+        }
+
+        copying = true;
+        try
+        {
+            var id = await Foods.CopyFromCatalogueAsync(household, row);
+            var copy = await Foods.FoodAsync(id);
+            if (household != householdId || started != owner || owner != Foods.ProfileId) return;
+            if (copy is null)
+            {
+                error = $"{row.Name} couldn't be added to your household on this device.";
+                return;
+            }
+
+            Add(copy);
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            LogFailed(Logger, "catalogue copy", x.GetType().Name);
+            if (household == householdId && started == owner) error = $"{row.Name} couldn't be added to your household on this device. Try again.";
+        }
+        finally
+        {
+            copying = false;
         }
     }
 
@@ -404,6 +509,9 @@
         });
         query = "";
         matches = [];
+        catalogueMatches = [];
+        catalogueNote = null;
+        catalogueSearched = false;
     }
 
     private void Move(int index, int by)

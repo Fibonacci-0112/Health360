@@ -112,10 +112,10 @@
                 </select>
             </div>
             <div class="field">
-                <label for="food-search">Search your household's foods</label>
+                <label for="food-search">Search foods</label>
                 <input id="food-search" type="search" value="@query" @oninput="SearchAsync" autocomplete="off" />
             </div>
-            <p class="muted small">Search covers your household's foods and recipes. The USDA catalogue and barcode lookup come with online search.
+            <p class="muted small">Search covers your household's foods and recipes, and the USDA catalogue when you're online. A catalogue food you use is copied into your household, so it works offline afterwards.
                 <NavLink href="food/recipes" id="recipes-link">Recipes</NavLink></p>
             @if (results.Length > 0)
             {
@@ -145,9 +145,27 @@
                     }
                 </ul>
             }
-            @if (results.Length == 0 && recipeResults.Length == 0 && !string.IsNullOrWhiteSpace(query))
+            @if (CatalogueShown.Count > 0)
             {
-                <p class="muted">No household food or recipe matches. Add it below, or use quick add.</p>
+                <p class="muted small">From the USDA catalogue</p>
+                <ul class="measurement-list" id="catalogue-results">
+                    @foreach (var row in CatalogueShown)
+                    {
+                        <li class="measurement">
+                            <span class="measurement-text"><span>@row.Name@(row.Brand is null ? "" : $" ({row.Brand})")</span>
+                                <span class="muted small">@Per100Text(row) · USDA</span></span>
+                            <button type="button" class="secondary" disabled="@busy" aria-label="@($"Use {row.Name} from the USDA catalogue")" @onclick="() => UseCatalogueAsync(row)">Use</button>
+                        </li>
+                    }
+                </ul>
+            }
+            @if (catalogueNote is not null)
+            {
+                <p class="muted small" id="catalogue-note">@catalogueNote</p>
+            }
+            @if (results.Length == 0 && recipeResults.Length == 0 && CatalogueShown.Count == 0 && catalogueSearched && !string.IsNullOrWhiteSpace(query))
+            {
+                <p class="muted">Nothing matches. Add it below, or use quick add.</p>
             }
 
             @if (chosen is not null)
@@ -295,6 +313,16 @@
     private string recipeAmount = "1", recipeUnit = "serving";
     private string quickName = "", quickEnergy = "", quickProtein = "", quickCarbohydrate = "", quickFat = "";
     private WorkoutService.HouseholdChoice[] households = [];
+
+    // The catalogue's answer for the current query, and a line about it when it couldn't be searched.
+    private FoodRow[] catalogueResults = [];
+    private string? catalogueNote;
+    private bool catalogueSearched;
+
+    /// <summary>Catalogue matches, less those a household on this device already has a copy of (shown with its foods).</summary>
+    private IReadOnlyList<FoodRow> CatalogueShown => [.. catalogueResults.Where(row => !households.Any(h =>
+        Guid.TryParse(h.Id, out var household) && Guid.TryParse(row.Id, out var food)
+        && results.Any(r => r.Id == FoodCopy.IdFor(household, food).ToString("D"))))];
     private string householdId = "", foodName = "", foodBrand = "", foodPer = "100", foodBasis = "g", foodPortion = "";
     private string foodEnergy = "", foodProtein = "", foodCarbohydrate = "", foodFat = "";
 
@@ -333,6 +361,7 @@
         choicesFailed = false;
         error = status = confirmDelete = null;
         entries = []; total = NutrientTotal.Empty; results = []; chosen = null; households = [];
+        catalogueResults = []; catalogueNote = null; catalogueSearched = false;
         recipeResults = []; chosenRecipe = null;
         query = amount = quickName = quickEnergy = quickProtein = quickCarbohydrate = quickFat = "";
         ClearNewFood();
@@ -498,6 +527,9 @@
         query = e.Value?.ToString() ?? "";
         var asked = query;
         var started = generation;
+        catalogueResults = [];
+        catalogueNote = null;
+        catalogueSearched = false;
         try
         {
             var found = string.IsNullOrWhiteSpace(asked) ? await Foods.RecentAsync() : await Foods.SearchAsync(asked);
@@ -514,6 +546,95 @@
             results = [];
             recipeResults = [];
             error = SearchFailed;
+        }
+
+        await SearchCatalogueAsync(asked, started);
+    }
+
+    /// <summary>
+    /// The online catalogue, after the household's own foods are on screen, so a slow or failed request never holds
+    /// them up. A catalogue that can't be searched says so in a line, not an alert: the household's foods still work.
+    /// </summary>
+    private async Task SearchCatalogueAsync(string asked, int started)
+    {
+        if (asked.Trim().Length < PostgrestCatalogueSearch.MinimumQueryLength)
+        {
+            catalogueSearched = true;
+            return;
+        }
+
+        StateHasChanged();
+        CatalogueSearchResult answer;
+        try
+        {
+            answer = await Foods.SearchCatalogueAsync(asked);
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            LogReadFailed(Logger, "catalogue search", x.GetType().Name);
+            answer = CatalogueSearchResult.Of(CatalogueSearchStatus.Unavailable);
+        }
+
+        if (asked != query || started != generation) return;
+        catalogueSearched = true;
+        catalogueResults = [.. answer.Foods];
+        catalogueNote = answer.Status switch
+        {
+            CatalogueSearchStatus.SignedOut => "Sign in again to search the USDA catalogue. Your household's foods are searched as usual.",
+            CatalogueSearchStatus.Unavailable => "The USDA catalogue couldn't be searched, so you may be offline. Your household's foods are searched as usual.",
+            _ => null,
+        };
+    }
+
+    /// <summary>Copies a catalogue food into the household (or reuses the copy there) and chooses it for logging.</summary>
+    private async Task UseCatalogueAsync(FoodRow row)
+    {
+        if (busy) return;
+        error = null;
+        var started = generation;
+        var household = households.Any(h => h.Id == householdId) ? householdId : households.FirstOrDefault()?.Id;
+        if (household is null)
+        {
+            error = "Your household hasn't synced to this device yet, so catalogue foods can't be added to it.";
+            return;
+        }
+
+        busy = true;
+        string id;
+        try
+        {
+            id = await Foods.CopyFromCatalogueAsync(household, row);
+        }
+        catch (Exception x) when (x is ArgumentException or InvalidOperationException)
+        {
+            if (started == generation) error = "That catalogue food couldn't be added to your household on this device.";
+            return;
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            if (started != generation) return;
+            LogSaveFailed(Logger, x.GetType().Name);
+            error = "That catalogue food couldn't be added to your household on this device. Try again.";
+            return;
+        }
+        finally
+        {
+            busy = false;
+        }
+
+        if (started != generation) return;
+        await ChooseAsync(id);
+        if (started != generation) return;
+        try
+        {
+            // Show the copy with the household's foods, where later searches find it, offline too.
+            var asked = query;
+            var found = string.IsNullOrWhiteSpace(asked) ? await Foods.RecentAsync() : await Foods.SearchAsync(asked);
+            if (asked == query && started == generation) results = found;
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            if (started == generation) LogReadFailed(Logger, "food search", x.GetType().Name);
         }
     }
 
