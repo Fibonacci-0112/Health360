@@ -120,15 +120,17 @@ public static class NutritionTargets
     /// energy = maintenance + adjustment; protein = ratio (g/kg) × body weight or lean mass;
     /// fat = energy × share ÷ 9; carbohydrate = (energy − 4 × protein − 9 × fat) ÷ 4.
     /// </summary>
-    public static DailyTargets Compute(TargetSettings settings, PhysiologyProfile profile)
+    /// <remarks>A manual target needs no profile, so <paramref name="profile"/> may be null for one.</remarks>
+    public static DailyTargets Compute(TargetSettings settings, PhysiologyProfile? profile)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        ArgumentNullException.ThrowIfNull(profile);
         if (settings.Method == TargetMethod.Manual)
         {
             return new DailyTargets(TargetMethod.Manual, settings.ManualEnergyKcal, settings.ManualProteinG, settings.ManualFatG,
                 settings.ManualCarbohydrateG, null, null, []);
         }
+
+        ArgumentNullException.ThrowIfNull(profile);
 
         var problems = new List<TargetProblem>();
         var maintenance = profile.Maintenance;

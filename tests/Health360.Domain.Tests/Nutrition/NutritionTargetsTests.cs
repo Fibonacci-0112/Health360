@@ -141,4 +141,13 @@ public class NutritionTargetsTests
             Assert.Empty(targets.Problems);
         }
     }
+
+    [Fact]
+    public void A_manual_target_needs_no_profile_and_a_formula_target_does()
+    {
+        var manual = NutritionTargets.Compute(Cut with { Method = TargetMethod.Manual, ManualEnergyKcal = 2400 }, null);
+        Assert.Equal(2400, manual.EnergyKcal);
+
+        Assert.Throws<ArgumentNullException>(() => NutritionTargets.Compute(Cut, null));
+    }
 }

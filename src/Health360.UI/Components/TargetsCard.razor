@@ -16,6 +16,10 @@
     {
         <p class="muted" role="alert">Your targets couldn't be read on this device. Leave this page and come back to try again.</p>
     }
+    else if (settings is not null && targets is null && Body.Failed)
+    {
+        <p class="muted" role="alert" id="targets-profile-failed">Your physiology profile couldn't be read on this device, so targets from it can't be worked out. Leave this page and come back to try again.</p>
+    }
     else if (settings is null || targets is null)
     {
         <p class="muted" role="status">Loading your targets</p>
@@ -145,10 +149,21 @@
         };
     }
 
+    /// <summary>
+    /// Formula targets need the physiology profile, and aren't shown while its read has failed, since they could be out
+    /// of date. A manual target needs neither.
+    /// </summary>
     private void Recompute()
     {
-        var profile = Body.Profile();
-        targets = settings is not null && profile is not null ? NutritionTargets.Compute(settings, profile) : null;
+        if (settings is null)
+        {
+            targets = null;
+            return;
+        }
+
+        var manual = settings.Method == TargetMethod.Manual;
+        var profile = manual || Body.Failed ? null : Body.Profile();
+        targets = manual || profile is not null ? NutritionTargets.Compute(settings, profile) : null;
     }
 
     private string Line(Nutrient nutrient)
@@ -156,7 +171,9 @@
         var unit = Foods.UnitPrefs.Energy;
         if (TargetDisplay.Target(targets!, nutrient) is not { } target)
         {
-            return Total?.Amounts[nutrient] is { } only ? $"{TargetDisplay.Amount(nutrient, only, unit)} · no target" : "no target";
+            if (Total?.Amounts[nutrient] is not { } only) return "no target";
+            var lowerBound = Total.Incomplete.Contains(nutrient.Code) ? "at least " : "";
+            return $"{lowerBound}{TargetDisplay.Amount(nutrient, only, unit)} · no target";
         }
 
         if (Total?.Amounts[nutrient] is not { } eaten)

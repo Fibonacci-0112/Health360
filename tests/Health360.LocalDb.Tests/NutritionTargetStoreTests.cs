@@ -56,7 +56,7 @@ public class NutritionTargetStoreTests
     }
 
     [Fact]
-    public async Task SavingAgainReplacesTheRowSendsClearedManualValuesAndNeverUploadsAPatch()
+    public async Task SavingAgainUpdatesTheRowInOnePatchThatSendsClearedManualValues()
     {
         await using var t = await TestDatabase.OpenAsync();
         var manual = TargetSettings.Default with { Method = TargetMethod.Manual, ManualEnergyKcal = 2400, ManualProteinG = 150 };
@@ -71,14 +71,15 @@ public class NutritionTargetStoreTests
         Assert.Single(await t.Db.GetAll<Stamp>("SELECT created_at AS CreatedAt FROM nutrition_targets"));
         Assert.Equal(created.CreatedAt, (await t.Db.Get<Stamp>("SELECT created_at AS CreatedAt FROM nutrition_targets")).CreatedAt);
 
-        var writes = await UploadAsync(t);
-        Assert.DoesNotContain(writes, w => w.Op == "PATCH");
-        var last = writes[^1];
-        Assert.Equal(("PUT", "formula"), (last.Op, last.Data!["method"]!.GetValue<string>()));
-        foreach (var column in new[] { "manual_energy_kcal", "manual_protein_g", "manual_fat_g", "manual_carbohydrate_g" })
+        // One request, never a DELETE: a connection lost between a delete and a re-insert would leave the server
+        // without targets until the retry.
+        var patch = Assert.Single(await UploadAsync(t));
+        Assert.Equal(("PATCH", "nutrition_targets", NutritionTargetStore.IdFor(Profile)), (patch.Op, patch.Table, patch.Id));
+        Assert.Equal("formula", patch.Data!["method"]!.GetValue<string>());
+        foreach (var column in new[] { "manual_energy_kcal", "manual_protein_g" })
         {
-            Assert.True(last.Data.ContainsKey(column), column + " must be sent: " + last.Data.ToJsonString());
-            Assert.Null(last.Data[column]);
+            Assert.True(patch.Data.ContainsKey(column), column + " must be sent: " + patch.Data.ToJsonString());
+            Assert.Null(patch.Data[column]);
         }
     }
 

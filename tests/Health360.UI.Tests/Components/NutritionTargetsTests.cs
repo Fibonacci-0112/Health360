@@ -128,8 +128,19 @@ public sealed class NutritionTargetsTests : AppTestContext
         Assert.Contains("Set by you", cut.Find("#target-basis").TextContent, StringComparison.Ordinal);
 
         await App.Database.SeedMeasurementAsync(LabRmr, ProfileId, "rmr", 1900, "kcal", 1900, "2026-10-01", "lab");
-        // Give the watches a moment to answer, then check nothing moved.
+        // Wait until the profile has the lab RMR, so the check below runs after the card has seen it.
+        var body = Services.GetRequiredService<Health360.UI.Data.BodyData>();
+        cut.WaitForAssertion(() => Assert.Equal(1900, body.Profile()!.Rmr!.Resolution.Value), Wait);
         cut.WaitForAssertion(() => Assert.Contains("of 2,400 kcal", Target(cut, "energy"), StringComparison.Ordinal), Wait);
+
+        // A macro with no target still shows a lower-bound total as one: 6 g of fat, and an entry that lists none.
+        await TypeAsync(cut, "#quick-energy", "300");
+        await TypeAsync(cut, "#quick-fat", "6");
+        await SubmitAsync(cut, "#quick-add");
+        cut.WaitForAssertion(() => Assert.Contains("300 kcal of 2,400 kcal", Target(cut, "energy"), StringComparison.Ordinal), Wait);
+        await TypeAsync(cut, "#quick-energy", "100");
+        await SubmitAsync(cut, "#quick-add");
+        cut.WaitForAssertion(() => Assert.Equal("at least 6 g · no target", Target(cut, "fat").Replace("Fat", "", StringComparison.Ordinal).Trim()), Wait);
         var row = await NutritionTargetStore.GetAsync(App.Database.Db, ProfileId);
         Assert.Equal((TargetMethod.Manual, 2400.0, 150.0), (row!.ToSettings()!.Method, row.ManualEnergyKcal!.Value, row.ManualProteinG!.Value));
     }
@@ -149,10 +160,22 @@ public sealed class NutritionTargetsTests : AppTestContext
         // 1.6 g/kg × 0.45359237 = 0.7257 g/lb, shown to 2 decimals.
         cut.WaitForAssertion(() => Assert.Equal("0.73", cut.Find("#target-protein-ratio").GetAttribute("value")), Wait);
 
+        // Converting at the 10 g/kg limit shows 4.54 g/lb, which is over it once rounded: the exact value is kept.
+        await ClickAsync(() => cut.FindAll("[aria-labelledby=target-ratio-unit] [role=radio]").Single(e => e.TextContent.Trim() == "kg"));
+        await TypeAsync(cut, "#target-protein-ratio", "10");
+        await ClickAsync(() => cut.FindAll("[aria-labelledby=target-ratio-unit] [role=radio]").Single(e => e.TextContent.Trim() == "lb"));
+        cut.WaitForAssertion(() => Assert.Equal("4.54", cut.Find("#target-protein-ratio").GetAttribute("value")), Wait);
+        Assert.Empty(cut.FindAll("#targets-preview .muted:not(.small)"));
+        await SubmitAsync(cut, "#targets-form");
+        cut.WaitForAssertion(() => Assert.Contains("Targets saved", cut.Markup, StringComparison.Ordinal), Wait);
+        var saved = (await NutritionTargetStore.GetAsync(App.Database.Db, ProfileId))!.ToSettings()!;
+        Assert.Equal(Health360.Domain.Units.ProteinRatioUnit.GramsPerPound, saved.ProteinRatioUnit);
+        Assert.Equal(10, Health360.Domain.Units.ProteinRatio.ToGPerKg(saved.ProteinRatio, saved.ProteinRatioUnit), 12);
+
         await TypeAsync(cut, "#target-fat-percent", "100");
         await SubmitAsync(cut, "#targets-form");
         cut.WaitForAssertion(() => Assert.Contains("Enter fat as a percentage", cut.Find(".error").TextContent, StringComparison.Ordinal), Wait);
-        Assert.Null(await NutritionTargetStore.GetAsync(App.Database.Db, ProfileId));
+        Assert.Equal(TargetSettings.DefaultFatPercent, (await NutritionTargetStore.GetAsync(App.Database.Db, ProfileId))!.FatPercent);
     }
 
     [Fact]

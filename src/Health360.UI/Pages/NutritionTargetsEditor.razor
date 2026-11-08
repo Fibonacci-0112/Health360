@@ -137,6 +137,14 @@
     // What the form was filled with. A field left as shown keeps its stored value, so the display's rounding (a kJ
     // energy, a ratio to 2 decimals, grams to 1) never changes a saved value or pushes one past a limit.
     private TargetSettings? filled;
+    // The ratio's exact value while the field shows it rounded, kept across a unit switch, so switching 10 g/kg to g/lb
+    // (4.54 shown) doesn't round past the 10 g/kg limit or a small ratio down to 0.
+    private double? ratioExact;
+
+    // The energy unit the form was filled in. A preference that syncs in while the form is open changes neither the
+    // labels nor how what was typed is read, until the form is filled again.
+    private EnergyUnit draftEnergy = EnergyUnit.Kilocalorie;
+
     private string filledAdjustment = "", filledRatio = "", filledFatPercent = "", filledManualEnergy = "", filledManualProtein = "",
         filledManualCarbohydrate = "", filledManualFat = "";
 
@@ -186,12 +194,14 @@
     private void Fill(TargetSettings s)
     {
         filled = s;
+        draftEnergy = Foods.UnitPrefs.Energy;
         method = s.Method == TargetMethod.Manual ? NutritionTargetStore.ManualMethod : NutritionTargetStore.FormulaMethod;
         basis = s.ProteinBasis == ProteinBasis.LeanMass ? NutritionTargetStore.LeanMassBasis : NutritionTargetStore.BodyWeightBasis;
         ratioUnit = s.ProteinRatioUnit;
-        ratio = s.ProteinRatio.ToString("0.##", CultureInfo.CurrentCulture);
+        ratio = Text(s.ProteinRatio, 2);
+        ratioExact = s.ProteinRatio;
         adjustment = Text(FromKcal(s.EnergyAdjustmentKcal), 0);
-        fatPercent = s.FatPercent.ToString("0.#", CultureInfo.CurrentCulture);
+        fatPercent = Text(s.FatPercent, 1);
         manualEnergy = s.ManualEnergyKcal is { } e ? Text(FromKcal(e), 0) : "";
         manualProtein = s.ManualProteinG is { } p ? Text(p, 1) : "";
         manualCarbohydrate = s.ManualCarbohydrateG is { } c ? Text(c, 1) : "";
@@ -209,9 +219,11 @@
     private void ChangeRatioUnit(string? code)
     {
         if (!UnitPrefOptions.ProteinRatio.TryParse(code, out var unit) || unit == ratioUnit) return;
-        if (NumberText.Parse(ratio) is { } value)
+        if ((Kept(ratio, filledRatio, ratioExact) ?? NumberText.Parse(ratio)) is { } value)
         {
-            ratio = Text(ProteinRatio.FromGPerKg(ProteinRatio.ToGPerKg(value, ratioUnit), unit), 2);
+            var exact = ProteinRatio.FromGPerKg(ProteinRatio.ToGPerKg(value, ratioUnit), unit);
+            ratio = filledRatio = Text(exact, 2);
+            ratioExact = exact;
         }
 
         ratioUnit = unit;
@@ -278,9 +290,8 @@
         double? adjKcal = string.IsNullOrWhiteSpace(adjustment) ? 0
             : Kept(adjustment, filledAdjustment, filled?.EnergyAdjustmentKcal) ?? (NumberText.Parse(adjustment) is { } adj ? ToKcal(adj) : null);
         if (adjKcal is not { } kcal || !double.IsFinite(kcal)) return (null, "Enter the energy adjustment as a number, or 0.");
-        if (kcal is < -5000 or > 5000) return (null, $"Keep the adjustment within ± {MetricDisplay.Energy(5000, Foods.UnitPrefs.Energy)}.");
-        var ratioValue = filled is not null && ratioUnit == filled.ProteinRatioUnit ? Kept(ratio, filledRatio, filled.ProteinRatio) : null;
-        ratioValue ??= NumberText.Parse(ratio);
+        if (kcal is < -5000 or > 5000) return (null, $"Keep the adjustment within ± {MetricDisplay.Energy(5000, draftEnergy)}.");
+        var ratioValue = Kept(ratio, filledRatio, ratioExact) ?? NumberText.Parse(ratio);
         if (ratioValue is not { } r || ProteinRatio.ToGPerKg(r, ratioUnit) is not (> 0 and <= 10))
             return (null, $"Enter protein as more than 0 and at most {Text(ProteinRatio.FromGPerKg(10, ratioUnit), 2)} {TargetDisplay.RatioUnitName(ratioUnit)}.");
         if ((Kept(fatPercent, filledFatPercent, filled?.FatPercent) ?? NumberText.Parse(fatPercent)) is not { } fat || fat is <= 0 or >= 100)
@@ -299,6 +310,8 @@
     {
         var (settings, problem) = Read();
         if (settings is null) return (null, null, problem);
+        if (settings.Method == TargetMethod.Manual) return (NutritionTargets.Compute(settings, null), settings, null);
+        if (Body.Failed) return (null, null, "Your physiology profile couldn't be read on this device, so these targets can't be worked out. You can still save them.");
         return Body.Profile() is { } profile ? (NutritionTargets.Compute(settings, profile), settings, null) : (null, settings, null);
     }
 
@@ -336,16 +349,17 @@
         }
     }
 
-    private string EnergyUnitName => Foods.UnitPrefs.Energy == EnergyUnit.Kilojoule ? "kJ" : "kcal";
+    private string EnergyUnitName => draftEnergy == EnergyUnit.Kilojoule ? "kJ" : "kcal";
 
     private double ToKcal(double value) =>
-        Foods.UnitPrefs.Energy == EnergyUnit.Kilojoule ? Conversion.Convert(value, Unit.Kilojoule, Unit.Kilocalorie) : value;
+        draftEnergy == EnergyUnit.Kilojoule ? Conversion.Convert(value, Unit.Kilojoule, Unit.Kilocalorie) : value;
 
     private double FromKcal(double kcal) =>
-        Foods.UnitPrefs.Energy == EnergyUnit.Kilojoule ? Conversion.Convert(kcal, Unit.Kilocalorie, Unit.Kilojoule) : kcal;
+        draftEnergy == EnergyUnit.Kilojoule ? Conversion.Convert(kcal, Unit.Kilocalorie, Unit.Kilojoule) : kcal;
 
     private static string Text(double value, int decimals) =>
-        Rounding.RoundTo(value, decimals).ToString(decimals > 0 ? "0." + new string('#', decimals) : "0", CultureInfo.CurrentCulture);
+        // Invariant, as NumberText.Parse reads it: some cultures' minus sign isn't the ASCII one it accepts.
+        Rounding.RoundTo(value, decimals).ToString(decimals > 0 ? "0." + new string('#', decimals) : "0", CultureInfo.InvariantCulture);
 
     private static string Name(Nutrient nutrient) => nutrient.Code switch
     {
