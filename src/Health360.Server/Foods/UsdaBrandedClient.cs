@@ -6,7 +6,7 @@ using Microsoft.Extensions.Options;
 namespace Health360.Server.Foods;
 
 /// <summary>Finds USDA branded foods by GTIN through the FoodData Central search API.</summary>
-public sealed class UsdaBrandedClient(IHttpClientFactory httpClientFactory, IOptions<UsdaOptions> options)
+public sealed class UsdaBrandedClient(IHttpClientFactory httpClientFactory, IOptions<UsdaOptions> options, UsdaUpstreamBudget budget)
 {
     public const string HttpClientName = "usda";
 
@@ -38,6 +38,11 @@ public sealed class UsdaBrandedClient(IHttpClientFactory httpClientFactory, IOpt
         {
             for (var page = 1; page <= options.Value.MaxPages; page++)
             {
+                if (!budget.TryTake())
+                {
+                    throw new UsdaBudgetExhaustedException();
+                }
+
                 // The key goes in a header, not the query string, so it never lands in a URL that gets logged.
                 using var request = new HttpRequestMessage(
                     HttpMethod.Get,

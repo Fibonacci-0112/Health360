@@ -36,6 +36,10 @@ public static class FoodEndpoints
             var match = await usda.FindAsync(gtin, cancellationToken).ConfigureAwait(false);
             return match is null ? Results.NotFound() : Results.Ok(match);
         }
+        catch (UsdaBudgetExhaustedException)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "USDA lookups are busy. Try again later.");
+        }
         catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException
             || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
         {

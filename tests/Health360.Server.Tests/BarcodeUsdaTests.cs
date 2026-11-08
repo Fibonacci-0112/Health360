@@ -40,14 +40,22 @@ public sealed class BarcodeUsdaTests
         }
     }
 
-    private static WebApplicationFactory<Program> Create(ServerFactory factory, Stub? stub, string? key = "usda-test-key", int perHour = 120) =>
+    private static WebApplicationFactory<Program> Create(ServerFactory factory, Stub? stub, string? key = "usda-test-key", int perHour = 120, int upstreamPerHour = 900, TimeProvider? time = null) =>
         factory.WithWebHostBuilder(builder =>
         {
             builder.UseSetting("Usda:ApiKey", key ?? "");
+            builder.UseSetting("Usda:MaxUpstreamRequestsPerHour", upstreamPerHour.ToString(System.Globalization.CultureInfo.InvariantCulture));
             builder.UseSetting("Usda:RequestsPerUserPerHour", perHour.ToString(System.Globalization.CultureInfo.InvariantCulture));
             builder.ConfigureTestServices(services =>
+            {
+                if (time is not null)
+                {
+                    services.AddSingleton(time);
+                }
+
                 services.AddHttpClient(UsdaBrandedClient.HttpClientName)
-                    .ConfigurePrimaryHttpMessageHandler(() => stub ?? new Stub(HttpStatusCode.OK, "{}")));
+                    .ConfigurePrimaryHttpMessageHandler(() => stub ?? new Stub(HttpStatusCode.OK, "{}"));
+            });
         });
 
     [Fact]
@@ -252,6 +260,43 @@ public sealed class BarcodeUsdaTests
         using var response = await client.GetAsync("/foods/barcode/856413007293/usda", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    private sealed class Clock(DateTimeOffset start) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = start;
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    [Fact]
+    public async Task All_users_share_an_hourly_budget_of_USDA_requests_that_renews()
+    {
+        await using var factory = new ServerFactory();
+        var stub = new Stub(HttpStatusCode.OK, """{"foods":[]}""");
+        var clock = new Clock(DateTimeOffset.Parse("2026-11-08T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var app = Create(factory, stub, upstreamPerHour: 4, time: clock);
+        using var userA = app.CreateClient();
+        userA.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(UserA));
+        using var userB = app.CreateClient();
+        userB.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(Guid.Parse("018f0000-0000-7000-8000-00000000000b")));
+
+        // A UPC-A that USDA doesn't have is searched in three forms (14, 13 and 12 digits): three requests.
+        using var miss = await userA.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
+        // Another user's lookup gets the one request left, then the shared budget is spent.
+        using var spent = await userB.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
+        var callsWhenSpent = stub.Calls;
+        using var refused = await userA.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
+        var callsAfterRefused = stub.Calls;
+        clock.Now = clock.Now.AddMinutes(61);
+        using var renewed = await userA.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, miss.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, spent.StatusCode);
+        Assert.Equal(4, callsWhenSpent);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
+        Assert.Equal(4, callsAfterRefused); // the refused lookup made no request
+        Assert.Equal(HttpStatusCode.NotFound, renewed.StatusCode);
     }
 
     [Fact]

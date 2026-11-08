@@ -1,4 +1,5 @@
 using System.Threading.RateLimiting;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace Health360.Server.Foods;
@@ -16,6 +17,8 @@ public static class FoodServices
             .ValidateDataAnnotations()
             .ValidateOnStart();
         services.AddHttpClient(UsdaBrandedClient.HttpClientName).ConfigureHttpClient(http => http.Timeout = TimeSpan.FromSeconds(10));
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<UsdaUpstreamBudget>();
         services.AddSingleton<UsdaBrandedClient>();
 
         // Lookups share one USDA key, so each signed-in user gets a fixed number per hour. The limiter runs after
