@@ -42,8 +42,8 @@ public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, T
 
     public Task<RecipeRow[]> SearchRecipesAsync(string? query) => Recipes.SearchAsync(db, query, 20);
 
-    /// <summary>Every household recipe, for the recipe list.</summary>
-    public Task<RecipeRow[]> AllRecipesAsync() => Recipes.SearchAsync(db, null, -1);
+    /// <summary>Every household recipe with its ingredients, for the recipe list.</summary>
+    public Task<IReadOnlyList<RecipeDetail>> AllRecipesAsync() => Recipes.ListAsync(db);
 
     public Task<RecipeDetail?> RecipeAsync(string id) => Recipes.GetAsync(db, id);
 

@@ -253,6 +253,11 @@ public sealed class RecipesTests
         }
 
         Assert.Equal(22, (await Recipes.SearchAsync(t.Db, null, -1)).Length);
+        var listed = await Recipes.ListAsync(t.Db);
+        Assert.Equal(22, listed.Count);
+        Assert.Equal("Porridge 00", listed[0].Recipe.Name);
+        Assert.All(listed, r => Assert.Equal(["Oats", "Banana", "Peanut butter"], r.Ingredients.Select(i => i.FoodName)));
+        Assert.All(listed, r => Assert.Equal(598.16, r.Nutrition()!.Total.Amounts[Nutrient.Energy]!.Value, 9));
     }
 
     /// <summary>Moves a second on at each read, so rows written one after another sort in that order.</summary>

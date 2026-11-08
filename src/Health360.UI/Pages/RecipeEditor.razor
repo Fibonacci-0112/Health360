@@ -10,6 +10,7 @@
 @inject FoodService Foods
 @inject ProfileService Profiles
 @inject NavigationManager Navigation
+@inject ILogger<RecipeEditor> Logger
 
 <div class="page">
     <div class="page-head">
@@ -161,6 +162,9 @@
     private bool subscribed, started;
     private string? shownRecipeId;
 
+    // Bumped by every load: a read that started for the recipe shown before leaves the form alone.
+    private int loadGeneration;
+
     // The same editor serves /food/recipes/new and /food/recipes/{id}, so moving between them changes only the
     // parameter: the form is loaded afresh whenever the recipe it shows changes.
     protected override async Task OnParametersSetAsync()
@@ -175,6 +179,7 @@
         if (started && RecipeId == shownRecipeId) return;
         started = true;
         shownRecipeId = RecipeId;
+        var generation = ++loadGeneration;
         watch?.Cancel();
         watch?.Dispose();
         watch = null;
@@ -194,12 +199,15 @@
 
         try
         {
-            households = await Foods.HouseholdsAsync();
+            var loadedHouseholds = await Foods.HouseholdsAsync();
+            var recipe = RecipeId is null ? null : await Foods.RecipeAsync(RecipeId);
+            if (generation != loadGeneration) return;
+            households = loadedHouseholds;
             if (RecipeId is null)
             {
                 householdId = households.FirstOrDefault()?.Id ?? "";
             }
-            else if (await Foods.RecipeAsync(RecipeId) is { } recipe)
+            else if (recipe is not null)
             {
                 householdId = recipe.Recipe.HouseholdId;
                 name = recipe.Recipe.Name;
@@ -222,11 +230,13 @@
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
+            if (generation != loadGeneration) return;
+            LogFailed(Logger, "recipe", e.GetType().Name);
             error = "Couldn't read the recipe on this device. Leave this page and come back to try again.";
         }
 
         loaded = true;
-        WatchSync();
+        WatchSync(generation);
     }
 
     private CancellationTokenSource? watch;
@@ -235,9 +245,17 @@
     /// Fills in what syncs while the editor is open: the households for a new recipe, and the foods of ingredients that
     /// hadn't reached this device. What the user has typed is left as it is.
     /// </summary>
-    private void WatchSync()
+    private const string RefreshFailed = "Couldn't refresh this recipe from what has synced. Leave this page and come back to try again.";
+
+    // The kind of read and the exception's type only: never names, amounts or rows.
+    private static readonly Action<ILogger, string, string, Exception?> FailedMessage =
+        LoggerMessage.Define<string, string>(LogLevel.Warning, new EventId(1, "RecipeReadFailed"), "The recipe editor couldn't read the {What}: {Error}");
+
+    private static void LogFailed(ILogger logger, string what, string error) => FailedMessage(logger, what, error, null);
+
+    private void WatchSync(int generation)
     {
-        if (notFound || owner is null) return;
+        if (notFound || owner is null || generation != loadGeneration) return;
         watch = new CancellationTokenSource();
         var token = watch.Token;
         _ = Task.Run(async () =>
@@ -248,10 +266,21 @@
                 {
                     await InvokeAsync(async () =>
                     {
-                        if (token.IsCancellationRequested || owner != Foods.ProfileId) return;
-                        await RefreshSyncedAsync();
-                        if (token.IsCancellationRequested) return;
-                        StateHasChanged();
+                        if (token.IsCancellationRequested || owner != Foods.ProfileId || generation != loadGeneration) return;
+                        try
+                        {
+                            await RefreshSyncedAsync(generation);
+                            if (error == RefreshFailed) error = null;
+                        }
+                        catch (Exception e) when (e is not OperationCanceledException)
+                        {
+                            // One failed refresh is reported; the watch keeps listening, so the next change tries again.
+                            if (generation != loadGeneration) return;
+                            LogFailed(Logger, "synced changes", e.GetType().Name);
+                            error = RefreshFailed;
+                        }
+
+                        if (!token.IsCancellationRequested) StateHasChanged();
                     });
                 }
             }
@@ -260,22 +289,32 @@
             }
             catch (Exception e) when (e is not ObjectDisposedException)
             {
-                // A failed refresh leaves the editor as it was; saving still checks everything again.
+                LogFailed(Logger, "sync watch", e.GetType().Name);
+                await InvokeAsync(() =>
+                {
+                    if (token.IsCancellationRequested || generation != loadGeneration) return;
+                    error = RefreshFailed;
+                    StateHasChanged();
+                });
             }
         }, CancellationToken.None);
     }
 
-    private async Task RefreshSyncedAsync()
+    private async Task RefreshSyncedAsync(int generation)
     {
         if (RecipeId is null)
         {
-            if (households.Length > 0) return;
-            households = await Foods.HouseholdsAsync();
-            if (string.IsNullOrEmpty(householdId)) householdId = households.FirstOrDefault()?.Id ?? "";
+            // Every membership that syncs is offered; the household already chosen stays chosen.
+            var next = await Foods.HouseholdsAsync();
+            if (generation != loadGeneration) return;
+            households = next;
+            if (!households.Any(h => h.Id == householdId)) householdId = households.FirstOrDefault()?.Id ?? "";
             return;
         }
 
-        if (!incomplete || await Foods.RecipeAsync(RecipeId) is not { } recipe || recipe.Recipe.Id != shownRecipeId) return;
+        if (!incomplete) return;
+        var recipe = await Foods.RecipeAsync(RecipeId);
+        if (generation != loadGeneration || recipe is null || recipe.Recipe.Id != shownRecipeId) return;
         foreach (var ingredient in recipe.Ingredients)
         {
             if (rows.FirstOrDefault(r => r.Id == ingredient.Id) is { Food: null } row && ingredient.Food() is { } food)
@@ -307,6 +346,7 @@
     {
         query = e.Value?.ToString() ?? "";
         var asked = query;
+        var household = householdId;
         if (string.IsNullOrWhiteSpace(asked))
         {
             matches = [];
@@ -316,12 +356,13 @@
         try
         {
             // Only the recipe's household's foods, filtered before the limit, so another household's can't crowd them out.
-            var found = await Foods.SearchAsync(asked, householdId);
-            if (asked == query && owner == Foods.ProfileId) matches = found;
+            var found = await Foods.SearchAsync(asked, household);
+            // A search for other text, or for the household chosen before, no longer applies.
+            if (asked == query && household == householdId && owner == Foods.ProfileId) matches = found;
         }
         catch (Exception x) when (x is not OperationCanceledException)
         {
-            if (asked == query) error = "Couldn't search your household's foods on this device. Try again.";
+            if (asked == query && household == householdId) error = "Couldn't search your household's foods on this device. Try again.";
         }
     }
 

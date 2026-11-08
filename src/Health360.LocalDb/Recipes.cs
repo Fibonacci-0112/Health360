@@ -34,6 +34,8 @@ public sealed class RecipeIngredientRow
 {
     public string Id { get; set; } = "";
 
+    public string RecipeId { get; set; } = "";
+
     public long Position { get; set; }
 
     public string FoodId { get; set; } = "";
@@ -123,13 +125,14 @@ public static class Recipes
         "r.id AS Id, r.household_id AS HouseholdId, r.name AS Name, r.servings AS Servings, r.cooked_weight AS CookedWeight, " +
         "r.cooked_weight_unit AS CookedWeightUnit, r.cooked_weight_g AS CookedWeightG";
 
-    private const string IngredientsSql =
-        "SELECT i.id AS Id, i.position AS Position, i.food_id AS FoodId, i.quantity AS Quantity, i.quantity_unit AS QuantityUnit, " +
+    private const string IngredientsSelect =
+        "SELECT i.id AS Id, i.recipe_id AS RecipeId, i.position AS Position, i.food_id AS FoodId, i.quantity AS Quantity, i.quantity_unit AS QuantityUnit, " +
         "i.portion_name AS PortionName, i.basis AS Basis, i.base_amount AS BaseAmount, f.name AS FoodName, f.brand AS FoodBrand, " +
         "f.basis AS FoodBasis, f.energy_100 AS Energy100, f.protein_100 AS Protein100, f.carbohydrate_100 AS Carbohydrate100, " +
         "f.fat_100 AS Fat100, f.nutrients_100 AS Nutrients100, f.portions AS Portions " +
-        "FROM recipe_ingredients i LEFT JOIN foods f ON f.id = i.food_id AND f.household_id = i.household_id " +
-        "WHERE i.recipe_id = ? ORDER BY i.position, i.id";
+        "FROM recipe_ingredients i LEFT JOIN foods f ON f.id = i.food_id AND f.household_id = i.household_id ";
+
+    private const string IngredientsSql = IngredientsSelect + "WHERE i.recipe_id = ? ORDER BY i.position, i.id";
 
     /// <summary>The household recipes whose name contains <paramref name="query"/>, by name; all of them when it is empty.</summary>
     public static Task<RecipeRow[]> SearchAsync(IPowerSyncDatabase db, string? query, int limit)
@@ -139,6 +142,18 @@ public static class Recipes
         return db.GetAll<RecipeRow>(
             $"SELECT {RecipeColumns} FROM recipes r WHERE r.name LIKE ? ESCAPE '\\' ORDER BY r.name COLLATE NOCASE, r.id LIMIT ?",
             [pattern, limit]);
+    }
+
+    /// <summary>
+    /// Every household recipe with its ingredients, by name, in two reads however many recipes there are.
+    /// </summary>
+    public static async Task<IReadOnlyList<RecipeDetail>> ListAsync(IPowerSyncDatabase db)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        var recipes = await db.GetAll<RecipeRow>($"SELECT {RecipeColumns} FROM recipes r ORDER BY r.name COLLATE NOCASE, r.id", []).ConfigureAwait(false);
+        var ingredients = await db.GetAll<RecipeIngredientRow>(IngredientsSelect + "ORDER BY i.recipe_id, i.position, i.id", []).ConfigureAwait(false);
+        var byRecipe = ingredients.ToLookup(i => i.RecipeId, StringComparer.Ordinal);
+        return [.. recipes.Select(r => new RecipeDetail(r, [.. byRecipe[r.Id]]))];
     }
 
     public static async Task<RecipeDetail?> GetAsync(IPowerSyncDatabase db, string id)

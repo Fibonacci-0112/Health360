@@ -231,4 +231,45 @@ public sealed class RecipeTests : AppTestContext
         var cut = Open("food/recipes");
         cut.WaitForAssertion(() => Assert.Equal(22, cut.FindAll("#recipe-list li").Count), Wait);
     }
+
+    [Fact]
+    public async Task A_household_that_syncs_into_an_open_editor_is_offered_and_the_chosen_one_stays()
+    {
+        await StockAsync();
+        var cut = Open("food/recipes/new");
+        cut.WaitForAssertion(() => cut.Find("#recipe-name"), Wait);
+        await TypeAsync(cut, "#recipe-name", "Porridge");
+        Assert.Empty(cut.FindAll("#recipe-household"));
+
+        await App.Database.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("INSERT INTO households (id, name) VALUES ('0192f0c0-0000-7000-8000-0000000000a2', 'Cabin')");
+            await tx.Execute("INSERT INTO household_members (id, household_id, profile_id) VALUES ('hm2', '0192f0c0-0000-7000-8000-0000000000a2', ?)", [ProfileId]);
+            await tx.Execute("DELETE FROM ps_crud");
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            var select = cut.Find("#recipe-household");
+            Assert.Equal(["Cabin", "Home"], select.QuerySelectorAll("option").Select(o => o.TextContent));
+            Assert.Equal(Household, select.GetAttribute("value"));
+        }, Wait);
+        Assert.Equal("Porridge", cut.Find("#recipe-name").GetAttribute("value"));
+    }
+
+    [Fact]
+    public async Task A_refresh_that_fails_is_reported_instead_of_stopping_silently()
+    {
+        await StockAsync();
+        var cut = Open("food/recipes/new");
+        cut.WaitForAssertion(() => cut.Find("#recipe-name"), Wait);
+
+        await App.Database.Db.Execute("DROP VIEW households");
+        // A food syncing in wakes the editor's watch, whose refresh now can't read the households.
+        await App.Database.Db.Execute(
+            "INSERT INTO foods (id, household_id, source, name, basis, energy_100, nutrients_100, portions, verified) VALUES ('rice', ?, 'custom', 'Rice', 'g', 130, '{}', '[]', 0)",
+            [Household]);
+
+        cut.WaitForAssertion(() => Assert.Contains("Couldn't refresh this recipe", cut.Find("[role=alert]").TextContent, StringComparison.Ordinal), Wait);
+    }
 }
