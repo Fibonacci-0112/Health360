@@ -264,7 +264,8 @@ public static partial class FoodDataCentral
         {
             if (item.ValueKind != JsonValueKind.Object
                 || !item.TryGetProperty("nutrient", out var nutrient) || nutrient.ValueKind != JsonValueKind.Object
-                || !nutrient.TryGetProperty("id", out var idElement) || !idElement.TryGetInt32(out var nutrientId)
+                || !nutrient.TryGetProperty("id", out var idElement) || idElement.ValueKind != JsonValueKind.Number
+                || !idElement.TryGetInt32(out var nutrientId)
                 || !UnitById.TryGetValue(nutrientId, out var mapped))
             {
                 continue;
@@ -311,7 +312,8 @@ public static partial class FoodDataCentral
         var ordered = list.EnumerateArray()
             .Select((item, position) => (item, position))
             .OrderBy(p => p.item.ValueKind == JsonValueKind.Object
-                && p.item.TryGetProperty("sequenceNumber", out var s) && s.TryGetInt32(out var n) ? n : int.MaxValue)
+                && p.item.TryGetProperty("sequenceNumber", out var s) && s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out var n)
+                ? n : int.MaxValue)
             .ThenBy(p => p.position);
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (item, _) in ordered)

@@ -166,10 +166,24 @@ public static class FoodLibrary
     {
         ArgumentNullException.ThrowIfNull(db);
         return db.GetAll<FoodRow>(
-            $"SELECT {Columns} FROM foods f JOIN (SELECT food_id, max(logged_at) AS last FROM food_log_entries " +
+            $"SELECT {Columns} FROM foods f JOIN (SELECT food_id, max({WorkoutLog.Instant("logged_at")}) AS last FROM food_log_entries " +
             "WHERE profile_id = ? AND food_id IS NOT NULL GROUP BY food_id) r ON r.food_id = f.id " +
             "WHERE f.household_id IS NOT NULL ORDER BY r.last DESC, f.id LIMIT ?",
             [profileId, limit]);
+    }
+
+    /// <summary>
+    /// Fires now and after every change to what the Food tab offers: the profile's households and the household foods,
+    /// whether written here or synced from another device. The caller reloads its choices.
+    /// </summary>
+    public static IAsyncEnumerable<WorkoutLog.ChangeStamp[]> WatchChoices(PowerSyncDatabase db, string profileId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        return db.Watch<WorkoutLog.ChangeStamp>(
+            "SELECT (SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM household_members WHERE profile_id = ?) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') || ';' FROM households) || " +
+            "(SELECT count(*) || ':' || coalesce(max(updated_at), '') FROM foods WHERE household_id IS NOT NULL) AS Stamp",
+            [profileId], new SQLWatchOptions { Signal = cancellationToken, TriggerImmediately = true });
     }
 
     public static Task<FoodRow?> GetAsync(IPowerSyncDatabase db, string id)
@@ -224,12 +238,12 @@ public static class FoodLog
         ? ["g", "kg", "oz", "lb"]
         : ["ml", "l", "fl_oz", "cup", "tbsp", "tsp"];
 
-    private const string DaySql =
+    private static readonly string DaySql =
         "SELECT id AS Id, logged_at AS LoggedAt, local_date AS LocalDate, meal AS Meal, entry_method AS EntryMethod, food_id AS FoodId, " +
         "name AS Name, brand AS Brand, quantity AS Quantity, quantity_unit AS QuantityUnit, portion_name AS PortionName, " +
         "energy AS Energy, protein AS Protein, carbohydrate AS Carbohydrate, fat AS Fat, nutrients AS Nutrients, " +
         "incomplete_nutrients AS IncompleteNutrients, coalesce(is_estimate, 0) AS IsEstimate " +
-        "FROM food_log_entries WHERE profile_id = ? AND local_date = ? ORDER BY logged_at, id";
+        "FROM food_log_entries WHERE profile_id = ? AND local_date = ? ORDER BY " + WorkoutLog.Instant("logged_at") + ", id";
 
     /// <summary>The profile's entries for one day, in the order they were logged, now and after every change.</summary>
     public static IAsyncEnumerable<FoodLogEntryRow[]> WatchDay(PowerSyncDatabase db, string profileId, DateOnly date, CancellationToken cancellationToken)

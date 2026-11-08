@@ -24,6 +24,10 @@ public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, T
     public IAsyncEnumerable<FoodLogEntryRow[]> WatchDay(DateOnly date, CancellationToken cancellationToken) =>
         FoodLog.WatchDay(db, RequireProfile(), date, cancellationToken);
 
+    /// <summary>Fires now and whenever the households or their foods change (<see cref="FoodLibrary.WatchChoices"/>).</summary>
+    public IAsyncEnumerable<WorkoutLog.ChangeStamp[]> WatchChoices(CancellationToken cancellationToken) =>
+        FoodLibrary.WatchChoices(db, RequireProfile(), cancellationToken);
+
     public Task<FoodRow[]> SearchAsync(string? query) => FoodLibrary.SearchAsync(db, query, 20);
 
     public Task<FoodRow[]> RecentAsync() => FoodLibrary.RecentAsync(db, RequireProfile(), 8);

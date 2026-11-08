@@ -80,13 +80,13 @@
                             </span>
                             @if (confirmDelete == entry.Id)
                             {
-                                <span class="confirm">
-                                    <span>Delete this entry?</span>
-                                    <span class="inline">
-                                        <button type="button" class="danger" @onclick="() => DeleteAsync(entry.Id)" disabled="@busy">Delete</button>
-                                        <button type="button" class="secondary" @onclick="() => confirmDelete = null">Keep</button>
-                                    </span>
-                                </span>
+                                <div class="confirm" role="alertdialog" aria-labelledby="@($"food-confirm-{entry.Id}")">
+                                    <p id="@($"food-confirm-{entry.Id}")">Delete @entry.Name from @MealName(entry.Meal).ToLowerInvariant()?</p>
+                                    <div class="inline">
+                                        <button type="button" class="danger" disabled="@busy" @onclick="() => DeleteAsync(entry.Id)">Delete</button>
+                                        <button type="button" class="secondary" disabled="@busy" @onclick="() => confirmDelete = null">Keep</button>
+                                    </div>
+                                </div>
                             }
                             else
                             {
@@ -222,7 +222,7 @@
 
 @code {
     private string? watchedProfile, error, status, confirmDelete;
-    private CancellationTokenSource? watch;
+    private CancellationTokenSource? watch, choicesWatch;
     private DateOnly date;
     private bool loaded, busy, readFailed, choicesFailed;
 
@@ -274,6 +274,7 @@
         }
 
         StopWatching();
+        StopWatchingChoices();
         generation++;
         watchedProfile = profileId;
         choicesFailed = false;
@@ -289,7 +290,42 @@
         date = Foods.Today;
         meal = Foods.Hour switch { < 11 => "breakfast", < 16 => "lunch", < 21 => "dinner", _ => "snack" };
         WatchDay();
-        _ = InvokeAsync(LoadChoicesAsync);
+        WatchChoices();
+    }
+
+    /// <summary>Reloads the households and foods on offer whenever they change, here or synced from another device.</summary>
+    private void WatchChoices()
+    {
+        var started = generation;
+        choicesWatch = new CancellationTokenSource();
+        var token = choicesWatch.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var _ in Foods.WatchChoices(token))
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        if (!token.IsCancellationRequested && started == generation) await LoadChoicesAsync();
+                    });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception e) when (e is not ObjectDisposedException)
+            {
+                LogReadFailed(Logger, "household foods", e.GetType().Name);
+                await InvokeAsync(() =>
+                {
+                    if (token.IsCancellationRequested || started != generation) return;
+                    choicesFailed = true;
+                    error = ChoicesReadFailed;
+                    StateHasChanged();
+                });
+            }
+        }, CancellationToken.None);
     }
 
     private void WatchDay()
@@ -297,6 +333,9 @@
         StopWatching();
         loaded = readFailed = false;
         confirmDelete = null;
+        // Nothing of the previous day stays on screen (or deletable) while this one loads.
+        entries = [];
+        total = NutrientTotal.Empty;
         if (error == DayReadFailed) error = null;
         var profile = watchedProfile;
         var day = date;
@@ -344,6 +383,13 @@
         watch?.Cancel();
         watch?.Dispose();
         watch = null;
+    }
+
+    private void StopWatchingChoices()
+    {
+        choicesWatch?.Cancel();
+        choicesWatch?.Dispose();
+        choicesWatch = null;
     }
 
     private async Task LoadChoicesAsync()
@@ -633,5 +679,6 @@
     {
         Profiles.Changed -= ProfileChanged;
         StopWatching();
+        StopWatchingChoices();
     }
 }

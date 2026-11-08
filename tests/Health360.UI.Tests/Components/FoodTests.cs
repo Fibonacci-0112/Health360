@@ -240,4 +240,37 @@ public sealed class FoodTests : AppTestContext
         }, Wait);
         Assert.DoesNotContain("hasn't synced", cut.Markup, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task A_household_that_syncs_after_the_tab_opens_offers_new_foods()
+    {
+        var cut = await FoodAsync(household: false);
+        cut.WaitForAssertion(() => Assert.Contains("hasn't synced", cut.Find("[aria-labelledby=new-food-title]").TextContent, StringComparison.Ordinal), Wait);
+
+        await App.Database.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute("INSERT INTO households (id, name) VALUES (?, 'Home')", [Household]);
+            await tx.Execute("INSERT INTO household_members (id, household_id, profile_id) VALUES ('hm', ?, ?)", [Household, ProfileId]);
+            await tx.Execute("DELETE FROM ps_crud");
+        });
+
+        cut.WaitForAssertion(() => cut.Find("#save-food"), Wait);
+    }
+
+    [Fact]
+    public async Task The_delete_confirmation_is_a_labelled_dialog()
+    {
+        var cut = await FoodAsync();
+        await TypeAsync(cut, "#quick-energy", "250");
+        await SubmitAsync(cut, "#quick-add");
+        cut.WaitForAssertion(() => cut.Find(".food-entry"), Wait);
+        await ClickAsync(cut, "button[aria-label='Delete Quick add']");
+
+        cut.WaitForAssertion(() =>
+        {
+            var dialog = cut.Find(".food-entry [role=alertdialog]");
+            var label = cut.Find("#" + dialog.GetAttribute("aria-labelledby"));
+            Assert.Equal("Delete Quick add from lunch?", label.TextContent.Trim());
+        }, Wait);
+    }
 }

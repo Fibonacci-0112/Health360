@@ -194,6 +194,27 @@ public class FoodDataCentralTests
         });
     }
 
+    [Fact]
+    public void A_nutrient_or_portion_with_an_unusable_number_is_passed_over_not_fatal()
+    {
+        var food = Assert.Single(ParseText(
+            """
+            {"SRLegacyFoods": [{"fdcId": 1, "description": "x",
+              "foodNutrients": [
+                {"nutrient": {"id": null, "unitName": "g"}, "amount": 5},
+                {"nutrient": {"id": "1003", "unitName": "g"}, "amount": 5},
+                {"nutrient": {"id": 1008, "unitName": "kcal"}, "amount": 40}
+              ],
+              "foodPortions": [
+                {"sequenceNumber": "2", "amount": 1, "measureUnit": {"name": "undetermined"}, "modifier": "slice", "gramWeight": 20},
+                {"sequenceNumber": 1, "amount": 1, "measureUnit": {"name": "undetermined"}, "modifier": "cup", "gramWeight": 100}
+              ]}]}
+            """).Foods);
+
+        Assert.Equal((40d, (double?)null), (food.Energy100!.Value, food.Protein100));
+        Assert.Equal(["1 cup", "1 slice"], food.Portions.Select(p => p.Name));
+    }
+
     [Theory]
     [InlineData("""{"BrandedFoods": []}""")]
     [InlineData("""{"SomethingElse": []}""")]

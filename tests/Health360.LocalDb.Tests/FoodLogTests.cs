@@ -159,7 +159,7 @@ public sealed class FoodLogTests
     public async Task A_day_shows_only_its_own_entries_for_the_profile_and_an_earlier_day_is_logged_at_its_local_noon()
     {
         await using var t = await OpenAsync();
-        var eastern = new ZonedClock(new DateTimeOffset(2026, 11, 7, 18, 30, 0, TimeSpan.Zero), TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
+        var eastern = new ZonedClock(new DateTimeOffset(2026, 11, 7, 18, 30, 0, TimeSpan.Zero), TimeZoneInfo.CreateCustomTimeZone("UTC-05", TimeSpan.FromHours(-5), "UTC-05", "UTC-05"));
         var yesterday = Day.AddDays(-1);
         await FoodLog.QuickAddAsync(t.Db, Profile, "lunch", yesterday, "Sandwich", 450, null, null, null, eastern);
         await FoodLog.QuickAddAsync(t.Db, Other, "lunch", yesterday, "Theirs", 300, null, null, null, eastern);
@@ -220,6 +220,27 @@ public sealed class FoodLogTests
         Assert.Equal([new FoodPortion("1 slice", 25)], food.Portions);
         Assert.Null(new FoodRow { Basis = "oz" }.ToFood());
         Assert.Empty(new FoodRow { Basis = "g", Nutrients100 = "not json", Portions = "{" }.ToFood()!.Per100.Values);
+    }
+
+    [Fact]
+    public async Task Entries_and_recent_foods_follow_the_instant_they_were_logged_whatever_its_text_form()
+    {
+        await using var t = await OpenAsync();
+        var granola = await FoodLibrary.AddAsync(t.Db, Household, Granola(), clock);
+        var oats = await FoodLibrary.AddAsync(t.Db, Household, new FoodInput("Rolled oats", null, FoodBasis.Mass, 100, 379, 13.2, 67.7, 6.5, []), clock);
+        // Logged here at 18:30:0x UTC, as the app writes it.
+        var local = await FoodLog.LogFoodAsync(t.Db, Profile, granola, "lunch", Day, 30, "g", null, clock);
+        // Synced from another device at 18:45 UTC, as Postgres writes a timestamptz: as text it sorts before the 'T' form.
+        await t.Db.WriteTransaction(async tx =>
+        {
+            await tx.Execute(
+                "INSERT INTO food_log_entries (id, profile_id, logged_at, local_date, meal, entry_method, food_id, name, nutrients, incomplete_nutrients, is_estimate) " +
+                "VALUES ('synced', ?, '2026-11-07 18:45:00+00', '2026-11-07', 'lunch', 'search', ?, 'Rolled oats', '{}', '[]', 0)", [Profile, oats]);
+            await tx.Execute("DELETE FROM ps_crud WHERE id = (SELECT max(id) FROM ps_crud)");
+        });
+
+        Assert.Equal([local, "synced"], (await FoodLog.DayAsync(t.Db, Profile, Day)).Select(e => e.Id));
+        Assert.Equal([oats, granola], (await FoodLibrary.RecentAsync(t.Db, Profile, 5)).Select(f => f.Id));
     }
 
     private sealed class ZonedClock(DateTimeOffset start, TimeZoneInfo zone, TimeSpan step = default) : TimeProvider
