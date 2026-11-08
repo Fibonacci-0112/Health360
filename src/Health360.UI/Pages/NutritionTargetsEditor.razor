@@ -1,0 +1,314 @@
+@page "/food/targets"
+@using System.Globalization
+@using Health360.Contracts.Body
+@using Health360.Domain.Nutrition
+@implements IDisposable
+@inject FoodService Foods
+@inject BodyData Body
+@inject ProfileService Profiles
+@inject ILogger<NutritionTargetsEditor> Logger
+
+<div class="page">
+    <div class="page-head">
+        <h1>Targets</h1>
+        <NavLink class="top-link" href="food">Food</NavLink>
+    </div>
+    @if (error is not null)
+    {
+        <p class="error" role="alert">@error</p>
+    }
+    <p role="status">@status</p>
+    @if (watchedProfile is null)
+    {
+        <p class="muted" role="status">Waiting for your profile to sync to this device</p>
+    }
+    else if (!loaded)
+    {
+        <p class="muted" role="status">Loading your targets</p>
+    }
+    else
+    {
+        <form class="card" id="targets-form" @onsubmit="SaveAsync">
+            <p class="field-label" id="targets-method">How they're set</p>
+            <ChoiceGroup LabelledBy="targets-method" Options="Methods" Labels="MethodNames" Value="@method" ValueChanged="code => method = code ?? method" />
+            @if (method == NutritionTargetStore.FormulaMethod)
+            {
+                <p class="muted small">Calculated from your physiology profile: maintenance energy plus your adjustment, protein from your weight, fat as a share of energy and carbohydrate as the rest. They follow your profile, so a new lab RMR or weigh-in changes them.</p>
+                <label>
+                    Energy adjustment, @EnergyUnitName per day
+                    <input id="target-adjustment" inputmode="decimal" @bind="adjustment" @bind:event="oninput" />
+                </label>
+                <p class="muted small">Negative for a deficit, positive for a surplus, 0 to maintain.</p>
+                <label>
+                    Protein, @TargetDisplay.RatioUnitName(ratioUnit)
+                    <input id="target-protein-ratio" inputmode="decimal" @bind="ratio" @bind:event="oninput" />
+                </label>
+                <p class="field-label" id="target-ratio-unit">Per</p>
+                <ChoiceGroup LabelledBy="target-ratio-unit" Options="RatioUnits" Labels="RatioUnitNames" Value="@UnitPrefOptions.ProteinRatio.ToCode(ratioUnit)" ValueChanged="ChangeRatioUnit" />
+                <p class="field-label" id="target-protein-basis">Of</p>
+                <ChoiceGroup LabelledBy="target-protein-basis" Options="Bases" Labels="BasisNames" Value="@basis" ValueChanged="code => basis = code ?? basis" />
+                <label>
+                    Fat, % of energy
+                    <input id="target-fat-percent" inputmode="decimal" @bind="fatPercent" @bind:event="oninput" />
+                </label>
+            }
+            else
+            {
+                <p class="muted small">Your own numbers. They stay as they are until you change them; leave a macro blank for no target.</p>
+                <label>
+                    Energy, @EnergyUnitName per day
+                    <input id="target-manual-energy" inputmode="decimal" @bind="manualEnergy" @bind:event="oninput" />
+                </label>
+                <label>
+                    Protein, g
+                    <input id="target-manual-protein" inputmode="decimal" @bind="manualProtein" @bind:event="oninput" />
+                </label>
+                <label>
+                    Carbohydrate, g
+                    <input id="target-manual-carbohydrate" inputmode="decimal" @bind="manualCarbohydrate" @bind:event="oninput" />
+                </label>
+                <label>
+                    Fat, g
+                    <input id="target-manual-fat" inputmode="decimal" @bind="manualFat" @bind:event="oninput" />
+                </label>
+            }
+
+            <section aria-labelledby="targets-preview-title" id="targets-preview">
+                <h2 id="targets-preview-title">With these settings</h2>
+                @if (Preview() is var (preview, previewSettings, problem) && problem is not null)
+                {
+                    <p class="muted">@problem</p>
+                }
+                else if (preview is null)
+                {
+                    <p class="muted" role="status">Waiting for your physiology profile</p>
+                }
+                else
+                {
+                    <dl class="values">
+                        @foreach (var nutrient in Nutrient.Macros)
+                        {
+                            <div class="value-row" data-preview="@nutrient.Code"><dt>@Name(nutrient)</dt><dd>@(TargetDisplay.Target(preview, nutrient) is { } value ? TargetDisplay.Amount(nutrient, value, Foods.UnitPrefs.Energy) : "no target")</dd></div>
+                        }
+                    </dl>
+                    <p class="muted small">@TargetDisplay.Basis(preview, previewSettings!, Foods.UnitPrefs)</p>
+                    @foreach (var p in preview.Problems)
+                    {
+                        <p class="muted small target-problem">@TargetDisplay.Problem(p)</p>
+                    }
+                }
+            </section>
+            <p class="muted small">Exercise energy isn't added to these: your activity level already counts your training.</p>
+            <button type="submit" class="primary" id="save-targets" disabled="@busy">Save targets</button>
+        </form>
+    }
+</div>
+
+@code {
+    private static readonly Action<ILogger, string, Exception?> LogFailed =
+        LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, "TargetsFailed"), "Nutrition targets failed ({Error})");
+
+    private static readonly IReadOnlyList<string> Methods = [NutritionTargetStore.FormulaMethod, NutritionTargetStore.ManualMethod];
+    private static readonly IReadOnlyDictionary<string, string> MethodNames = new Dictionary<string, string>
+    {
+        [NutritionTargetStore.FormulaMethod] = "From my profile",
+        [NutritionTargetStore.ManualMethod] = "My own numbers",
+    };
+
+    private static readonly IReadOnlyList<string> RatioUnits = [.. UnitPrefOptions.ProteinRatio.Values.Select(UnitPrefOptions.ProteinRatio.ToCode)];
+    private static readonly IReadOnlyDictionary<string, string> RatioUnitNames = UnitPrefOptions.ProteinRatio.Values.ToDictionary(
+        UnitPrefOptions.ProteinRatio.ToCode, u => u == ProteinRatioUnit.GramsPerPound ? "lb" : "kg");
+
+    private static readonly IReadOnlyList<string> Bases = [NutritionTargetStore.BodyWeightBasis, NutritionTargetStore.LeanMassBasis];
+    private static readonly IReadOnlyDictionary<string, string> BasisNames = new Dictionary<string, string>
+    {
+        [NutritionTargetStore.BodyWeightBasis] = "Body weight",
+        [NutritionTargetStore.LeanMassBasis] = "Lean mass",
+    };
+
+    private string? watchedProfile, error, status;
+    private bool loaded, busy;
+    private string method = NutritionTargetStore.FormulaMethod;
+    private string basis = NutritionTargetStore.BodyWeightBasis;
+    private ProteinRatioUnit ratioUnit;
+    private string adjustment = "", ratio = "", fatPercent = "", manualEnergy = "", manualProtein = "", manualCarbohydrate = "", manualFat = "";
+    private int generation;
+
+    // What the form was filled with: an energy left as shown keeps its stored kcal, so a kJ display's rounding never
+    // changes a saved value.
+    private TargetSettings? filled;
+    private string filledAdjustment = "", filledManualEnergy = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Profiles.Changed += ProfileChanged;
+        Body.Changed += BodyChanged;
+        Body.EnsureWatching();
+        await LoadAsync();
+    }
+
+    private void ProfileChanged() => _ = InvokeAsync(async () =>
+    {
+        if (Foods.ProfileId != watchedProfile)
+        {
+            await LoadAsync();
+        }
+
+        StateHasChanged();
+    });
+
+    private void BodyChanged() => _ = InvokeAsync(StateHasChanged);
+
+    /// <summary>Fills the form from the saved settings, or the starting ones. A later edit on another device isn't merged in.</summary>
+    private async Task LoadAsync()
+    {
+        var started = ++generation;
+        watchedProfile = Foods.ProfileId;
+        loaded = false;
+        error = status = null;
+        if (watchedProfile is null) return;
+        try
+        {
+            var stored = (await Foods.TargetsAsync())?.ToSettings();
+            if (started != generation) return;
+            Fill(stored ?? TargetsCard.StartingSettings(Foods.UnitPrefs));
+            loaded = true;
+        }
+        catch (Exception e)
+        {
+            if (started != generation) return;
+            LogFailed(Logger, e.GetType().Name, null);
+            error = "Your targets couldn't be read on this device. Leave this page and come back to try again.";
+        }
+    }
+
+    private void Fill(TargetSettings s)
+    {
+        filled = s;
+        method = s.Method == TargetMethod.Manual ? NutritionTargetStore.ManualMethod : NutritionTargetStore.FormulaMethod;
+        basis = s.ProteinBasis == ProteinBasis.LeanMass ? NutritionTargetStore.LeanMassBasis : NutritionTargetStore.BodyWeightBasis;
+        ratioUnit = s.ProteinRatioUnit;
+        ratio = s.ProteinRatio.ToString("0.##", CultureInfo.CurrentCulture);
+        adjustment = Text(FromKcal(s.EnergyAdjustmentKcal), 0);
+        fatPercent = s.FatPercent.ToString("0.#", CultureInfo.CurrentCulture);
+        manualEnergy = s.ManualEnergyKcal is { } e ? Text(FromKcal(e), 0) : "";
+        manualProtein = s.ManualProteinG is { } p ? Text(p, 1) : "";
+        manualCarbohydrate = s.ManualCarbohydrateG is { } c ? Text(c, 1) : "";
+        manualFat = s.ManualFatG is { } f ? Text(f, 1) : "";
+        filledAdjustment = adjustment;
+        filledManualEnergy = manualEnergy;
+    }
+
+    /// <summary>Switching the ratio's unit converts the number typed, so the daily grams stay the same beyond rounding.</summary>
+    private void ChangeRatioUnit(string? code)
+    {
+        if (!UnitPrefOptions.ProteinRatio.TryParse(code, out var unit) || unit == ratioUnit) return;
+        if (NumberText.Parse(ratio) is { } value)
+        {
+            ratio = Text(ProteinRatio.FromGPerKg(ProteinRatio.ToGPerKg(value, ratioUnit), unit), 2);
+        }
+
+        ratioUnit = unit;
+    }
+
+    /// <summary>The settings the form describes, or why they can't be used.</summary>
+    private (TargetSettings? Settings, string? Problem) Read()
+    {
+        double? Optional(string text) => string.IsNullOrWhiteSpace(text) ? null : NumberText.Parse(text);
+        var adjustmentValue = string.IsNullOrWhiteSpace(adjustment) ? 0 : NumberText.Parse(adjustment);
+        if (adjustmentValue is not { } adj || !double.IsFinite(adj)) return (null, "Enter the energy adjustment as a number, or 0.");
+        var adjKcal = adjustment == filledAdjustment && filled is not null ? filled.EnergyAdjustmentKcal : ToKcal(adj);
+        if (adjKcal is < -5000 or > 5000) return (null, $"Keep the adjustment within ± {MetricDisplay.Energy(5000, Foods.UnitPrefs.Energy)}.");
+        if (NumberText.Parse(ratio) is not { } ratioValue || ProteinRatio.ToGPerKg(ratioValue, ratioUnit) is not (> 0 and <= 10))
+            return (null, $"Enter protein as more than 0 and at most {Text(ProteinRatio.FromGPerKg(10, ratioUnit), 2)} {TargetDisplay.RatioUnitName(ratioUnit)}.");
+        if (NumberText.Parse(fatPercent) is not { } fat || fat is <= 0 or >= 100) return (null, "Enter fat as a percentage between 0 and 100.");
+
+        double? energyKcal = null, protein = null, carbohydrate = null, fatG = null;
+        var manual = method == NutritionTargetStore.ManualMethod;
+        if (manual)
+        {
+            if (Optional(manualEnergy) is not { } energy || ToKcal(energy) is not (> 0 and <= 20000))
+                return (null, "Enter an energy target, more than 0.");
+            energyKcal = manualEnergy == filledManualEnergy && filled?.ManualEnergyKcal is { } kept ? kept : ToKcal(energy);
+            foreach (var (text, name) in new[] { (manualProtein, "protein"), (manualCarbohydrate, "carbohydrate"), (manualFat, "fat") })
+            {
+                if (!string.IsNullOrWhiteSpace(text) && Optional(text) is not (>= 0 and <= 2000))
+                    return (null, $"Enter {name} as grams from 0 to 2000, or leave it blank.");
+            }
+
+            protein = Optional(manualProtein);
+            carbohydrate = Optional(manualCarbohydrate);
+            fatG = Optional(manualFat);
+        }
+
+        return (new TargetSettings(manual ? TargetMethod.Manual : TargetMethod.Formula, adjKcal, ratioValue, ratioUnit,
+            basis == NutritionTargetStore.LeanMassBasis ? ProteinBasis.LeanMass : ProteinBasis.BodyWeight, fat,
+            energyKcal, protein, fatG, carbohydrate), null);
+    }
+
+    private (DailyTargets? Targets, TargetSettings? Settings, string? Problem) Preview()
+    {
+        var (settings, problem) = Read();
+        if (settings is null) return (null, null, problem);
+        return Body.Profile() is { } profile ? (NutritionTargets.Compute(settings, profile), settings, null) : (null, settings, null);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (busy) return;
+        error = status = null;
+        var (settings, problem) = Read();
+        if (settings is null)
+        {
+            error = problem;
+            return;
+        }
+
+        var started = generation;
+        busy = true;
+        try
+        {
+            await Foods.SaveTargetsAsync(settings);
+            if (started != generation) return;
+            status = "Targets saved.";
+        }
+        catch (ArgumentException)
+        {
+            if (started == generation) error = "These targets can't be saved. Check the numbers and try again.";
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            LogFailed(Logger, e.GetType().Name, null);
+            if (started == generation) error = "Your targets couldn't be saved on this device. Try again.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private string EnergyUnitName => Foods.UnitPrefs.Energy == EnergyUnit.Kilojoule ? "kJ" : "kcal";
+
+    private double ToKcal(double value) =>
+        Foods.UnitPrefs.Energy == EnergyUnit.Kilojoule ? Conversion.Convert(value, Unit.Kilojoule, Unit.Kilocalorie) : value;
+
+    private double FromKcal(double kcal) =>
+        Foods.UnitPrefs.Energy == EnergyUnit.Kilojoule ? Conversion.Convert(kcal, Unit.Kilocalorie, Unit.Kilojoule) : kcal;
+
+    private static string Text(double value, int decimals) =>
+        Rounding.RoundTo(value, decimals).ToString(decimals > 0 ? "0." + new string('#', decimals) : "0", CultureInfo.CurrentCulture);
+
+    private static string Name(Nutrient nutrient) => nutrient.Code switch
+    {
+        "energy" => "Energy",
+        "protein" => "Protein",
+        "carbohydrate" => "Carbohydrate",
+        _ => "Fat",
+    };
+
+    public void Dispose()
+    {
+        Profiles.Changed -= ProfileChanged;
+        Body.Changed -= BodyChanged;
+    }
+}

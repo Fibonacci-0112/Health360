@@ -1,0 +1,192 @@
+@* The profile's daily targets against what the day's log adds up to. A formula target is computed from the physiology
+   profile each time either changes, so a lab RMR entered or deleted moves it at once. *@
+@using Health360.Domain.Nutrition
+@implements IDisposable
+@inject FoodService Foods
+@inject BodyData Body
+@inject ProfileService Profiles
+@inject ILogger<TargetsCard> Logger
+
+<section class="card" aria-labelledby="targets-title" id="food-targets">
+    <div class="page-head">
+        <h2 id="targets-title">Targets</h2>
+        <NavLink class="top-link" href="food/targets" id="change-targets">Change</NavLink>
+    </div>
+    @if (failed)
+    {
+        <p class="muted" role="alert">Your targets couldn't be read on this device. Leave this page and come back to try again.</p>
+    }
+    else if (settings is null || targets is null)
+    {
+        <p class="muted" role="status">Loading your targets</p>
+    }
+    else
+    {
+        <dl class="values" id="target-values">
+            @foreach (var nutrient in Nutrient.Macros)
+            {
+                <div class="value-row" data-target="@nutrient.Code"><dt>@Name(nutrient)</dt><dd>@Line(nutrient)</dd></div>
+            }
+        </dl>
+        <p class="muted small" id="target-basis">@TargetDisplay.Basis(targets, settings, Foods.UnitPrefs)@(saved ? "" : " These are the starting settings; change them to suit you.")</p>
+        @foreach (var problem in targets.Problems)
+        {
+            <p class="muted small target-problem">@TargetDisplay.Problem(problem)</p>
+        }
+        @if (!IsToday)
+        {
+            <p class="muted small">Compared with your current targets.</p>
+        }
+    }
+</section>
+
+@code {
+    private static readonly Action<ILogger, string, Exception?> LogReadFailed =
+        LoggerMessage.Define<string>(LogLevel.Error, new EventId(1, "TargetsReadFailed"), "Reading the nutrition targets failed ({Error})");
+
+    /// <summary>The day's totals, or null while the day is loading or couldn't be read.</summary>
+    [Parameter]
+    public NutrientTotal? Total { get; set; }
+
+    [Parameter]
+    public bool IsToday { get; set; } = true;
+
+    private TargetSettings? settings;
+    private DailyTargets? targets;
+    private bool saved, failed;
+    private string? watchedProfile;
+    private CancellationTokenSource? watch;
+    private int generation;
+
+    protected override void OnInitialized()
+    {
+        Profiles.Changed += ProfileChanged;
+        Body.Changed += BodyChanged;
+        Body.EnsureWatching();
+        Follow();
+    }
+
+    private void ProfileChanged() => _ = InvokeAsync(() =>
+    {
+        if (Foods.ProfileId != watchedProfile)
+        {
+            Follow();
+        }
+
+        Recompute();
+        StateHasChanged();
+    });
+
+    private void BodyChanged() => _ = InvokeAsync(() =>
+    {
+        Recompute();
+        StateHasChanged();
+    });
+
+    private void Follow()
+    {
+        watch?.Cancel();
+        watch?.Dispose();
+        watch = null;
+        generation++;
+        watchedProfile = Foods.ProfileId;
+        settings = null;
+        targets = null;
+        failed = false;
+        if (watchedProfile is null) return;
+
+        var started = generation;
+        watch = new CancellationTokenSource();
+        var token = watch.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var rows in Foods.WatchTargets(token))
+                {
+                    await InvokeAsync(() =>
+                    {
+                        if (token.IsCancellationRequested || started != generation) return;
+                        var stored = rows.Length == 1 ? rows[0].ToSettings() : null;
+                        saved = stored is not null;
+                        settings = stored ?? StartingSettings(Foods.UnitPrefs);
+                        failed = false;
+                        Recompute();
+                        StateHasChanged();
+                    });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception e) when (e is not ObjectDisposedException)
+            {
+                LogReadFailed(Logger, e.GetType().Name, null);
+                await InvokeAsync(() =>
+                {
+                    if (token.IsCancellationRequested || started != generation) return;
+                    failed = true;
+                    StateHasChanged();
+                });
+            }
+        }, CancellationToken.None);
+    }
+
+    /// <summary>The settings shown before any are saved: the defaults, with the ratio in the user's unit.</summary>
+    public static TargetSettings StartingSettings(Health360.Domain.Units.UnitPrefs prefs)
+    {
+        ArgumentNullException.ThrowIfNull(prefs);
+        var unit = prefs.ProteinRatio;
+        return TargetSettings.Default with
+        {
+            ProteinRatio = Health360.Domain.Units.Rounding.RoundTo(
+                Health360.Domain.Units.ProteinRatio.FromGPerKg(TargetSettings.DefaultProteinGPerKg, unit), 2),
+            ProteinRatioUnit = unit,
+        };
+    }
+
+    private void Recompute()
+    {
+        var profile = Body.Profile();
+        targets = settings is not null && profile is not null ? NutritionTargets.Compute(settings, profile) : null;
+    }
+
+    private string Line(Nutrient nutrient)
+    {
+        var unit = Foods.UnitPrefs.Energy;
+        if (TargetDisplay.Target(targets!, nutrient) is not { } target)
+        {
+            return Total?.Amounts[nutrient] is { } only ? $"{TargetDisplay.Amount(nutrient, only, unit)} · no target" : "no target";
+        }
+
+        if (Total?.Amounts[nutrient] is not { } eaten)
+        {
+            return $"target {TargetDisplay.Amount(nutrient, target, unit)}";
+        }
+
+        // A lower-bound total leaves at most that much; it can only be more over.
+        var incomplete = Total.Incomplete.Contains(nutrient.Code);
+        var atLeast = incomplete ? "at least " : "";
+        var left = target - eaten;
+        var rest = left >= 0
+            ? $"{(incomplete ? "at most " : "")}{TargetDisplay.Amount(nutrient, left, unit)} left"
+            : $"{atLeast}{TargetDisplay.Amount(nutrient, -left, unit)} over";
+        return $"{atLeast}{TargetDisplay.Amount(nutrient, eaten, unit)} of {TargetDisplay.Amount(nutrient, target, unit)} · {rest}";
+    }
+
+    private static string Name(Nutrient nutrient) => nutrient.Code switch
+    {
+        "energy" => "Energy",
+        "protein" => "Protein",
+        "carbohydrate" => "Carbohydrate",
+        _ => "Fat",
+    };
+
+    public void Dispose()
+    {
+        Profiles.Changed -= ProfileChanged;
+        Body.Changed -= BodyChanged;
+        watch?.Cancel();
+        watch?.Dispose();
+    }
+}

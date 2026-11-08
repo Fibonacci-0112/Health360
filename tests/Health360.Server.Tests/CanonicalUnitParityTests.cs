@@ -229,6 +229,25 @@ public sealed class CanonicalUnitParityTests
     }
 
     /// <summary>
+    /// <c>nutrition_targets.protein_ratio_g_per_kg</c> comes from <c>private.protein_ratio_g_per_kg</c>; the app computes
+    /// it with <see cref="ProteinRatio.ToGPerKg"/>.
+    /// </summary>
+    [Fact]
+    public async Task ProteinRatiosConvertExactlyAsDomainDoes()
+    {
+        Assert.SkipUnless(ConnectionString is { Length: > 0 }, $"Set {EnvironmentVariable} to run the database tests.");
+
+        var ratios = Enumerable.Range(1, 400).Select(i => i / 100.0);
+        var cases = (
+            from unit in UnitPrefOptions.ProteinRatio.Values
+            from value in Values().Concat(ratios)
+            select (Value: value, From: UnitPrefOptions.ProteinRatio.ToCode(unit), To: "g_per_kg",
+                Expected: ProteinRatio.ToGPerKg(value, unit))).ToList();
+
+        await AssertSameAsync(cases, "select private.protein_ratio_g_per_kg(c.value, c.from_unit)");
+    }
+
+    /// <summary>
     /// A household's copy of a catalogue food has the id <see cref="FoodCopy.IdFor"/> gives on every device, and the server
     /// checks it with <c>private.food_copy_id</c>; the two must agree, or every copy would be quarantined.
     /// </summary>

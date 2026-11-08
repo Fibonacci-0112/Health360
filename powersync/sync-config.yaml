@@ -38,6 +38,7 @@ streams:
       - SELECT * FROM scheduled_workouts WHERE profile_id IN my_profiles
       - SELECT * FROM personal_records WHERE profile_id IN my_profiles
       - SELECT * FROM food_log_entries WHERE profile_id IN my_profiles
+      - SELECT * FROM nutrition_targets WHERE profile_id IN my_profiles
 
   # H tables for every household the user belongs to.
   household:

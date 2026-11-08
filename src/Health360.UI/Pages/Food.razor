@@ -64,6 +64,8 @@
             }
         </section>
 
+        <TargetsCard Total="@DayTotal" IsToday="@(date == Foods.Today)" />
+
         @foreach (var meal in FoodLog.Meals)
         {
             var mealEntries = entries.Where(e => e.Meal == meal).ToList();
@@ -279,6 +281,12 @@
     private int generation, runGeneration;
     private FoodLogEntryRow[] entries = [];
     private NutrientTotal total = NutrientTotal.Empty;
+
+    /// <summary>Nothing logged is 0 of everything, for the targets; null while the day is loading or unreadable.</summary>
+    private static readonly NutrientTotal Nothing =
+        new(NutrientAmounts.Create([.. Nutrient.Macros.Select(n => (n, 0.0))]), System.Collections.Frozen.FrozenSet<string>.Empty);
+
+    private NutrientTotal? DayTotal => !loaded || readFailed ? null : entries.Length == 0 ? Nothing : total;
     private string meal = "breakfast", query = "", amount = "", unit = "";
     private FoodRow[] results = [];
     private LoggableFood? chosen;

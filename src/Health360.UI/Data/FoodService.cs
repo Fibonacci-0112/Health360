@@ -1,4 +1,5 @@
 using Health360.Contracts.Nutrition;
+using Health360.Domain.Nutrition;
 using Health360.Domain.Units;
 using Health360.LocalDb;
 using PowerSync.Common.Client;
@@ -57,6 +58,15 @@ public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, T
         FoodLog.LogRecipeAsync(db, RequireProfile(), recipeId, meal, date, quantity, unit, clock);
 
     public Task DeleteAsync(string entryId) => FoodLog.DeleteAsync(db, RequireProfile(), entryId);
+
+    /// <summary>The profile's targets row (empty when none is saved), now and after every change.</summary>
+    public IAsyncEnumerable<NutritionTargetRow[]> WatchTargets(CancellationToken cancellationToken) =>
+        NutritionTargetStore.Watch(db, RequireProfile(), cancellationToken);
+
+    public Task<NutritionTargetRow?> TargetsAsync() => NutritionTargetStore.GetAsync(db, RequireProfile());
+
+    /// <summary>Saves how the profile's targets are set; throws <see cref="ArgumentException"/> for settings that can't be stored.</summary>
+    public Task SaveTargetsAsync(TargetSettings settings) => NutritionTargetStore.SaveAsync(db, RequireProfile(), settings, clock);
 
     public Task<string> AddFoodAsync(string householdId, FoodInput input) => FoodLibrary.AddAsync(db, householdId, input, clock);
 
