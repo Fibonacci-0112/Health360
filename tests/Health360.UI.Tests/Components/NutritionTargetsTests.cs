@@ -172,6 +172,14 @@ public sealed class NutritionTargetsTests : AppTestContext
         Assert.Equal(Health360.Domain.Units.ProteinRatioUnit.GramsPerPound, saved.ProteinRatioUnit);
         Assert.Equal(10, Health360.Domain.Units.ProteinRatio.ToGPerKg(saved.ProteinRatio, saved.ProteinRatioUnit), 12);
 
+        // The stated maximum is one the check accepts: 4.53 g/lb, not 4.54 (10.009 g/kg).
+        await TypeAsync(cut, "#target-protein-ratio", "5");
+        await SubmitAsync(cut, "#targets-form");
+        cut.WaitForAssertion(() => Assert.Contains("at most 4.53 g/lb", cut.Find(".error").TextContent, StringComparison.Ordinal), Wait);
+        await TypeAsync(cut, "#target-protein-ratio", "4.53");
+        await SubmitAsync(cut, "#targets-form");
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".error")), Wait);
+
         await TypeAsync(cut, "#target-fat-percent", "100");
         await SubmitAsync(cut, "#targets-form");
         cut.WaitForAssertion(() => Assert.Contains("Enter fat as a percentage", cut.Find(".error").TextContent, StringComparison.Ordinal), Wait);
@@ -216,6 +224,9 @@ public sealed class NutritionTargetsTests : AppTestContext
         await EditorAsync(cut);
         await TypeAsync(cut, "#target-fat-percent", "abc");
         await ClickAsync(() => cut.FindAll("[role=radio]").Single(e => e.TextContent.Contains("My own numbers", StringComparison.Ordinal)));
+        await TypeAsync(cut, "#target-manual-energy", "21000");
+        await SubmitAsync(cut, "#targets-form");
+        cut.WaitForAssertion(() => Assert.Contains("at most 20,000 kcal", cut.Find(".error").TextContent, StringComparison.Ordinal), Wait);
         await TypeAsync(cut, "#target-manual-energy", "2200");
         await SubmitAsync(cut, "#targets-form");
         cut.WaitForAssertion(() => Assert.Contains("Targets saved", cut.Markup, StringComparison.Ordinal), Wait);

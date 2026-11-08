@@ -251,7 +251,7 @@
             ?? (Optional(manualEnergy) is { } typed ? ToKcal(typed) : null);
         if (energy is not (> 0 and <= 20000))
         {
-            return (null, "Enter an energy target, more than 0.");
+            return (null, $"Enter an energy target more than 0 and at most {MetricDisplay.Energy(20000, draftEnergy)}.");
         }
 
         var grams = new List<double?>();
@@ -293,13 +293,20 @@
         if (kcal is < -5000 or > 5000) return (null, $"Keep the adjustment within ± {MetricDisplay.Energy(5000, draftEnergy)}.");
         var ratioValue = Kept(ratio, filledRatio, ratioExact) ?? NumberText.Parse(ratio);
         if (ratioValue is not { } r || ProteinRatio.ToGPerKg(r, ratioUnit) is not (> 0 and <= 10))
-            return (null, $"Enter protein as more than 0 and at most {Text(ProteinRatio.FromGPerKg(10, ratioUnit), 2)} {TargetDisplay.RatioUnitName(ratioUnit)}.");
+            return (null, $"Enter protein as more than 0 and at most {MaxRatioText} {TargetDisplay.RatioUnitName(ratioUnit)}.");
         if ((Kept(fatPercent, filledFatPercent, filled?.FatPercent) ?? NumberText.Parse(fatPercent)) is not { } fat || fat is <= 0 or >= 100)
             return (null, "Enter fat as a percentage between 0 and 100.");
 
         return (new TargetSettings(TargetMethod.Formula, kcal, r, ratioUnit,
             basis == NutritionTargetStore.LeanMassBasis ? ProteinBasis.LeanMass : ProteinBasis.BodyWeight, fat), null);
     }
+
+    /// <summary>
+    /// The 10 g/kg limit in the ratio's unit, rounded down to 2 decimals: rounded to nearest, g/lb would show 4.54, which
+    /// is itself over the limit (10.009 g/kg), so typing the stated maximum would be refused.
+    /// </summary>
+    private string MaxRatioText =>
+        (Math.Floor(ProteinRatio.FromGPerKg(10, ratioUnit) * 100) / 100).ToString("0.##", CultureInfo.InvariantCulture);
 
     /// <summary>The stored value when the field still shows exactly what it was filled with; otherwise null.</summary>
     private static double? Kept(string text, string shown, double? stored) => text == shown ? stored : null;
