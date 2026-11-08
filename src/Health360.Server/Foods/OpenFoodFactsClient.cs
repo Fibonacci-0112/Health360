@@ -10,7 +10,7 @@ using Microsoft.Extensions.Options;
 namespace Health360.Server.Foods;
 
 /// <summary>Finds Open Food Facts products by barcode through its product API (v2).</summary>
-public sealed partial class OpenFoodFactsClient(IHttpClientFactory httpClientFactory, IOptions<OpenFoodFactsOptions> options)
+public sealed partial class OpenFoodFactsClient(IHttpClientFactory httpClientFactory, IOptions<OpenFoodFactsOptions> options, OpenFoodFactsUpstreamBudget budget)
 {
     public const string HttpClientName = "off";
 
@@ -32,6 +32,11 @@ public sealed partial class OpenFoodFactsClient(IHttpClientFactory httpClientFac
 
         foreach (var form in LookupForms(gtin14))
         {
+            if (!budget.TryTake())
+            {
+                throw new OpenFoodFactsBudgetExhaustedException();
+            }
+
             using var request = new HttpRequestMessage(HttpMethod.Get, $"product/{form}.json?fields={Fields}");
             request.Headers.UserAgent.ParseAdd(options.Value.UserAgent);
 

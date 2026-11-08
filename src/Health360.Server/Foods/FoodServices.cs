@@ -29,6 +29,7 @@ public static class FoodServices
             .ValidateDataAnnotations()
             .ValidateOnStart();
         services.AddHttpClient(OpenFoodFactsClient.HttpClientName).ConfigureHttpClient(http => http.Timeout = TimeSpan.FromSeconds(10));
+        services.AddSingleton<OpenFoodFactsUpstreamBudget>();
         services.AddSingleton<OpenFoodFactsClient>();
 
         // Lookups share one USDA key, so each signed-in user gets a fixed number per hour. The limiter runs after

@@ -35,6 +35,10 @@ public static class FoodEndpoints
             var match = await off.FindAsync(gtin, cancellationToken).ConfigureAwait(false);
             return match is null ? Results.NotFound() : Results.Ok(match);
         }
+        catch (OpenFoodFactsBudgetExhaustedException)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Open Food Facts lookups are busy. Try again later.");
+        }
         catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException
             || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
         {

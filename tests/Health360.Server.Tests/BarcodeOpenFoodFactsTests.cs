@@ -40,13 +40,32 @@ public sealed class BarcodeOpenFoodFactsTests
         }
     }
 
-    private static WebApplicationFactory<Program> Create(ServerFactory factory, Stub stub, int perHour = 120) =>
+    private static WebApplicationFactory<Program> Create(ServerFactory factory, Stub stub, int perHour = 120, int upstreamPerMinute = 80, TimeProvider? time = null) =>
         factory.WithWebHostBuilder(builder =>
         {
             builder.UseSetting("OpenFoodFacts:RequestsPerUserPerHour", perHour.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            builder.UseSetting("OpenFoodFacts:MaxUpstreamRequestsPerMinute", upstreamPerMinute.ToString(System.Globalization.CultureInfo.InvariantCulture));
             builder.ConfigureTestServices(services =>
-                services.AddHttpClient(OpenFoodFactsClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => stub));
+            {
+                if (time is not null)
+                {
+                    services.AddSingleton(time);
+                }
+
+                services.AddHttpClient(OpenFoodFactsClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => stub);
+            });
         });
+
+    private sealed class Clock : TimeProvider
+    {
+        public long Ticks { get; private set; }
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Ticks;
+
+        public void Advance(TimeSpan by) => Ticks += by.Ticks;
+    }
 
     private static HttpClient Authorized(WebApplicationFactory<Program> app, Guid? user = null)
     {
@@ -211,6 +230,37 @@ public sealed class BarcodeOpenFoodFactsTests
         Assert.Equal([HttpStatusCode.OK, HttpStatusCode.OK, HttpStatusCode.TooManyRequests], statuses);
         Assert.Equal(HttpStatusCode.OK, other.StatusCode);
         Assert.Equal(3, stub.Paths.Count);
+    }
+
+    [Fact]
+    public async Task All_users_share_a_rolling_per_minute_budget_of_upstream_requests()
+    {
+        await using var factory = new ServerFactory();
+        var stub = new Stub(HttpStatusCode.NotFound, "{}");
+        var clock = new Clock();
+        var app = Create(factory, stub, upstreamPerMinute: 3, time: clock);
+        using var userA = Authorized(app);
+        using var userB = Authorized(app, Guid.Parse("018f0000-0000-7000-8000-00000000000b"));
+
+        // An EAN-8 that Open Food Facts doesn't have is asked for in two forms: two requests.
+        using var miss = await userA.GetAsync("/foods/barcode/96385074/off", TestContext.Current.CancellationToken);
+        // Another user's lookup gets the one request left, then the shared budget is spent.
+        using var spent = await userB.GetAsync("/foods/barcode/96385074/off", TestContext.Current.CancellationToken);
+        var callsWhenSpent = stub.Paths.Count;
+        using var refused = await userA.GetAsync("/foods/barcode/96385074/off", TestContext.Current.CancellationToken);
+        var callsAfterRefused = stub.Paths.Count;
+        clock.Advance(TimeSpan.FromSeconds(30)); // still inside the rolling minute: nothing has renewed
+        using var stillSpent = await userA.GetAsync("/foods/barcode/96385074/off", TestContext.Current.CancellationToken);
+        clock.Advance(TimeSpan.FromSeconds(31));
+        using var renewed = await userA.GetAsync("/foods/barcode/96385074/off", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, miss.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, spent.StatusCode);
+        Assert.Equal(3, callsWhenSpent);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
+        Assert.Equal(3, callsAfterRefused); // the refused lookup made no request
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, stillSpent.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, renewed.StatusCode);
     }
 
     [Fact]
