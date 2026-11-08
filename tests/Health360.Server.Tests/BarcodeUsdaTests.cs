@@ -27,10 +27,13 @@ public sealed class BarcodeUsdaTests
 
         public int Calls { get; private set; }
 
+        public List<string> Queries { get; } = [];
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Last = request;
             Calls++;
+            Queries.Add(System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query)["query"] ?? "");
             return throws is not null
                 ? Task.FromException<HttpResponseMessage>(throws)
                 : Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(respond?.Invoke(request) ?? body) });
@@ -182,6 +185,73 @@ public sealed class BarcodeUsdaTests
         Assert.Equal([HttpStatusCode.OK, HttpStatusCode.OK, HttpStatusCode.TooManyRequests], statuses);
         Assert.Equal(HttpStatusCode.OK, other.StatusCode);
         Assert.Equal(3, stub.Calls); // two for A, one for B: A's third never reached USDA
+    }
+
+    // A real response shape: USDA indexes a code exactly as stored, so a search only finds it by that form.
+    private static string FoodJson(string gtinUpc, string unit, double size = 240) => $$"""
+        {"foods":[{"fdcId":2625976,"description":"LATTE","gtinUpc":"{{gtinUpc}}","servingSize":{{size}},"servingSizeUnit":"{{unit}}","foodNutrients":[{"nutrientId":1008,"value":40}]}]}
+        """;
+
+    private static Stub StoredAs(string stored, string unit) =>
+        new(HttpStatusCode.OK, "", request => System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query)["query"] == stored
+            ? FoodJson(stored, unit)
+            : """{"foods":[]}""");
+
+    [Fact]
+    public async Task Searches_the_code_with_its_leading_zeros_not_trimmed()
+    {
+        await using var factory = new ServerFactory();
+        var stub = StoredAs("00016000275287", "g");
+        using var client = Create(factory, stub).CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(UserA));
+
+        var match = await client.GetFromJsonAsync<BarcodeMatch>("/foods/barcode/016000275287/usda", TestContext.Current.CancellationToken);
+
+        Assert.Equal("00016000275287", match!.Gtin);
+        Assert.Equal(["00016000275287"], stub.Queries);
+    }
+
+    [Fact]
+    public async Task Tries_the_shorter_padded_forms_when_USDA_stores_the_code_shorter()
+    {
+        await using var factory = new ServerFactory();
+        var stub = StoredAs("0856413007293", "MLT"); // the 13-digit form USDA holds for this latte
+        using var client = Create(factory, stub).CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(UserA));
+
+        var match = await client.GetFromJsonAsync<BarcodeMatch>("/foods/barcode/856413007293/usda", TestContext.Current.CancellationToken);
+
+        Assert.Equal("00856413007293", match!.Gtin);
+        Assert.Equal(["00856413007293", "0856413007293"], stub.Queries);
+    }
+
+    [Theory]
+    [InlineData("MLT", "Volume")]
+    [InlineData("ml", "Volume")]
+    [InlineData("GRM", "Mass")]
+    [InlineData("g", "Mass")]
+    public async Task Maps_the_serving_unit_to_the_basis(string unit, string basis)
+    {
+        await using var factory = new ServerFactory();
+        using var client = Create(factory, StoredAs("00856413007293", unit)).CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(UserA));
+
+        var match = await client.GetFromJsonAsync<BarcodeMatch>("/foods/barcode/856413007293/usda", TestContext.Current.CancellationToken);
+
+        Assert.Equal(basis, match!.Basis.ToString());
+        Assert.Equal(240, match.ServingSize);
+    }
+
+    [Fact]
+    public async Task A_record_with_an_unrecognised_unit_is_skipped_not_given_a_guessed_basis()
+    {
+        await using var factory = new ServerFactory();
+        using var client = Create(factory, StoredAs("00856413007293", "OZA")).CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", TestTokens.User(UserA));
+
+        using var response = await client.GetAsync("/foods/barcode/856413007293/usda", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]
