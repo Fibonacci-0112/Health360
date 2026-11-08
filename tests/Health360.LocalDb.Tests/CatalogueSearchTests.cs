@@ -135,6 +135,11 @@ public class CatalogueSearchTests
         Assert.Contains(await FoodLibrary.SearchAsync(t.Db, "chick brea", 20, Household), f => f.Id == id);
         Assert.Contains(await FoodLibrary.SearchAsync(t.Db, "BREAST chicken", 20, Household), f => f.Id == id);
         Assert.Empty(await FoodLibrary.SearchAsync(t.Db, "chicken thigh", 20, Household));
+        // Every word counts, however many: 20 that match and a 21st that doesn't find nothing.
+        var matching = string.Join(' ', Enumerable.Repeat("chi", 20));
+        Assert.Contains(await FoodLibrary.SearchAsync(t.Db, matching, 20, Household), f => f.Id == id);
+        Assert.Empty(await FoodLibrary.SearchAsync(t.Db, matching + " thigh", 20, Household));
+        Assert.Empty(await FoodLibrary.SearchAsync(t.Db, new string('c', FoodLibrary.MaxQueryLength + 1), 20, Household));
 
         Assert.Equal([Chicken], await FoodLibrary.CopiedAsync(t.Db, Household, [Chicken, "50000000-0000-0000-0000-000000000009"]));
         Assert.Empty(await FoodLibrary.CopiedAsync(t.Db, "0192f0c0-0000-7000-8000-0000000000a2", [Chicken]));

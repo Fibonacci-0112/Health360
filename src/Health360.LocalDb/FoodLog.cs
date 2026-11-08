@@ -158,8 +158,14 @@ public static class FoodLibrary
         ArgumentNullException.ThrowIfNull(db);
         // Every word must appear in the name or the brand, as the catalogue search matches (search_catalogue_foods),
         // so a household copy is found by any query that found its catalogue food.
-        var words = (query ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Take(MaxSearchWords).ToList();
+        var text = (query ?? "").Trim();
+        if (text.Length > MaxQueryLength)
+        {
+            // Longer than any food name, so nothing can match every word; refused rather than searched by a prefix.
+            return Task.FromResult(Array.Empty<FoodRow>());
+        }
+
+        var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var sql = new System.Text.StringBuilder(
             $"SELECT {Columns} FROM foods f WHERE f.household_id IS NOT NULL AND (? IS NULL OR f.household_id = ?) ");
         var parameters = new List<object?> { householdId, householdId };
@@ -176,8 +182,8 @@ public static class FoodLibrary
         return db.GetAll<FoodRow>(sql.ToString(), [.. parameters]);
     }
 
-    /// <summary>The most words of a query matched; a longer query is matched on its first words.</summary>
-    public const int MaxSearchWords = 20;
+    /// <summary>The longest query searched: a food's name is at most 200 characters. Every word of it is matched.</summary>
+    public const int MaxQueryLength = 200;
 
     /// <summary>Which of <paramref name="catalogueIds"/> the household already has a copy of on this device.</summary>
     public static async Task<IReadOnlySet<string>> CopiedAsync(IPowerSyncDatabase db, string householdId, IEnumerable<string> catalogueIds)
