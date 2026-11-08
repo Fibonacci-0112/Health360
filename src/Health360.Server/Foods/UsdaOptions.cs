@@ -24,7 +24,7 @@ public sealed class UsdaOptions
     public int RequestsPerUserPerHour { get; set; } = 120;
 
     /// <summary>
-    /// USDA requests this API process may make per hour, across all users, before lookups answer 503. USDA blocks a
+    /// USDA requests this API process may make in any rolling hour, across all users, before lookups answer 503. USDA blocks a
     /// key for a while past 1,000 requests an hour per IP address, and one lookup can take several requests (a
     /// search per padded form of the code), so the per-user limit alone cannot protect the shared key. Held in
     /// memory per API process: with several processes behind one address, divide the allowance between them.

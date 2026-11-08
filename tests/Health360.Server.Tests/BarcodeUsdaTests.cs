@@ -270,7 +270,7 @@ public sealed class BarcodeUsdaTests
     }
 
     [Fact]
-    public async Task All_users_share_an_hourly_budget_of_USDA_requests_that_renews()
+    public async Task All_users_share_a_rolling_hourly_budget_of_USDA_requests()
     {
         await using var factory = new ServerFactory();
         var stub = new Stub(HttpStatusCode.OK, """{"foods":[]}""");
@@ -288,7 +288,11 @@ public sealed class BarcodeUsdaTests
         var callsWhenSpent = stub.Calls;
         using var refused = await userA.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
         var callsAfterRefused = stub.Calls;
-        clock.Now = clock.Now.AddMinutes(61);
+        // Half an hour later the four requests are still inside USDA's rolling hour: nothing has renewed.
+        clock.Now = clock.Now.AddMinutes(30);
+        using var stillSpent = await userA.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
+        var callsAfterHalfHour = stub.Calls;
+        clock.Now = clock.Now.AddMinutes(31);
         using var renewed = await userA.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, miss.StatusCode);
@@ -296,6 +300,8 @@ public sealed class BarcodeUsdaTests
         Assert.Equal(4, callsWhenSpent);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
         Assert.Equal(4, callsAfterRefused); // the refused lookup made no request
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, stillSpent.StatusCode);
+        Assert.Equal(4, callsAfterHalfHour);
         Assert.Equal(HttpStatusCode.NotFound, renewed.StatusCode);
     }
 

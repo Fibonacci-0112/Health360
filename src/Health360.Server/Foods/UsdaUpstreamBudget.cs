@@ -2,33 +2,34 @@ using Microsoft.Extensions.Options;
 
 namespace Health360.Server.Foods;
 
-/// <summary>A fixed one-hour window of USDA requests shared by every user of this API process.</summary>
+/// <summary>
+/// A rolling one-hour allowance of USDA requests shared by every user of this API process. USDA counts a rolling
+/// hour, so a fixed window that resets all at once could let through twice the allowance across its boundary.
+/// </summary>
 public sealed class UsdaUpstreamBudget(TimeProvider time, IOptions<UsdaOptions> options)
 {
     private static readonly TimeSpan Window = TimeSpan.FromHours(1);
 
     private readonly object gate = new();
-    private DateTimeOffset windowStart = time.GetUtcNow();
-    private int used;
+    private readonly Queue<DateTimeOffset> taken = new();
 
-    /// <summary>Takes one request from the budget; false once this hour's allowance is spent.</summary>
+    /// <summary>Takes one request from the budget; false while the last hour already holds the whole allowance.</summary>
     public bool TryTake()
     {
         lock (gate)
         {
             var now = time.GetUtcNow();
-            if (now - windowStart >= Window)
+            while (taken.Count > 0 && now - taken.Peek() >= Window)
             {
-                windowStart = now;
-                used = 0;
+                taken.Dequeue();
             }
 
-            if (used >= options.Value.MaxUpstreamRequestsPerHour)
+            if (taken.Count >= options.Value.MaxUpstreamRequestsPerHour)
             {
                 return false;
             }
 
-            used++;
+            taken.Enqueue(now);
             return true;
         }
     }
