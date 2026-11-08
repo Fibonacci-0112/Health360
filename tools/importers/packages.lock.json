@@ -11,6 +11,9 @@
           "Microsoft.Extensions.Logging.Abstractions": "10.0.0"
         }
       },
+      "health360.domain": {
+        "type": "Project"
+      },
       "Microsoft.Extensions.DependencyInjection.Abstractions": {
         "type": "CentralTransitive",
         "requested": "[10.0.14, )",

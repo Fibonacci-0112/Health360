@@ -10,7 +10,7 @@ An all-in-one app for planning and reaching health and fitness goals: nutrition 
 |---|---|
 | 1. Body and photos | Implemented: weight trend, measurements, vitals, the physiology profile with estimates, and progress photos (on-device metadata stripping, offline upload queue, comparison, ghost overlay, deletion) |
 | 2. Workouts and progression | Implemented in code: exercise import, locations, templates, programs and schedule, live logger with rest timer and plate calculator, PRs and e1RM, volume per muscle, progression, manual cardio with HR zones and energy estimates. Physical-device acceptance on Android and Windows is still open ([step2-verification.md](docs/step2-verification.md)) |
-| 3. Nutrition and label OCR | In progress: nutrition calculations and the nutrition schema. Food search, barcode lookup, label OCR and the Food tab are not built yet |
+| 3. Nutrition and label OCR | In progress: nutrition calculations, the nutrition schema, the USDA food import, the Food tab (household foods, offline logging, quick add, daily totals) and recipes. Catalogue search, barcode lookup, label OCR and targets are not built yet |
 | 4. Goals and cost planning | Not started |
 | 5. Ship to the household | Not started |
 
@@ -41,7 +41,7 @@ The **.NET solution** (Phase 0b, [ADR 0002](docs/adr/0002-dotnet-maui-blazor.md)
 | `tests/` | xUnit and bUnit tests for the .NET projects, including the two-client sync tests (`tests/Health360.Sync.Tests`) |
 | `supabase` | Migrations, RLS, pgTAP tests, Auth config |
 | `powersync` | Sync Streams and local PowerSync config |
-| `tools` | Schema drift check (`tools/drift`), reference-data importers (`tools/importers`: free-exercise-db), local DB test runner (`tools/db`), cloud environment setup (`tools/cloud`) |
+| `tools` | Schema drift check (`tools/drift`), reference-data importers (`tools/importers`: free-exercise-db, USDA FoodData Central), local DB test runner (`tools/db`), cloud environment setup (`tools/cloud`) |
 
 ## Quick start
 

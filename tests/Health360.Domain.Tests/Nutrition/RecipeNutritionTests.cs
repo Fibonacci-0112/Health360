@@ -24,6 +24,19 @@ public class RecipeNutritionTests
         new(PeanutButter, FoodBasis.Mass, 32),
     ];
 
+    // 1.5 servings of the porridge: 299.08 × 1.5 = 448.62 kcal; fiber stays a lower bound.
+    [Fact]
+    public void Servings_eaten_scale_a_serving_and_keep_what_is_incomplete()
+    {
+        var eaten = RecipeNutrition.Compute(Porridge, servings: 2).PerServing.Times(1.5);
+
+        Assert.True(Close(eaten.Amounts[Nutrient.Energy]!.Value, 448.62));
+        Assert.Equal(["fiber"], eaten.Incomplete);
+        Assert.Equal(0, NutrientAmounts.Create((Nutrient.Iron, 2.0)).Times(0)[Nutrient.Iron]);
+        Assert.Throws<ArgumentOutOfRangeException>(() => Oats.Times(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Oats.Times(double.NaN));
+    }
+
     // Hand calculation (docs/calculations.md, Recipes): energy 379 × 80/100 + 89 × 120/100 + 588 × 32/100
     // = 303.2 + 106.8 + 188.16 = 598.16 kcal; protein 10.56 + 1.308 + 8.032 = 19.9 g; raw weight 232 g.
     [Fact]
