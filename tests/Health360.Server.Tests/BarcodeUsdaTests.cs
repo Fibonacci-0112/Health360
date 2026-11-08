@@ -267,6 +267,19 @@ public sealed class BarcodeUsdaTests
         public DateTimeOffset Now { get; set; } = start;
 
         public override DateTimeOffset GetUtcNow() => Now;
+
+        // The budget reads the monotonic clock; tests move it with Advance and can step wall time back separately.
+        public long Ticks { get; private set; }
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Ticks;
+
+        public void Advance(TimeSpan by)
+        {
+            Ticks += by.Ticks;
+            Now += by;
+        }
     }
 
     [Fact]
@@ -289,10 +302,11 @@ public sealed class BarcodeUsdaTests
         using var refused = await userA.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
         var callsAfterRefused = stub.Calls;
         // Half an hour later the four requests are still inside USDA's rolling hour: nothing has renewed.
-        clock.Now = clock.Now.AddMinutes(30);
+        clock.Advance(TimeSpan.FromMinutes(30));
         using var stillSpent = await userA.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
         var callsAfterHalfHour = stub.Calls;
-        clock.Now = clock.Now.AddMinutes(31);
+        clock.Now = clock.Now.AddDays(-2); // wall time stepped back: it must not matter
+        clock.Advance(TimeSpan.FromMinutes(31));
         using var renewed = await userA.GetAsync("/foods/barcode/036000291452/usda", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, miss.StatusCode);

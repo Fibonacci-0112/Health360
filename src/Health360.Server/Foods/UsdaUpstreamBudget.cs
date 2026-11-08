@@ -11,15 +11,17 @@ public sealed class UsdaUpstreamBudget(TimeProvider time, IOptions<UsdaOptions> 
     private static readonly TimeSpan Window = TimeSpan.FromHours(1);
 
     private readonly object gate = new();
-    private readonly Queue<DateTimeOffset> taken = new();
+    private readonly Queue<long> taken = new();
 
     /// <summary>Takes one request from the budget; false while the last hour already holds the whole allowance.</summary>
     public bool TryTake()
     {
         lock (gate)
         {
-            var now = time.GetUtcNow();
-            while (taken.Count > 0 && now - taken.Peek() >= Window)
+            // A monotonic clock, not wall time: a system clock stepped back (an NTP correction, a manual change)
+            // must neither keep old requests counting past their hour nor expire new ones early.
+            var now = time.GetTimestamp();
+            while (taken.Count > 0 && time.GetElapsedTime(taken.Peek(), now) >= Window)
             {
                 taken.Dequeue();
             }
