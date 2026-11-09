@@ -53,6 +53,10 @@ public static class LocalDbServices
             return new PostgrestCatalogueSearch(
                 http, provider.GetRequiredService<ISupabaseSession>(), provider.GetRequiredService<IDatabaseOwnerStore>(), endpoints.SupabaseApiKey);
         });
+        // No online barcode source is registered yet (the app has no API address), so lookup searches the
+        // household's foods only; a host adds IBarcodeOnlineSource registrations to extend the chain.
+        services.AddSingleton(provider => new BarcodeLookup(
+            provider.GetRequiredService<PowerSyncDatabase>(), provider.GetServices<IBarcodeOnlineSource>()));
         services.AddSingleton<SupabaseConnector>();
         if (photoDirectory is not null)
         {

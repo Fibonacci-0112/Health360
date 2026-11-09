@@ -10,7 +10,8 @@ public sealed record PortionInput(string Name, double Amount);
 /// <summary>
 /// A household's own food as entered from a label or a recipe card: the values for <paramref name="ValuesPer"/> g or
 /// ml (100, or a serving such as 30 g), and named portions. Null is unknown, not 0. Stored per 100 of the basis
-/// (<see cref="Per100"/>).
+/// (<see cref="Per100"/>). <see cref="Barcode"/> is the package's GTIN as scanned or typed, so the food is found by it
+/// next time.
 /// </summary>
 public sealed record FoodInput(
     string Name,
@@ -23,6 +24,12 @@ public sealed record FoodInput(
     double? Fat,
     IReadOnlyList<PortionInput> Portions)
 {
+    /// <summary>
+    /// The package's barcode (EAN-8, UPC-A, EAN-13 or GTIN-14 digits) as entered, or null. Stored as entered; lookups
+    /// compare its 14-digit form (<see cref="Gtin.Normalize"/>).
+    /// </summary>
+    public string? Barcode { get; init; }
+
     /// <summary>
     /// The entered values per 100 g or ml: each value × 100 / <see cref="ValuesPer"/>
     /// (<see cref="NutrientAmounts.Per100"/>). Unknown values stay unknown.
@@ -58,6 +65,10 @@ public sealed class FoodInputValidator : AbstractValidator<FoodInput>
         RuleFor(x => x.Name).Must(n => n is not null && n.Trim().Length is >= 1 and <= 200).WithMessage("Give the food a name.");
         RuleFor(x => x.Brand).Must(b => b is null || b.Trim().Length is >= 1 and <= 120).WithMessage("Keep the brand to 120 characters.");
         RuleFor(x => x.Basis).IsInEnum();
+        // A misread or mistyped code would never be found again, so it is refused rather than stored.
+        RuleFor(x => x.Barcode)
+            .Must(b => b is null || Gtin.Normalize(b) is not null)
+            .WithMessage("That barcode doesn't read right. Check its digits, or leave it blank.");
         RuleFor(x => x.ValuesPer)
             .Must(v => double.IsFinite(v) && v > 0 && v <= 100000)
             .WithMessage("Enter the amount the values are for, more than 0.");

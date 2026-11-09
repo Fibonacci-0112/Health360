@@ -26,6 +26,9 @@ public sealed class FoodRow
 
     public string? Brand { get; set; }
 
+    /// <summary>The package's barcode as entered (8 to 14 digits), or null.</summary>
+    public string? Barcode { get; set; }
+
     public string Basis { get; set; } = "";
 
     public double? Energy100 { get; set; }
@@ -145,7 +148,7 @@ public sealed class FoodLogEntryRow
 public static class FoodLibrary
 {
     private const string Columns =
-        "f.id AS Id, f.household_id AS HouseholdId, f.source AS Source, f.name AS Name, f.brand AS Brand, f.basis AS Basis, " +
+        "f.id AS Id, f.household_id AS HouseholdId, f.source AS Source, f.name AS Name, f.brand AS Brand, f.barcode AS Barcode, f.basis AS Basis, " +
         "f.energy_100 AS Energy100, f.protein_100 AS Protein100, f.carbohydrate_100 AS Carbohydrate100, f.fat_100 AS Fat100, " +
         "f.nutrients_100 AS Nutrients100, f.portions AS Portions";
 
@@ -180,6 +183,27 @@ public static class FoodLibrary
         sql.Append("ORDER BY f.name COLLATE NOCASE, f.id LIMIT ?");
         parameters.Add(limit);
         return db.GetAll<FoodRow>(sql.ToString(), [.. parameters]);
+    }
+
+    /// <summary>
+    /// The household foods whose barcode is <paramref name="code"/> (the first step of barcode lookup,
+    /// <see cref="BarcodeLookup"/>), by name; none when the code doesn't read as a GTIN. Codes are compared in their
+    /// 14-digit form (<see cref="Gtin.Normalize"/>), so a UPC-A on the package finds the food saved under its EAN-13
+    /// and the other way round. With <paramref name="householdId"/>, only that household's.
+    /// </summary>
+    public static Task<FoodRow[]> FindByBarcodeAsync(IPowerSyncDatabase db, string? code, int limit, string? householdId = null)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        if (Gtin.Normalize(code) is not { } gtin)
+        {
+            return Task.FromResult(Array.Empty<FoodRow>());
+        }
+
+        // A stored barcode is 8 to 14 digits (the foods check); zero-padded on the left it is the 14-digit form.
+        return db.GetAll<FoodRow>(
+            $"SELECT {Columns} FROM foods f WHERE f.household_id IS NOT NULL AND (? IS NULL OR f.household_id = ?) " +
+            "AND f.barcode IS NOT NULL AND substr('00000000000000' || f.barcode, -14) = ? ORDER BY f.name COLLATE NOCASE, f.id LIMIT ?",
+            [householdId, householdId, gtin, limit]);
     }
 
     /// <summary>The longest query searched: a food's name is at most 200 characters. Every word of it is matched.</summary>
@@ -237,9 +261,9 @@ public static class FoodLibrary
             _ = await tx.GetOptional<WorkoutPlans.IdOnly>("SELECT id AS Id FROM households WHERE id = ?", [householdId]).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("That household is no longer on this device.");
             await tx.Execute(
-                "INSERT INTO foods (id, household_id, source, name, brand, basis, energy_100, protein_100, carbohydrate_100, fat_100, " +
-                "nutrients_100, portions, verified, created_at, updated_at) VALUES (?, ?, 'custom', ?, ?, ?, ?, ?, ?, ?, '{}', ?, 0, ?, ?)",
-                [id, householdId, input.Name.Trim(), string.IsNullOrWhiteSpace(input.Brand) ? null : input.Brand.Trim(),
+                "INSERT INTO foods (id, household_id, source, name, brand, barcode, basis, energy_100, protein_100, carbohydrate_100, fat_100, " +
+                "nutrients_100, portions, verified, created_at, updated_at) VALUES (?, ?, 'custom', ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, 0, ?, ?)",
+                [id, householdId, input.Name.Trim(), string.IsNullOrWhiteSpace(input.Brand) ? null : input.Brand.Trim(), input.Barcode?.Trim(),
                     FoodBases.Code(input.Basis), per100[Nutrient.Energy], per100[Nutrient.Protein], per100[Nutrient.Carbohydrate],
                     per100[Nutrient.Fat], input.PortionsJson(), now, now]).ConfigureAwait(false);
         }).ConfigureAwait(false);
@@ -303,6 +327,12 @@ public static class FoodLibrary
 public static class FoodLog
 {
     public static IReadOnlyList<string> Meals { get; } = ["breakfast", "lunch", "dinner", "snack"];
+
+    /// <summary>The <c>entry_method</c> of a food chosen from a search or the recent list.</summary>
+    public const string SearchEntry = "search";
+
+    /// <summary>The <c>entry_method</c> of a food found by its barcode.</summary>
+    public const string BarcodeEntry = "barcode";
 
     /// <summary>The units an amount may be entered in, for a food per 100 g or per 100 ml (the database's list).</summary>
     public static IReadOnlyList<string> UnitsFor(FoodBasis basis) => basis == FoodBasis.Mass
@@ -370,15 +400,23 @@ public static class FoodLog
         return (baseAmount, food.Per100.ForAmount(baseAmount));
     }
 
-    /// <summary>Logs an amount of a household food in a meal on <paramref name="date"/> (this device's calendar).</summary>
+    /// <summary>
+    /// Logs an amount of a household food in a meal on <paramref name="date"/> (this device's calendar), recording
+    /// how it was found (<see cref="SearchEntry"/> or <see cref="BarcodeEntry"/>).
+    /// </summary>
     public static async Task<string> LogFoodAsync(
         IPowerSyncDatabase db, string profileId, string foodId, string meal, DateOnly date, double quantity, string? unit, string? portionName,
-        TimeProvider clock)
+        TimeProvider clock, string entryMethod = SearchEntry)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentException.ThrowIfNullOrEmpty(profileId);
         ArgumentNullException.ThrowIfNull(clock);
         CheckMeal(meal);
+        if (entryMethod is not (SearchEntry or BarcodeEntry))
+        {
+            throw new ArgumentException("A food is logged from a search or a barcode.", nameof(entryMethod));
+        }
+
         var id = ExerciseLibrary.NewId(clock);
         await db.WriteTransaction(async tx =>
         {
@@ -393,8 +431,8 @@ public static class FoodLog
             await tx.Execute(
                 "INSERT INTO food_log_entries (id, profile_id, logged_at, local_date, meal, entry_method, food_id, name, brand, quantity, " +
                 "quantity_unit, portion_name, basis, base_amount, energy, protein, carbohydrate, fat, nutrients, incomplete_nutrients, " +
-                "is_estimate, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'search', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, ?, ?)",
-                [id, profileId, LoggedAt(date, clock), Day(date), meal, food.Id, Trim(food.Name, 200), food.Brand is null ? null : Trim(food.Brand, 120),
+                "is_estimate, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, ?, ?)",
+                [id, profileId, LoggedAt(date, clock), Day(date), meal, entryMethod, food.Id, Trim(food.Name, 200), food.Brand is null ? null : Trim(food.Brand, 120),
                     quantity, unit ?? "portion", unit is null ? portionName : null, FoodBases.Code(food.Basis), baseAmount,
                     amounts[Nutrient.Energy], amounts[Nutrient.Protein], amounts[Nutrient.Carbohydrate], amounts[Nutrient.Fat],
                     OtherNutrientsJson(amounts), now, now]).ConfigureAwait(false);
