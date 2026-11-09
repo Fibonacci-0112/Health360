@@ -57,6 +57,7 @@ public sealed class App : IAsyncDisposable
         context.Services.AddSingleton(Database.Db);
         context.Services.AddSingleton<IRemoteWriter>(new NoWriter());
         context.Services.AddSingleton<ICatalogueSearch>(Catalogue);
+        context.Services.AddSingleton(new BarcodeLookup(Database.Db, BarcodeSources));
         context.Services.AddSingleton(new SupabaseAuthClient(Auth.Client(), FakeAuth.ApiKey, Clock));
         context.Services.AddSingleton<ISessionStore>(Store);
         context.Services.AddSingleton<SessionManager>();
@@ -86,6 +87,9 @@ public sealed class App : IAsyncDisposable
         photos?.Dispose();
         return Database.DisposeAsync();
     }
+
+    /// <summary>The online barcode sources; none, as in the app, until a test adds one.</summary>
+    public List<IBarcodeOnlineSource> BarcodeSources { get; } = [];
 
     /// <summary>The online catalogue search; finds nothing until a test gives it foods or makes it fail.</summary>
     public FakeCatalogue Catalogue { get; } = new();

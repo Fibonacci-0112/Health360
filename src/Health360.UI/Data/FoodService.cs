@@ -10,7 +10,7 @@ namespace Health360.UI.Data;
 /// The Food tab's access to the signed-in user's food log and the household's foods in the local database. Every
 /// write is local first and uploads when online, so a whole day can be logged offline.
 /// </summary>
-public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, ICatalogueSearch catalogue, TimeProvider clock)
+public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, ICatalogueSearch catalogue, BarcodeLookup barcodes, TimeProvider clock)
 {
     public string? ProfileId => profiles.Profile?.Id;
 
@@ -39,12 +39,17 @@ public sealed class FoodService(PowerSyncDatabase db, ProfileService profiles, I
     public Task<string> CopyFromCatalogueAsync(string householdId, FoodRow catalogueFood) =>
         FoodLibrary.CopyFromCatalogueAsync(db, householdId, catalogueFood, clock);
 
+    /// <summary>Looks a barcode up: the household's foods, then the online sources (<see cref="BarcodeLookup"/>).</summary>
+    public Task<BarcodeLookupResult> LookUpBarcodeAsync(string code, CancellationToken cancellationToken = default) =>
+        barcodes.LookUpAsync(code, cancellationToken);
+
     public Task<FoodRow[]> RecentAsync() => FoodLibrary.RecentAsync(db, RequireProfile(), 8);
 
     public Task<FoodRow?> FoodAsync(string id) => FoodLibrary.GetAsync(db, id);
 
-    public Task<string> LogAsync(string foodId, string meal, DateOnly date, double quantity, string? unit, string? portionName) =>
-        FoodLog.LogFoodAsync(db, RequireProfile(), foodId, meal, date, quantity, unit, portionName, clock);
+    public Task<string> LogAsync(
+        string foodId, string meal, DateOnly date, double quantity, string? unit, string? portionName, string entryMethod = FoodLog.SearchEntry) =>
+        FoodLog.LogFoodAsync(db, RequireProfile(), foodId, meal, date, quantity, unit, portionName, clock, entryMethod);
 
     public Task<string> QuickAddAsync(string meal, DateOnly date, string? name, double? energy, double? protein, double? carbohydrate, double? fat) =>
         FoodLog.QuickAddAsync(db, RequireProfile(), meal, date, name, energy, protein, carbohydrate, fat, clock);

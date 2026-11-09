@@ -117,6 +117,33 @@
             </div>
             <p class="muted small">Search covers your household's foods and recipes, and the USDA catalogue when you're online. A catalogue food you use is copied into your household, so it works offline afterwards.
                 <NavLink href="food/recipes" id="recipes-link">Recipes</NavLink></p>
+            <form class="form" id="barcode-form" @onsubmit="LookUpBarcodeAsync" @onsubmit:preventDefault>
+                <div class="field">
+                    <label for="food-barcode">Barcode</label>
+                    <div class="inline">
+                        <input id="food-barcode" inputmode="numeric" autocomplete="off" @bind="barcode" @bind:event="oninput" />
+                        <button type="submit" class="secondary" id="look-up-barcode" disabled="@busy">Look up</button>
+                    </div>
+                </div>
+            </form>
+            @if (barcodeResults.Length > 0)
+            {
+                <p class="muted small">Your foods with this barcode</p>
+                <ul class="measurement-list" id="barcode-results">
+                    @foreach (var row in barcodeResults)
+                    {
+                        <li class="measurement">
+                            <span class="measurement-text"><span>@row.Name@(row.Brand is null ? "" : $" ({row.Brand})")</span>
+                                <span class="muted small">@Per100Text(row)</span></span>
+                            <button type="button" class="secondary" aria-label="@($"Choose {row.Name} by barcode")" @onclick="() => ChooseAsync(row.Id, FoodLog.BarcodeEntry)">Choose</button>
+                        </li>
+                    }
+                </ul>
+            }
+            @if (barcodeNote is not null)
+            {
+                <p class="muted small" id="barcode-note">@barcodeNote</p>
+            }
             @if (results.Length > 0)
             {
                 <p class="muted small">@(string.IsNullOrWhiteSpace(query) ? "Recently logged" : "Matching foods")</p>
@@ -259,6 +286,7 @@
                     }
                     <div class="field"><label for="new-food-name">Name</label><input id="new-food-name" @bind="foodName" @bind:event="oninput" /></div>
                     <div class="field"><label for="new-food-brand">Brand (optional)</label><input id="new-food-brand" @bind="foodBrand" @bind:event="oninput" /></div>
+                    <div class="field"><label for="new-food-barcode">Barcode (optional)</label><input id="new-food-barcode" inputmode="numeric" autocomplete="off" @bind="foodBarcode" @bind:event="oninput" /></div>
                     <div class="field">
                         <label for="new-food-per">Values are for</label>
                         <div class="inline">
@@ -331,7 +359,10 @@
         ? [.. catalogueResults.Where(row => !(Guid.TryParse(row.Id, out var food)
             && results.Any(r => r.Id == FoodCopy.IdFor(household, food).ToString("D"))))]
         : catalogueResults;
-    private string householdId = "", foodName = "", foodBrand = "", foodPer = "100", foodBasis = "g", foodPortion = "";
+    private string householdId = "", foodName = "", foodBrand = "", foodBarcode = "", foodPer = "100", foodBasis = "g", foodPortion = "";
+    private string barcode = "", chosenBy = FoodLog.SearchEntry;
+    private string? barcodeNote;
+    private FoodRow[] barcodeResults = [];
     private string foodEnergy = "", foodProtein = "", foodCarbohydrate = "", foodFat = "";
 
     protected override void OnInitialized()
@@ -371,6 +402,7 @@
         entries = []; total = NutrientTotal.Empty; results = []; chosen = null; households = [];
         catalogueResults = []; catalogueNote = null; catalogueSearched = false;
         recipeResults = []; chosenRecipe = null;
+        barcodeResults = []; barcodeNote = null; barcode = "";
         query = amount = quickName = quickEnergy = quickProtein = quickCarbohydrate = quickFat = "";
         ClearNewFood();
         if (profileId is null)
@@ -646,7 +678,7 @@
         }
     }
 
-    private async Task ChooseAsync(string id)
+    private async Task ChooseAsync(string id, string by = FoodLog.SearchEntry)
     {
         error = null;
         var started = generation;
@@ -667,6 +699,7 @@
         if (started != generation) return;
         chosenRecipe = null;
         chosen = row?.ToFood();
+        chosenBy = by;
         if (chosen is null)
         {
             error = "That food is no longer on this device.";
@@ -765,7 +798,7 @@
         var quantity = NumberText.Parse(amount) ?? throw new ArgumentException("Enter the amount as a number.");
         var (u, portion) = SplitUnit();
         var name = chosen.Name;
-        await Foods.LogAsync(chosen.Id, meal, date, quantity, u, portion);
+        await Foods.LogAsync(chosen.Id, meal, date, quantity, u, portion, chosenBy);
         if (!Current) return;
         chosen = null;
         amount = "";
@@ -791,7 +824,10 @@
         var energy = Optional(foodEnergy, "energy");
         PortionInput[] portions = string.IsNullOrWhiteSpace(foodPortion) ? [] : [new PortionInput(foodPortion.Trim(), per)];
         var input = new FoodInput(foodName, string.IsNullOrWhiteSpace(foodBrand) ? null : foodBrand, basis, per,
-            energy is { } e ? ToKcal(e) : null, Optional(foodProtein, "protein"), Optional(foodCarbohydrate, "carbohydrate"), Optional(foodFat, "fat"), portions);
+            energy is { } e ? ToKcal(e) : null, Optional(foodProtein, "protein"), Optional(foodCarbohydrate, "carbohydrate"), Optional(foodFat, "fat"), portions)
+        {
+            Barcode = string.IsNullOrWhiteSpace(foodBarcode) ? null : foodBarcode.Trim(),
+        };
         var id = await Foods.AddFoodAsync(householdId, input);
         if (!Current) return;
         var name = input.Name.Trim();
@@ -800,6 +836,74 @@
         if (!Current) return;
         status = $"Saved {name} for your household. Enter an amount above to log it.";
     });
+
+    /// <summary>
+    /// Barcode lookup (<see cref="BarcodeLookup"/>): a household food with the code is offered for logging; otherwise
+    /// the new-food form is given the code, so the food is found by it next time.
+    /// </summary>
+    private async Task LookUpBarcodeAsync()
+    {
+        if (busy || watchedProfile is null || watchedProfile != Foods.ProfileId) return;
+        error = status = barcodeNote = null;
+        barcodeResults = [];
+        var started = generation;
+        var asked = barcode.Trim();
+        BarcodeLookupResult found;
+        busy = true;
+        try
+        {
+            found = await Foods.LookUpBarcodeAsync(asked);
+        }
+        catch (Exception x) when (x is not OperationCanceledException)
+        {
+            if (started != generation) return;
+            LogReadFailed(Logger, "barcode lookup", x.GetType().Name);
+            error = "Couldn't look up that barcode on this device. Try again.";
+            return;
+        }
+        finally
+        {
+            busy = false;
+        }
+
+        // Looked up for an earlier profile: nothing of it is shown to the next one.
+        if (started != generation) return;
+        switch (found.Status)
+        {
+            case BarcodeLookupStatus.InvalidCode:
+                error = "That barcode doesn't read right. Check its digits and try again.";
+                break;
+            case BarcodeLookupStatus.Household when found.HouseholdFoods.Count == 1:
+                await ChooseAsync(found.HouseholdFoods[0].Id, FoodLog.BarcodeEntry);
+                break;
+            case BarcodeLookupStatus.Household:
+                barcodeResults = [.. found.HouseholdFoods];
+                break;
+            case BarcodeLookupStatus.Online:
+                // Saving an online match as a household food isn't built yet: its values are entered from the label.
+                barcodeNote = $"{SourceName(found.Match!.Source)} lists this as {found.Match.Name}, but it can't be saved from there yet. " +
+                    "Add it from the label under New food; the barcode is filled in.";
+                foodBarcode = asked;
+                break;
+            default:
+                barcodeNote = "None of your household's foods has this barcode." + NotFoundOnline(found) +
+                    " Add it from the label under New food; the barcode is filled in.";
+                foodBarcode = asked;
+                break;
+        }
+    }
+
+    private static string NotFoundOnline(BarcodeLookupResult found) =>
+        found.OnlineSources == 0 ? " Looking barcodes up online isn't available yet."
+        : found.Unreached.Count > 0 ? $" {string.Join(" and ", found.Unreached.Select(SourceName))} couldn't be reached, so it may still be listed there."
+        : " It isn't listed online either.";
+
+    private static string SourceName(BarcodeSource source) => source switch
+    {
+        BarcodeSource.OpenFoodFacts => "Open Food Facts",
+        BarcodeSource.UsdaBranded => "USDA",
+        _ => "An online source",
+    };
 
     private Task DeleteAsync(string id) => RunAsync(async () =>
     {
@@ -844,7 +948,7 @@
 
     private void ClearNewFood()
     {
-        foodName = foodBrand = foodPortion = foodEnergy = foodProtein = foodCarbohydrate = foodFat = "";
+        foodName = foodBrand = foodBarcode = foodPortion = foodEnergy = foodProtein = foodCarbohydrate = foodFat = "";
         foodPer = "100";
         foodBasis = "g";
     }
