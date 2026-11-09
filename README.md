@@ -10,7 +10,7 @@ An all-in-one app for planning and reaching health and fitness goals: nutrition 
 |---|---|
 | 1. Body and photos | Implemented: weight trend, measurements, vitals, the physiology profile with estimates, and progress photos (on-device metadata stripping, offline upload queue, comparison, ghost overlay, deletion) |
 | 2. Workouts and progression | Implemented in code: exercise import, locations, templates, programs and schedule, live logger with rest timer and plate calculator, PRs and e1RM, volume per muscle, progression, manual cardio with HR zones and energy estimates. Physical-device acceptance on Android and Windows is still open ([step2-verification.md](docs/step2-verification.md)) |
-| 3. Nutrition and label OCR | In progress: nutrition calculations, the nutrition schema, the USDA food import, the Food tab (household foods, offline logging, quick add, daily totals), recipes, nutrition targets (formula or manual) and online search of the USDA catalogue. Barcode lookup, label OCR and micronutrient targets are not built yet |
+| 3. Nutrition and label OCR | In progress: nutrition calculations, the nutrition schema, the USDA food import, the Food tab (household foods, offline logging, quick add, daily totals), recipes, nutrition targets (formula or manual) and online search of the USDA catalogue. Barcode lookup has its USDA and Open Food Facts server endpoints but no on-device chain or scanner yet; label OCR and micronutrient targets are not built |
 | 4. Goals and cost planning | Not started |
 | 5. Ship to the household | Not started |
 

@@ -6,6 +6,7 @@ namespace Health360.Contracts.Nutrition;
 public enum BarcodeSource
 {
     UsdaBranded,
+    OpenFoodFacts,
 }
 
 /// <summary>
